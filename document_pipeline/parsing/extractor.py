@@ -11,7 +11,6 @@ with a status and a reason:
 import io
 import logging
 from collections import Counter
-from datetime import datetime, timezone
 
 from .audit import assess, audit, flag_clauses
 from .clauses import flatten
@@ -33,10 +32,6 @@ from .walker import iter_paragraphs
 logger = logging.getLogger(__name__)
 
 
-def _now_utc():
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
 def _failed(result, reason):
     result.status = FAILED
     result.rejection = {"reason": reason, "detected_format": "docx",
@@ -48,7 +43,7 @@ def _failed(result, reason):
 def extract_document(source, document_name):
     """Extract one .docx from bytes or a binary stream. Never raises."""
     stream = io.BytesIO(source) if isinstance(source, (bytes, bytearray)) else source
-    result = ParseResult(status=FAILED, document_name=document_name, extracted_at=_now_utc())
+    result = ParseResult(status=FAILED, document_name=document_name)
 
     try:
         parts = load_parts(stream)

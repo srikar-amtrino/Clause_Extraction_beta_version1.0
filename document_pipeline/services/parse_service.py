@@ -1,0 +1,72 @@
+"""Phase 2, Steps 2.1 and 2.2 for one Drive file: stream it into memory, then
+extract paragraph records. No database writes happen here."""
+import logging
+import time
+
+from django.conf import settings
+
+from config.google_drive import build_drive_client
+from document_pipeline.parsing.extractor import extract_document
+from document_pipeline.parsing.result import REJECTED, ParseResult
+
+from .drive_service import (
+    DriveFileRejected,
+    download_to_buffer,
+    fetch_file_metadata,
+    sha256_of,
+    validate_for_parsing,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _elapsed_ms(started):
+    return int((time.perf_counter() - started) * 1000)
+
+
+def stream_and_parse(credentials, file_id, max_file_bytes=None):
+    """Download one Drive file into RAM and parse it. -> ParseResult
+
+    Raises DriveFileError when Drive cannot serve the file, since a retry may
+    succeed. A file Drive can serve but this pipeline does not parse comes back
+    as a `rejected` result, like any other rejection."""
+    max_file_bytes = max_file_bytes or settings.PARSE_MAX_FILE_BYTES
+    client = build_drive_client(credentials)
+    drive_file = fetch_file_metadata(client, file_id)
+    source = {
+        "drive_file_id": drive_file.id,
+        "name": drive_file.name,
+        "file_name": drive_file.name,
+        "file_size_bytes": drive_file.size_bytes,
+        "drive_web_link": drive_file.web_view_link,
+        "mime_type": drive_file.mime_type,
+        "md5_checksum": drive_file.md5_checksum,
+        "modified_time": drive_file.modified_time,
+        "content_sha256": None,
+    }
+
+    try:
+        validate_for_parsing(drive_file, max_file_bytes)
+    except DriveFileRejected as exc:
+        result = ParseResult(status=REJECTED, document_name=drive_file.name,
+                             rejection={"reason": str(exc), "detected_format": exc.kind,
+                                        "detected_description": str(exc), "remedy": None})
+        result.source = source
+        return result
+
+    started = time.perf_counter()
+    buffer = download_to_buffer(client, drive_file)
+    download_ms = _elapsed_ms(started)
+    try:
+        source["content_sha256"] = sha256_of(buffer)
+        started = time.perf_counter()
+        result = extract_document(buffer, drive_file.name)
+        parse_ms = _elapsed_ms(started)
+    finally:
+        buffer.close()
+
+    result.source = source
+    result.timings_ms = {"download": download_ms, "parse": parse_ms}
+    logger.info("parsed %s: %s, %d paragraph records in %d ms",
+                file_id, result.status, len(result.paragraphs), parse_ms)
+    return result

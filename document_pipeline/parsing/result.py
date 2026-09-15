@@ -1,5 +1,6 @@
 """Typed output of the extractor."""
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 
 SCHEMA_VERSION = "1.0"
 
@@ -7,6 +8,10 @@ EXTRACTED = "extracted"
 EXTRACTED_WITH_WARNINGS = "extracted_with_warnings"
 REJECTED = "rejected"
 FAILED = "failed"
+
+
+def utc_now():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 @dataclass
@@ -34,7 +39,7 @@ class ParagraphRecord:
 class ParseResult:
     status: str
     document_name: str
-    extracted_at: str
+    extracted_at: str = field(default_factory=utc_now)
     schema_version: str = SCHEMA_VERSION
     document_title: str | None = None
     rejection: dict | None = None
