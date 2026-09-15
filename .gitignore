@@ -60,3 +60,10 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Local credentials and parse output
+.secrets/
+parse_output/
+
+# Notebooks (POC notebooks carry credentials)
+*.ipynb
