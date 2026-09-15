@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Select a Google Drive folder</title>
+</head>
+<body>
+  <p id="user"></p>
+  <button id="picker-button" type="button">Select Google Drive folders</button>
+  <button id="sync-button" type="button">Sync selected folders</button>
+  <pre id="result"></pre>
+  <script src="https://apis.google.com/js/api.js"></script>
+  <script>
+    const apiKey = "{{ picker_api_key|escapejs }}";
+    const appId = "{{ picker_app_id|escapejs }}";
+    const result = document.getElementById("result");
+    const user = {{ google_drive_user_json|safe }};
+    document.getElementById("user").textContent = user.email ? `Connected as ${user.email}` : "";
+
+    function loadPicker() {
+      gapi.load("picker", { callback: createPicker });
+    }
+
+    function createPicker() {
+      if (!apiKey || !appId) {
+        result.textContent = "Set GOOGLE_PICKER_API_KEY and GOOGLE_PICKER_APP_ID.";
+        return;
+      }
+      fetch("/api/google-drive/picker/token/")
+        .then(response => response.json())
+        .then(({ access_token }) => {
+          const view = new google.picker.DocsView(google.picker.ViewId.FOLDERS)
+            .setIncludeFolders(true)
+            .setSelectFolderEnabled(true);
+          const picker = new google.picker.PickerBuilder()
+            .setDeveloperKey(apiKey)
+            .setAppId(appId)
+            .setOAuthToken(access_token)
+            .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
+            .addView(view)
+            .setCallback(pickerCallback)
+            .build();
+          picker.setVisible(true);
+        });
+    }
+
+    function pickerCallback(data) {
+      if (data.action !== google.picker.Action.PICKED) return;
+      const query = new URLSearchParams();
+      data.docs.forEach(folder => query.append("folder_id", folder.id));
+      fetch(`/api/google-drive/files/?${query.toString()}`)
+        .then(response => response.json())
+        .then(files => result.textContent = JSON.stringify(files, null, 2));
+    }
+
+      document.getElementById("sync-button").addEventListener("click", () => {
+        fetch("/api/google-drive/sync/", { method: "POST" })
+          .then(response => response.json())
+          .then(sync => result.textContent = JSON.stringify(sync, null, 2));
+      });
+
+    document.getElementById("picker-button").addEventListener("click", loadPicker);
+  </script>
+</body>
+</html>
