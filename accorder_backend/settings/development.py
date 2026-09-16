@@ -1,20 +1,50 @@
-"""Local development settings."""
-from .base import *  # noqa: F401,F403
-from .base import BASE_DIR
-from .base import SECRET_KEY as _SECRET_KEY
-from .base import env_bool
+import os
+from dotenv import load_dotenv
+from urllib.parse import urlparse, parse_qsl
 
-DEBUG = env_bool("DJANGO_DEBUG", True)
+load_dotenv()
 
-SECRET_KEY = _SECRET_KEY or "development-only-insecure-key"
+from pathlib import Path
 
-ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
+BASE_DIR = Path(__file__).resolve().parents[2]
+SECRET_KEY = 'development-only-change-me'
+DEBUG = True
+ALLOWED_HOSTS = ['127.0.0.1', 'localhost']
 
-# SQLite is enough for the session table the Drive connector needs. Postgres
-# arrives with the data layer models (Phase 2, Step 2.3).
+ROOT_URLCONF = 'accorder_backend.urls'
+
+INSTALLED_APPS = [
+    'django.contrib.sessions',
+    'django.contrib.contenttypes',
+    'django.contrib.auth',
+    'core',
+    'document_pipeline',
+]
+
+MIDDLEWARE = [
+    'django.middleware.security.SecurityMiddleware',
+    'django.contrib.sessions.middleware.SessionMiddleware',
+]
+
+TEMPLATES = [{
+    'BACKEND': 'django.template.backends.django.DjangoTemplates',
+    'APP_DIRS': True,
+    'OPTIONS': {'context_processors': []},
+}]
+
+tmpPostgres = urlparse(os.getenv("DATABASE_URL"))
+
 DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
-    },
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': tmpPostgres.path.replace('/', ''),
+        'USER': tmpPostgres.username,
+        'PASSWORD': tmpPostgres.password,
+        'HOST': tmpPostgres.hostname,
+        'PORT': 5432,
+        'OPTIONS': dict(parse_qsl(tmpPostgres.query)),
+    }
 }
+DATABASE_URL='postgresql://neondb_owner:npg_lRgV4FWfL5cz@ep-raspy-night-aecst0u0-pooler.c-2.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require'
+
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
