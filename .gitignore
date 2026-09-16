@@ -37,6 +37,10 @@ ENV/
 .env.development
 .env.production
 
+# Google Drive OAuth credentials
+document_pipeline/connectors/GoogleDrive/client_secret.json
+document_pipeline/connectors/GoogleDrive/token.json
+
 # IDEs
 .vscode/
 .idea/

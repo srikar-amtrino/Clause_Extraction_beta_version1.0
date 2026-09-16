@@ -27,14 +27,34 @@ DEBUG = env_bool("DJANGO_DEBUG", False)
 ALLOWED_HOSTS = [h.strip() for h in os.environ.get("DJANGO_ALLOWED_HOSTS", "").split(",") if h.strip()]
 
 INSTALLED_APPS = [
+    # Sessions hold the signed-in user's Drive credentials for the ingestion
+    # connector; auth depends on contenttypes.
+    "django.contrib.sessions",
+    "django.contrib.contenttypes",
+    "django.contrib.auth",
     "document_pipeline",
 ]
 
-MIDDLEWARE = []
+# NOTE: CsrfViewMiddleware is deliberately absent. The Drive picker page posts
+# to /api/google-drive/sync/ without a CSRF token; adding the middleware breaks
+# that flow. Add both together when the ingestion UI is hardened.
+MIDDLEWARE = [
+    "django.middleware.security.SecurityMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+]
 
 ROOT_URLCONF = "accorder_backend.urls"
 
-# Databases are configured with the data layer models (Phase 2, Step 2.3).
+# APP_DIRS finds document_pipeline/templates/google_drive/picker.html.
+TEMPLATES = [
+    {
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "APP_DIRS": True,
+        "OPTIONS": {"context_processors": []},
+    },
+]
+
+# Per-environment. Sessions need a real database; see development.py.
 DATABASES = {}
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
@@ -59,7 +79,14 @@ LOGGING = {
 # ---------------------------------------------------------------- Google Drive
 GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
 GOOGLE_OAUTH_CLIENT_SECRET = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")
-GOOGLE_OAUTH_REDIRECT_URI = os.environ.get("GOOGLE_OAUTH_REDIRECT_URI", "")
+GOOGLE_OAUTH_REDIRECT_URI = os.environ.get(
+    "GOOGLE_OAUTH_REDIRECT_URI",
+    "http://127.0.0.1:8000/api/google-drive/oauth/callback/",
+)
+
+# Google Picker credentials used by the ingestion connector's folder chooser.
+GOOGLE_PICKER_API_KEY = os.environ.get("GOOGLE_PICKER_API_KEY", "")
+GOOGLE_PICKER_APP_ID = os.environ.get("GOOGLE_PICKER_APP_ID", "")
 
 # Development only: where `drive_authorize` stores the refresh token.
 GOOGLE_DRIVE_TOKEN_PATH = Path(
