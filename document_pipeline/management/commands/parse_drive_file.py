@@ -1,14 +1,34 @@
 """Run Steps 2.1 and 2.2 on one Drive file and show what came out.
 
-Uses the development credentials from `drive_authorize`. Nothing is written to
-the database. `--output` writes the full result as JSON for inspection.
+This is the harness used to verify clause extraction. How it has been used:
+
+    python manage.py parse_drive_file <drive_file_id>
+    python manage.py parse_drive_file <drive_file_id> --output parse_output/result.json
+
+Nothing is written to the database; the summary goes to stdout and `--output`
+dumps the full result as JSON for inspection. `--rows` controls how many
+paragraph rows are previewed.
+
+Verified with it so far:
+  - Parity against the POC notebook across 15 real contracts, with no clause
+    or statistic differences.
+  - A live Drive run on an MSA and a DPA, checking breadcrumbs, page numbers
+    and paragraph buckets against the source documents by hand.
+
+Known limits it will show: page numbers are estimates, so files without
+lastRenderedPageBreak markers undercount pages; canonical_path can disagree
+with breadcrumbs where Word skips list levels.
+
+Credentials come from the ingestion connector, which reuses the token saved by
+the Google Drive login. The earlier direct-Drive-API path this command used is
+kept commented out in `_drive_authorize.py` and `config/google_drive.py`.
 """
 import json
 from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError
 
-from config.google_drive import load_dev_credentials
+from document_pipeline.connectors.GoogleDrive.main import get_credentials
 from document_pipeline.services.drive_service import DriveFileError
 from document_pipeline.services.parse_service import stream_and_parse
 
@@ -23,7 +43,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         try:
-            result = stream_and_parse(load_dev_credentials(), options["file_id"])
+            result = stream_and_parse(get_credentials(), options["file_id"])
         except DriveFileError as exc:
             raise CommandError(str(exc)) from exc
 

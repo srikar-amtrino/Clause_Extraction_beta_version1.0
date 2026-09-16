@@ -77,21 +77,9 @@ LOGGING = {
 }
 
 # ---------------------------------------------------------------- Google Drive
-GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
-GOOGLE_OAUTH_CLIENT_SECRET = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")
-GOOGLE_OAUTH_REDIRECT_URI = os.environ.get(
-    "GOOGLE_OAUTH_REDIRECT_URI",
-    "http://127.0.0.1:8000/api/google-drive/oauth/callback/",
-)
-
-# Google Picker credentials used by the ingestion connector's folder chooser.
-GOOGLE_PICKER_API_KEY = os.environ.get("GOOGLE_PICKER_API_KEY", "")
-GOOGLE_PICKER_APP_ID = os.environ.get("GOOGLE_PICKER_APP_ID", "")
-
-# Development only: where `drive_authorize` stores the refresh token.
-GOOGLE_DRIVE_TOKEN_PATH = Path(
-    os.environ.get("GOOGLE_DRIVE_TOKEN_PATH", BASE_DIR / ".secrets" / "drive_token.json")
-)
+# OAuth client, picker and token configuration live with the ingestion
+# connector (document_pipeline/connectors/GoogleDrive), which reads them from
+# the environment directly. See .env.example.
 
 # ---------------------------------------------------------------- Parsing
 # Files larger than this are refused before any bytes are downloaded.
