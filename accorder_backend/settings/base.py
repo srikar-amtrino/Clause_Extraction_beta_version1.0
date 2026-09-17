@@ -85,3 +85,22 @@ LOGGING = {
 # ---------------------------------------------------------------- Parsing
 # Files larger than this are refused before any bytes are downloaded.
 PARSE_MAX_FILE_BYTES = env_int("PARSE_MAX_FILE_BYTES", 50 * 1024 * 1024)
+
+# ---------------------------------------------------------------- Persistence
+# Keep the parser's verbatim output alongside the extracted rows. Insurance
+# while the columns are still being trusted: it makes a column we got wrong
+# recoverable without re-downloading a file that may since have changed.
+PARSE_STORE_RAW_RESULT = env_bool("PARSE_STORE_RAW_RESULT", True)
+# Bump when the parser changes behaviour without changing its output shape.
+# SCHEMA_VERSION does not move for a bug fix, so this is what tells a stored
+# extraction apart from what the current parser would produce.
+PARSER_BUILD = os.environ.get("PARSER_BUILD", "")
+# Guards against Postgres's 65535 bind-parameter ceiling on huge documents.
+PERSIST_BULK_BATCH_SIZE = env_int("PERSIST_BULK_BATCH_SIZE", 500)
+
+# ---------------------------------------------------------------- Chunking
+# Bump when the chunking rules change. Chunks derive deterministically from a
+# clause tree, so this is the only thing that tells a stored chunk run apart
+# from what the current chunker would produce for the same parse.
+CHUNKER_VERSION = os.environ.get("CHUNKER_VERSION", "")
+CHUNK_BULK_BATCH_SIZE = env_int("CHUNK_BULK_BATCH_SIZE", 500)

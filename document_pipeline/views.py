@@ -15,6 +15,7 @@ from .connectors.GoogleDrive.oauth import (
     exchange_code_for_tokens,
     get_user_details,
 )
+from .services.ingestion_service import google_drive_source, sync_drive_files
 
 
 def _flatten_files(folders):
@@ -41,30 +42,25 @@ def _build_folder_snapshot(request, credentials, folder_ids):
     return folders
 
 
-def _sync_changes(previous_files, current_files):
-    previous_files = previous_files or {}
-    added = [file for file_id, file in current_files.items() if file_id not in previous_files]
-    deleted = [file for file_id, file in previous_files.items() if file_id not in current_files]
-    renamed = []
-    moved = []
-    updated = []
-
-    for file_id in current_files.keys() & previous_files.keys():
-        old_file = previous_files[file_id]
-        new_file = current_files[file_id]
-        if old_file.get('name') != new_file.get('name'):
-            renamed.append({'before': old_file, 'after': new_file})
-        elif old_file.get('parent_id') != new_file.get('parent_id'):
-            moved.append({'before': old_file, 'after': new_file})
-        elif old_file != new_file:
-            updated.append({'before': old_file, 'after': new_file})
-
+def _document_summary(document):
     return {
-        'added': added,
-        'updated': updated,
-        'renamed': renamed,
-        'moved': moved,
-        'deleted': deleted,
+        'id': str(document.id),
+        'drive_file_id': document.source_external_id,
+        'name': document.name,
+        'mime_type': document.mime_type,
+        'extraction_status': document.extraction_status,
+    }
+
+
+def _changes_payload(outcome):
+    return {
+        'added': [_document_summary(d) for d in outcome.created],
+        'updated': [_document_summary(d) for d in outcome.updated],
+        'renamed': [_document_summary(d) for d in outcome.renamed],
+        'moved': [_document_summary(d) for d in outcome.moved],
+        'restored': [_document_summary(d) for d in outcome.restored],
+        'deleted': [_document_summary(d) for d in outcome.deleted],
+        'unchanged': outcome.unchanged,
     }
 
 
@@ -143,9 +139,6 @@ def google_drive_files(request):
         folder_ids = list(dict.fromkeys(folder_ids))
         folders = _build_folder_snapshot(request, credentials, folder_ids)
         request.session['google_drive_folder_ids'] = folder_ids
-        request.session['google_drive_file_snapshot'] = _flatten_files(folders)
-        for folder in folders:
-            print(folder)
         return JsonResponse({
             'user': request.session.get('google_drive_user'),
             'folder_ids': list(dict.fromkeys(folder_ids)),
@@ -159,7 +152,13 @@ def google_drive_files(request):
 
 @require_POST
 def google_drive_sync(request):
-    """Compare the current Drive state with the last selected-folder snapshot."""
+    """Reconcile the selected Drive folders against the document table.
+
+    Metadata only: this records what exists and what changed, and never
+    downloads a file. Parsing is driven separately by `manage.py
+    ingest_drive_files`, because a folder of any size would otherwise make this
+    request run for minutes.
+    """
     credentials_json = request.session.get('google_drive_credentials')
     folder_ids = request.session.get('google_drive_folder_ids', [])
     if not credentials_json:
@@ -171,19 +170,14 @@ def google_drive_sync(request):
         credentials = credentials_from_json(credentials_json)
         folders = _build_folder_snapshot(request, credentials, folder_ids)
         current_files = _flatten_files(folders)
-        changes = _sync_changes(
-            request.session.get('google_drive_file_snapshot', {}),
-            current_files,
-        )
+        outcome = sync_drive_files(current_files,
+                                   ingestion_source=google_drive_source(),
+                                   folder_ids=folder_ids)
         request.session['google_drive_credentials'] = credentials.to_json()
-        request.session['google_drive_file_snapshot'] = current_files
-        for change_type, files in changes.items():
-            for file in files:
-                print(change_type, file)
         return JsonResponse({
             'user': request.session.get('google_drive_user'),
             'folder_ids': folder_ids,
-            'changes': changes,
+            'changes': _changes_payload(outcome),
             'folders': folders,
         })
     except (FileNotFoundError, ValueError) as error:
