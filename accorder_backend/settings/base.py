@@ -1,6 +1,8 @@
 """Settings shared by every environment. Values that differ per environment
 or are secret come from the process environment, loaded from `.env`."""
 import os
+import ssl
+from urllib.parse import quote, urlparse
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -8,6 +10,18 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 load_dotenv(BASE_DIR / ".env")
+
+
+def upstash_redis_url():
+    rest_url = os.environ.get("UPSTASH_REDIS_REST_URL", "")
+    token = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
+    if not rest_url or not token:
+        return ""
+
+    hostname = urlparse(rest_url).hostname
+    if not hostname:
+        return ""
+    return f"rediss://default:{quote(token, safe='')}@{hostname}:6379/0"
 
 
 def env_bool(name, default=False):
@@ -104,3 +118,12 @@ PERSIST_BULK_BATCH_SIZE = env_int("PERSIST_BULK_BATCH_SIZE", 500)
 # from what the current chunker would produce for the same parse.
 CHUNKER_VERSION = os.environ.get("CHUNKER_VERSION", "")
 CHUNK_BULK_BATCH_SIZE = env_int("CHUNK_BULK_BATCH_SIZE", 500)
+
+# ---------------------------------------------------------------- Celery & Redis
+# Upstash exposes the REST URL and token in .env, while Celery uses Redis's
+# TLS wire protocol. The REST hostname and token are valid for that protocol.
+CELERY_BROKER_URL = upstash_redis_url()
+CELERY_RESULT_BACKEND = CELERY_BROKER_URL
+CELERY_BROKER_USE_SSL = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
+CELERY_REDIS_BACKEND_USE_SSL = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
+
