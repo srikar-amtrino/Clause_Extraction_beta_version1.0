@@ -104,6 +104,7 @@ def persist_parse_result(result, *, ingestion_source, force=False, store_raw=Non
     Rejected and failed results are persisted too: a document that could not be
     parsed still has to be visible, with its reason, in the review dashboard.
     """
+    print('[persistence] writing %s' % (result.source or {}).get('drive_file_id', ''), flush=True)
     if store_raw is None:
         store_raw = settings.PARSE_STORE_RAW_RESULT
     started = time.perf_counter()

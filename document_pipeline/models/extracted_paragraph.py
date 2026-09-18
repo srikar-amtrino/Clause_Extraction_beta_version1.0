@@ -45,8 +45,6 @@ class ExtractedParagraph(models.Model):
         db_table = 'extracted_paragraphs'
         constraints = [
             models.UniqueConstraint(fields=['run', 'sequence_order'], name='unique_para_sequence'),
-            models.UniqueConstraint(fields=['run', 'source_paragraph_index'],
-                                    name='unique_para_source_index'),
         ]
         indexes = [
             models.Index(fields=['run', 'sequence_order'], name='para_run_seq_idx'),

@@ -5,11 +5,11 @@ Two separable halves, deliberately not fused:
   sync_drive_files()  reconciles what Drive currently holds against the Document
                       table. Metadata only -- no downloads, so it is fast enough
                       to run inside a web request.
-  ingest_document()   downloads and parses one document. Slow, so it is driven
-                      from a management command rather than a request.
+    ingest_document()   downloads and parses one document. Slow, so it is driven
+                                            from a Celery task rather than a request.
 
 Splitting them is what lets the sync endpoint stay responsive over a folder of
-any size without a task queue.
+any size while Celery handles the slow work in parsing workers.
 """
 import logging
 from dataclasses import dataclass, field
@@ -84,6 +84,7 @@ def sync_drive_files(files, *, ingestion_source, folder_ids=()):
     is gone, but a document belonging to a folder nobody asked about is left
     alone.
     """
+    print('[ingestion] reconciling %d Drive files' % len(files), flush=True)
     outcome = SyncOutcome()
     scope = set(folder_ids) | {meta.get('parent_id') for meta in files.values()}
     scope.discard(None)
@@ -113,6 +114,12 @@ def sync_drive_files(files, *, ingestion_source, folder_ids=()):
     logger.info('drive sync: %d created, %d updated, %d deleted, %d unchanged',
                 len(outcome.created), len(outcome.updated) + len(outcome.renamed),
                 len(outcome.deleted), outcome.unchanged)
+    print(
+        '[ingestion] sync complete: created=%d updated=%d restored=%d deleted=%d'
+        % (len(outcome.created), len(outcome.updated), len(outcome.restored),
+           len(outcome.deleted)),
+        flush=True,
+    )
     return outcome
 
 
@@ -196,7 +203,10 @@ def pending_documents(ingestion_source, *, include_unparseable=False):
 
 def ingest_document(credentials, document, *, force=False):
     """Download, parse and persist one document. -> PersistOutcome"""
+    print('[ingestion] downloading and parsing %s' % document.source_external_id, flush=True)
     result = stream_and_parse(credentials, document.source_external_id)
-    return persist_parse_result(result,
-                                ingestion_source=document.ingestion_source,
-                                force=force)
+    outcome = persist_parse_result(result,
+                                   ingestion_source=document.ingestion_source,
+                                   force=force)
+    print('[ingestion] persisted %s' % document.source_external_id, flush=True)
+    return outcome
