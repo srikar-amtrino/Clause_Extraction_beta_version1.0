@@ -36,6 +36,18 @@ def env_int(name, default):
     return int(value) if value not in (None, "") else default
 
 
+def env_float(name, default):
+    value = os.environ.get(name)
+    return float(value) if value not in (None, "") else default
+
+
+def env_list(name, default):
+    value = os.environ.get(name)
+    if value is None:
+        return list(default)
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "")
 DEBUG = env_bool("DJANGO_DEBUG", False)
 ALLOWED_HOSTS = [h.strip() for h in os.environ.get("DJANGO_ALLOWED_HOSTS", "").split(",") if h.strip()]
@@ -89,6 +101,12 @@ LOGGING = {
         "console": {"class": "logging.StreamHandler", "formatter": "standard"},
     },
     "root": {"handlers": ["console"], "level": os.environ.get("LOG_LEVEL", "INFO")},
+    # The HTTP and AWS clients under the Bedrock SDK log every request at INFO.
+    # Classification records each call itself, in classification_calls.
+    "loggers": {
+        "httpx2": {"level": "WARNING"},
+        "botocore": {"level": "WARNING"},
+    },
 }
 
 # ---------------------------------------------------------------- Google Drive
@@ -107,8 +125,12 @@ PARSE_MAX_FILE_BYTES = env_int("PARSE_MAX_FILE_BYTES", 50 * 1024 * 1024)
 PARSE_STORE_RAW_RESULT = env_bool("PARSE_STORE_RAW_RESULT", True)
 # Bump when the parser changes behaviour without changing its output shape.
 # SCHEMA_VERSION does not move for a bug fix, so this is what tells a stored
-# extraction apart from what the current parser would produce.
-PARSER_BUILD = os.environ.get("PARSER_BUILD", "")
+# extraction apart from what the current parser would produce. The code default
+# moves with every such change; the environment only overrides it, and a blank
+# value falls back to it rather than silently pinning an old build.
+# 2026-09-18: list depth, shared Word list counters, heading nesting.
+# 2026-09-18b: typed multi-letter Roman numerals (II., IV.) start clauses.
+PARSER_BUILD = os.environ.get("PARSER_BUILD") or "2026.09.18b"
 # Guards against Postgres's 65535 bind-parameter ceiling on huge documents.
 PERSIST_BULK_BATCH_SIZE = env_int("PERSIST_BULK_BATCH_SIZE", 500)
 
@@ -116,8 +138,50 @@ PERSIST_BULK_BATCH_SIZE = env_int("PERSIST_BULK_BATCH_SIZE", 500)
 # Bump when the chunking rules change. Chunks derive deterministically from a
 # clause tree, so this is the only thing that tells a stored chunk run apart
 # from what the current chunker would produce for the same parse.
-CHUNKER_VERSION = os.environ.get("CHUNKER_VERSION", "")
+# As with PARSER_BUILD, the code default moves with each rule change and a blank
+# environment value falls back to it.
+# 2026-09-18: exhibit region from headings, not from sentences that cite one.
+# At most 16 characters (chunk_runs.chunker_version); a system check enforces it.
+CHUNKER_VERSION = os.environ.get("CHUNKER_VERSION") or "2026.09.18"
 CHUNK_BULK_BATCH_SIZE = env_int("CHUNK_BULK_BATCH_SIZE", 500)
+
+# ---------------------------------------------------------------- Classification
+# Credentials are the standard AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, read
+# by the SDK straight from the environment; they are never copied into settings.
+AWS_REGION = os.environ.get("AWS_REGION", "")
+# "invoke" is Bedrock's InvokeModel API (AnthropicBedrock). "mantle" is the
+# Messages API endpoint (AnthropicBedrockMantle): newer models need it, but it
+# has no endpoint in every region -- us-west-1 has none.
+BEDROCK_CLIENT = os.environ.get("BEDROCK_CLIENT", "invoke")
+# A Bedrock model id or inference-profile ARN. No default on purpose: every
+# classification records the model that produced it, so the choice is explicit.
+CLASSIFY_MODEL_ID = os.environ.get("CLASSIFY_MODEL_ID", "")
+# Which seeded taxonomy to classify against. Versions are immutable data.
+CLASSIFY_TAXONOMY_VERSION = os.environ.get("CLASSIFY_TAXONOMY_VERSION", "v1")
+# "" sends no thinking configuration; "adaptive" turns thinking on. On the
+# 2026-09-18 probe adaptive thinking took ~18s for one clause against ~2s off.
+CLASSIFY_THINKING = os.environ.get("CLASSIFY_THINKING", "")
+# "" leaves effort at the model's default; otherwise low, medium or high.
+CLASSIFY_EFFORT = os.environ.get("CLASSIFY_EFFORT", "")
+# Review routing. With no judge model yet, a classification goes to the human
+# review queue when its confidence is below the threshold, its type is high
+# risk, it breaks from what its section heading implies, it fits no type, or
+# it failed. High-risk entries are taxonomy keys.
+CLASSIFY_CONFIDENCE_THRESHOLD = env_float("CLASSIFY_CONFIDENCE_THRESHOLD", 0.85)
+CLASSIFY_HIGH_RISK_TYPES = env_list(
+    "CLASSIFY_HIGH_RISK_TYPES",
+    ["indemnification", "limitation-of-liability", "intellectual-property"])
+# Batching. Siblings travel together; a batch closes at whichever limit it hits
+# first. The item cap bounds the answer's length and what a retry costs.
+CLASSIFY_MAX_BATCH_TOKENS = env_int("CLASSIFY_MAX_BATCH_TOKENS", 6000)
+CLASSIFY_MAX_ITEMS_PER_BATCH = env_int("CLASSIFY_MAX_ITEMS_PER_BATCH", 20)
+CLASSIFY_CONCURRENCY = env_int("CLASSIFY_CONCURRENCY", 4)
+# How many requests may include one paragraph before it is recorded as failed.
+CLASSIFY_ITEM_ATTEMPTS = env_int("CLASSIFY_ITEM_ATTEMPTS", 3)
+# The SDK's own retries for throttling, 5xx and dropped connections, with backoff.
+CLASSIFY_SDK_MAX_RETRIES = env_int("CLASSIFY_SDK_MAX_RETRIES", 4)
+CLASSIFY_MAX_TOKENS = env_int("CLASSIFY_MAX_TOKENS", 16000)
+CLASSIFY_BULK_BATCH_SIZE = env_int("CLASSIFY_BULK_BATCH_SIZE", 500)
 
 # ---------------------------------------------------------------- Celery & Redis
 # Upstash exposes the REST URL and token in .env, while Celery uses Redis's

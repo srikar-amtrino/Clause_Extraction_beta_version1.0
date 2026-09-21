@@ -37,19 +37,26 @@ def fmt_num(n, fmt):
 
 
 class Counters:
-    """Per-numId counter state. One instance per document."""
+    """Counter state per list, keyed the way Word keys it (see numbering.py).
+    One instance per document."""
 
     def __init__(self, numbering):
         self.nb = numbering
         self.state = defaultdict(dict)
+        self.used = set()   # (numId, ilvl) already counted, for startOverride
 
     def advance(self, num_id, ilvl):
         """Consume one item at this level -> (display, canonical dotted path)."""
         lvl = self.nb.level(num_id, ilvl)
         if lvl is None:
             return None, None
-        st = self.state[str(num_id)]
-        st[ilvl] = lvl["start"] if ilvl not in st else st[ilvl] + 1
+        st = self.state[self.nb.counter_key(num_id)]
+        first_use = (str(num_id), ilvl) not in self.used
+        self.used.add((str(num_id), ilvl))
+        if ilvl not in st or (first_use and self.nb.start_override(num_id, ilvl) is not None):
+            st[ilvl] = lvl["start"]
+        else:
+            st[ilvl] += 1
 
         # reset deeper levels, honouring lvlRestart (0 means never restart)
         for m in [k for k in st if k > ilvl]:

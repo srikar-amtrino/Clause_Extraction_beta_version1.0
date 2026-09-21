@@ -72,6 +72,7 @@ yarn-error.log*
 # Local credentials and parse output
 .secrets/
 parse_output/
+pipeline_output/
 
 # Notebooks (POC notebooks carry credentials)
 *.ipynb

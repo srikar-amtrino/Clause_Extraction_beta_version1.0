@@ -20,6 +20,10 @@ class ExtractedClause(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     run = models.ForeignKey('document_pipeline.ExtractionRun', on_delete=models.CASCADE,
                             related_name='clauses')
+    # Denormalised from run.document so a clause can be found by document
+    # without a join. Always equal to run.document_id.
+    document = models.ForeignKey('document_pipeline.Document', on_delete=models.CASCADE,
+                                 related_name='extracted_clauses')
     local_id = models.CharField(max_length=32)
     parent = models.ForeignKey('self', on_delete=models.CASCADE,
                                null=True, blank=True, related_name='children')

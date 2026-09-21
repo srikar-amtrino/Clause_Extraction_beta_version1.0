@@ -11,7 +11,13 @@ a lone "(ii) above will not apply..." stays out of the tree.
 """
 import re
 
+from . import switches
+
 AMBIG = {"i", "v", "x"}
+
+# A number followed by one of these is a cross-reference that wrapped onto a new
+# line ("...Clauses 22.3,\n22.4 and 22.5 shall apply"), not a clause starting.
+_CONNECTIVES = {"and", "or", "of", "through", "above", "below", "hereof", "herein", "hereunder"}
 ROMAN_TOK = re.compile(r"^(?:x{0,3})(?:ix|iv|v?i{0,3})$")
 
 LEX_PATTERNS = [
@@ -23,6 +29,8 @@ LEX_PATTERNS = [
                            r"\.?\s*[-–—:]?\s*")),
     ("num_dot", re.compile(r"^\s*(\d{1,3})[.)][\s ]+")),
     ("paren", re.compile(r"^\s*\(([A-Za-z]{1,4}|\d{1,3})\)[\s ]*")),
+    # "II." "iv)" -- one letter (I. V. X.) is left to alpha_dot, which marks it ambiguous
+    ("roman_dot", re.compile(r"^\s*([IVX]{2,6}|[ivx]{2,6})[.)][\s ]+")),
     ("alpha_dot", re.compile(r"^\s*([A-Za-z])[.)][\s ]+")),
 ]
 
@@ -38,6 +46,12 @@ def lex_detect(text):
         if not m:
             continue
         tok = m.group(1)
+        if kind == "roman_dot" and not (switches.MULTI_LETTER_ROMAN and ROMAN_TOK.match(tok.lower())):
+            continue
+        if switches.REJECT_WRAPPED_REFERENCES:
+            first = text[m.end():].split(None, 1)
+            if first and first[0].rstrip(",;") in _CONNECTIVES:
+                return None
         if kind == "dotted":
             cls, depth = "dotted", tok.count(".") + 1
         elif kind == "section":
