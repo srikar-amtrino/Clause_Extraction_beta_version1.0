@@ -1,9 +1,7 @@
 import os
-import json
 
 from django.http import JsonResponse
-from django.shortcuts import redirect, render
-from django.urls import reverse
+from django.shortcuts import redirect
 from django.views.decorators.http import require_GET, require_POST
 from googleapiclient.errors import HttpError
 from oauthlib.oauth2 import OAuth2Error
@@ -98,7 +96,10 @@ def google_drive_connect(request):
     auth_url, state, code_verifier = build_auth_url()
     request.session['google_drive_oauth_state'] = state
     request.session['google_drive_oauth_code_verifier'] = code_verifier
-    request.session['google_drive_oauth_next'] = reverse('google-drive-picker')
+    request.session['google_drive_oauth_next'] = os.getenv(
+        'GOOGLE_OAUTH_FRONTEND_URL',
+        'http://127.0.0.1:5173/overview',
+    )
     return redirect(auth_url)
 
 
@@ -124,20 +125,10 @@ def google_drive_callback(request):
         }, status=400)
     request.session['google_drive_credentials'] = credentials.to_json()
     request.session['google_drive_user'] = get_user_details(credentials)
-    return redirect(request.session.pop('google_drive_oauth_next', reverse('google-drive-picker')))
-
-
-@require_GET
-def google_drive_picker(request):
-    if 'google_drive_credentials' not in request.session:
-        return redirect('google-drive-connect')
-
-    return render(request, 'google_drive/picker.html', {
-        'picker_api_key': os.getenv('GOOGLE_PICKER_API_KEY', ''),
-        'picker_app_id': os.getenv('GOOGLE_PICKER_APP_ID', ''),
-        'google_drive_user': request.session.get('google_drive_user', {}),
-        'google_drive_user_json': json.dumps(request.session.get('google_drive_user', {})),
-    })
+    return redirect(request.session.pop(
+        'google_drive_oauth_next',
+        os.getenv('GOOGLE_OAUTH_FRONTEND_URL', 'http://127.0.0.1:5173/overview'),
+    ))
 
 
 @require_GET
@@ -151,6 +142,16 @@ def google_drive_picker_token(request):
         return JsonResponse({'access_token': credentials.token})
     except ValueError as error:
         return JsonResponse({'detail': str(error)}, status=401)
+
+
+@require_GET
+def google_drive_picker_config(request):
+    if 'google_drive_credentials' not in request.session:
+        return JsonResponse({'detail': 'Connect Google Drive first.'}, status=401)
+    return JsonResponse({
+        'api_key': os.getenv('GOOGLE_PICKER_API_KEY', ''),
+        'app_id': os.getenv('GOOGLE_PICKER_APP_ID', ''),
+    })
 
 
 @require_GET
