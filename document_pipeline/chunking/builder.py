@@ -44,12 +44,15 @@ _EXEC_HINTS = re.compile(
 _EXHIBIT_HINTS = re.compile(
     r'\b(?:exhibit|annexure|annex|schedule|appendix|order\s+form'
     r'|statement\s+of\s+work)\b[\s\-:]*[A-Z0-9]?', re.I)
+# A clause this short with an exhibit word in it is a heading, not a sentence.
+_HEADING_MAX_WORDS = 12
 
 # Structural labels for clauses the document itself never titled. These name
 # how the extractor found the clause, which is a fact about our own pipeline,
 # not an invented legal heading. The chunk's own `title` field stays null.
 _SOURCE_LABELS = {
     'front_matter': 'FRONT MATTER',
+    'form_line': 'FORM LINES',
     'table': 'TABLE',
 }
 
@@ -95,6 +98,8 @@ def _crumb_label(n):
     title = (n.get('clause_title') or '').strip()
     if title:
         return title
+    if n.get('numbering_source') == 'form_line':
+        return _SOURCE_LABELS['form_line']
 
     text = (n.get('text') or '').strip()
     words = text.split()
@@ -131,14 +136,27 @@ def breadcrumb(rec, idx):
     return ' > '.join(trail)
 
 
+def _names_an_exhibit(n):
+    """An exhibit is announced by its heading, not by a sentence that refers to
+    one: 'PRIVACY ANNEX (ANNEX 1)' or 'Schedule 2 - Pricing' opens an exhibit,
+    'Processor shall process the data listed in Annex 1' does not."""
+    title = n.get('clause_title') or ''
+    text = (n.get('text') or '').strip()
+    if _EXHIBIT_HINTS.search(title) or _EXHIBIT_HINTS.match(text):
+        return True
+    return len(text.split()) <= _HEADING_MAX_WORDS and bool(_EXHIBIT_HINTS.search(text))
+
+
 def region_of(rec, idx):
     """body, execution or exhibit. Decided on the clause and its ancestors so a
     child of a signature block inherits the block's region."""
     chain = [idx[c] for c in (rec.get('ancestor_ids') or []) if c in idx] + [rec]
+    if any(_names_an_exhibit(n) for n in chain):
+        return REGION_EXHIBIT
+    if any(n.get('numbering_source') == 'form_line' for n in chain):
+        return REGION_EXECUTION
     blob = ' '.join(((n.get('clause_title') or '') + ' ' + (n.get('text') or '')[:160])
                     for n in chain)
-    if _EXHIBIT_HINTS.search(blob):
-        return REGION_EXHIBIT
     if _EXEC_HINTS.search(blob):
         return REGION_EXECUTION
     return REGION_BODY
