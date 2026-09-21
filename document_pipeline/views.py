@@ -13,6 +13,9 @@ from .connectors.GoogleDrive.oauth import (
     exchange_code_for_tokens,
     get_user_details,
 )
+from .models import Document
+from .services.ingestion_service import google_drive_source, needs_extraction, sync_drive_files
+from .tasks.ingest import stream_document_task
 
 
 def _flatten_files(folders):
@@ -39,31 +42,53 @@ def _build_folder_snapshot(request, credentials, folder_ids):
     return folders
 
 
-def _sync_changes(previous_files, current_files):
-    previous_files = previous_files or {}
-    added = [file for file_id, file in current_files.items() if file_id not in previous_files]
-    deleted = [file for file_id, file in previous_files.items() if file_id not in current_files]
-    renamed = []
-    moved = []
-    updated = []
-
-    for file_id in current_files.keys() & previous_files.keys():
-        old_file = previous_files[file_id]
-        new_file = current_files[file_id]
-        if old_file.get('name') != new_file.get('name'):
-            renamed.append({'before': old_file, 'after': new_file})
-        elif old_file.get('parent_id') != new_file.get('parent_id'):
-            moved.append({'before': old_file, 'after': new_file})
-        elif old_file != new_file:
-            updated.append({'before': old_file, 'after': new_file})
-
+def _document_summary(document):
     return {
-        'added': added,
-        'updated': updated,
-        'renamed': renamed,
-        'moved': moved,
-        'deleted': deleted,
+        'id': str(document.id),
+        'drive_file_id': document.source_external_id,
+        'name': document.name,
+        'mime_type': document.mime_type,
+        'extraction_status': document.extraction_status,
     }
+
+
+def _changes_payload(outcome):
+    return {
+        'added': [_document_summary(d) for d in outcome.created],
+        'updated': [_document_summary(d) for d in outcome.updated],
+        'renamed': [_document_summary(d) for d in outcome.renamed],
+        'moved': [_document_summary(d) for d in outcome.moved],
+        'restored': [_document_summary(d) for d in outcome.restored],
+        'deleted': [_document_summary(d) for d in outcome.deleted],
+        'unchanged': outcome.unchanged,
+    }
+
+
+def _sync_and_queue(credentials, folders, folder_ids):
+    current_files = _flatten_files(folders)
+    print(f'[http] syncing {len(current_files)} Drive files', flush=True)
+    source = google_drive_source()
+    outcome = sync_drive_files(current_files,
+                               ingestion_source=source,
+                               folder_ids=folder_ids)
+    changed_documents = outcome.created + outcome.updated + outcome.restored
+    changed_ids = {document.id for document in changed_documents}
+    current_documents = Document.objects.filter(
+        ingestion_source=source,
+        source_external_id__in=current_files,
+        deleted_at__isnull=True,
+    )
+    to_ingest = [
+        document for document in current_documents
+        if document.id in changed_ids or needs_extraction(document)
+    ]
+    task_ids = []
+    refreshed_credentials_json = credentials.to_json()
+    for document in to_ingest:
+        result = stream_document_task.delay(refreshed_credentials_json, str(document.id))
+        task_ids.append(result.id)
+    print(f'[http] queued {len(task_ids)} ingestion tasks', flush=True)
+    return outcome, to_ingest, task_ids, refreshed_credentials_json
 
 
 @require_GET
@@ -131,7 +156,7 @@ def google_drive_picker_config(request):
 
 @require_GET
 def google_drive_files(request):
-    """List files directly inside all folders selected in Google Picker."""
+    """Save the selected folders and queue their first ingestion."""
     folder_ids = request.GET.getlist('folder_id')
 
     try:
@@ -143,15 +168,21 @@ def google_drive_files(request):
         credentials = credentials_from_json(credentials_json)
         folder_ids = list(dict.fromkeys(folder_ids))
         folders = _build_folder_snapshot(request, credentials, folder_ids)
+        outcome, to_ingest, task_ids, credentials_json = _sync_and_queue(
+            credentials, folders, folder_ids)
         request.session['google_drive_folder_ids'] = folder_ids
-        request.session['google_drive_file_snapshot'] = _flatten_files(folders)
-        for folder in folders:
-            print(folder)
+        request.session['google_drive_credentials'] = credentials_json
         return JsonResponse({
             'user': request.session.get('google_drive_user'),
-            'folder_ids': list(dict.fromkeys(folder_ids)),
+            'folder_ids': folder_ids,
+            'changes': _changes_payload(outcome),
+            'ingestion': {
+                'status': 'queued',
+                'task_ids': task_ids,
+                'document_ids': [str(document.id) for document in to_ingest],
+            },
             'folders': folders,
-        })
+        }, status=202)
     except (FileNotFoundError, ValueError) as error:
         return JsonResponse({'detail': str(error)}, status=500)
     except HttpError as error:
@@ -160,7 +191,8 @@ def google_drive_files(request):
 
 @require_POST
 def google_drive_sync(request):
-    """Compare the current Drive state with the last selected-folder snapshot."""
+    """Reconcile Drive metadata, then queue changed documents for ingestion."""
+    print('[http] Google Drive sync requested', flush=True)
     credentials_json = request.session.get('google_drive_credentials')
     folder_ids = request.session.get('google_drive_folder_ids', [])
     if not credentials_json:
@@ -171,22 +203,20 @@ def google_drive_sync(request):
     try:
         credentials = credentials_from_json(credentials_json)
         folders = _build_folder_snapshot(request, credentials, folder_ids)
-        current_files = _flatten_files(folders)
-        changes = _sync_changes(
-            request.session.get('google_drive_file_snapshot', {}),
-            current_files,
-        )
-        request.session['google_drive_credentials'] = credentials.to_json()
-        request.session['google_drive_file_snapshot'] = current_files
-        for change_type, files in changes.items():
-            for file in files:
-                print(change_type, file)
+        outcome, to_ingest, task_ids, credentials_json = _sync_and_queue(
+            credentials, folders, folder_ids)
+        request.session['google_drive_credentials'] = credentials_json
         return JsonResponse({
             'user': request.session.get('google_drive_user'),
             'folder_ids': folder_ids,
-            'changes': changes,
+            'changes': _changes_payload(outcome),
+            'ingestion': {
+                'status': 'queued',
+                'task_ids': task_ids,
+                'document_ids': [str(document.id) for document in to_ingest],
+            },
             'folders': folders,
-        })
+        }, status=202)
     except (FileNotFoundError, ValueError) as error:
         return JsonResponse({'detail': str(error)}, status=500)
     except HttpError as error:

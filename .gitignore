@@ -50,6 +50,10 @@ document_pipeline/connectors/GoogleDrive/token.json
 .DS_Store
 
 # Testing
+# The test suites stay local. They run from a working copy but are deliberately
+# not published: what we assert about the parser and the pipeline is internal.
+# Removing them from tracking does not delete anyone's local copy.
+tests/
 .coverage
 .pytest_cache/
 htmlcov/
