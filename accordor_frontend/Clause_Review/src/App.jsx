@@ -1,15 +1,39 @@
 import React, { useState, useEffect } from 'react';
+import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { Box, Snackbar, Alert } from '@mui/material';
 import Sidebar from './components/Sidebar';
 import TopNav from './components/TopNav';
 import Overview from './components/Overview';
+import Documents from './components/Documents';
+import ActivityLog from './components/ActivityLog';
 import FolderMetadataModal from './components/FolderMetadataModal';
+import Login from './components/auth/Login';
+import Signup from './components/auth/Signup';
+import ProtectedRoute from './components/auth/ProtectedRoute';
+import PublicRoute from './components/auth/PublicRoute';
+import { useAuth } from './context/AuthContext';
 import { googleDriveService } from './services/googleDriveService';
-import './styles/clausewright.css';
 
-function App() {
-  // Navigation & View state
-  const [activeNav, setActiveNav] = useState('overview');
+// Main Authenticated Workspace Layout
+function AppWorkspace() {
+  const { currentUser } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  // Derive active nav directly from route location
+  const activeNav = location.pathname.includes('/documents')
+    ? 'documents'
+    : location.pathname.includes('/activity-log')
+    ? 'activity-log'
+    : 'overview';
+
   const [searchQuery, setSearchQuery] = useState('');
+
+  const handleNavSelect = (nav) => {
+    if (nav === 'overview') navigate('/overview');
+    else if (nav === 'documents') navigate('/documents');
+    else if (nav === 'activity-log') navigate('/activity-log');
+  };
 
   // Google Drive connection and sync state
   const [driveState, setDriveState] = useState({
@@ -36,9 +60,6 @@ function App() {
 
   const showToast = (message) => {
     setToastMessage(message);
-    setTimeout(() => {
-      setToastMessage('');
-    }, 4500);
   };
 
   // Check if session is already authenticated on mount / return from OAuth
@@ -50,7 +71,7 @@ function App() {
           setDriveState((prev) => ({
             ...prev,
             isConnected: true,
-            user: res.config?.user || { email: 'Google Account' },
+            user: res.config?.user || { email: currentUser?.email || 'Google Account' },
           }));
         }
       } catch (err) {
@@ -58,7 +79,7 @@ function App() {
       }
     };
     verifyAuthStatus();
-  }, []);
+  }, [currentUser]);
 
   // Stats derived from fetched documents
   const stats = {
@@ -99,7 +120,6 @@ function App() {
         onPicked: (docs) => {
           if (docs && docs.length > 0) {
             const pickedFolder = docs[0];
-            // Open the requested second modal showing selected folder, agreement type & sectorial
             setSelectedFolderForConfig(pickedFolder);
             setIsConfigModalOpen(true);
           }
@@ -163,7 +183,7 @@ function App() {
     }
   };
 
-  // Check Drive / Sync logic using POST http://127.0.0.1:8000/api/google-drive/sync/
+  // Check Drive / Sync logic
   const handleCheckDrive = async () => {
     setDriveState((prev) => ({ ...prev, isSyncing: true }));
     showToast('Syncing with Google Drive...');
@@ -231,19 +251,35 @@ function App() {
   );
 
   return (
-    <div className="app-container">
+    <Box
+      sx={{
+        display: 'flex',
+        height: '100vh',
+        width: '100vw',
+        overflow: 'hidden',
+        bgcolor: '#fafaf8',
+      }}
+    >
       {/* Sidebar Navigation */}
       <Sidebar
         activeNav={activeNav}
-        onNavSelect={setActiveNav}
-        _documentCount={fetchedDocuments.length}
-        user={driveState.user}
+        onNavSelect={handleNavSelect}
+        documentCount={fetchedDocuments.length}
+        user={currentUser || driveState.user}
       />
 
       {/* Main Content Area */}
-      <div className="main-layout">
+      <Box
+        sx={{
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column',
+          height: '100%',
+          overflow: 'hidden',
+        }}
+      >
         <TopNav
-          title={activeNav === 'overview' ? 'Overview' : activeNav.replace('-', ' ')}
+          title={activeNav === 'overview' ? 'Overview' : activeNav === 'documents' ? 'Documents' : activeNav === 'activity-log' ? 'Activity Log' : activeNav.replace('-', ' ')}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
           onCheckDrive={handleCheckDrive}
@@ -254,42 +290,40 @@ function App() {
           <Overview
             driveState={driveState}
             stats={stats}
+            queueItems={[]}
+            onOpenPicker={handleOpenPicker}
+            onConnectDrive={handleConnectDrive}
+            onCheckDrive={handleCheckDrive}
+            onNavigateToDocuments={() => handleNavSelect('documents')}
+            onNavigateToActivityLog={() => handleNavSelect('activity-log')}
+            isEmptyData={fetchedDocuments.length === 0}
+          />
+        ) : activeNav === 'documents' ? (
+          <Documents
+            driveState={driveState}
             documents={filteredDocs}
-            _activeDraft={null}
             onOpenPicker={handleOpenPicker}
             onConnectDrive={handleConnectDrive}
             onCheckDrive={handleCheckDrive}
             onViewDocument={handleViewDocument}
             isEmptyData={fetchedDocuments.length === 0}
           />
+        ) : activeNav === 'activity-log' ? (
+          <ActivityLog />
         ) : (
-          <div className="content-scroll">
-            <div className="overview-header">
-              <h1 className="overview-date" style={{ textTransform: 'capitalize' }}>
-                {activeNav.replace('-', ' ')}
-              </h1>
-              <p className="overview-subtitle">
-                Section details and management for {activeNav.replace('-', ' ')}.
-              </p>
-            </div>
-            <div className="empty-state-box" style={{ marginTop: '20px' }}>
-              <div className="empty-state-title">
-                {activeNav.replace('-', ' ')} view is ready
-              </div>
-              <p className="empty-state-desc">
-                Switch back to the Overview section to monitor Google Drive files and review queues.
-              </p>
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={() => setActiveNav('overview')}
-              >
-                Go to Overview
-              </button>
-            </div>
-          </div>
+          <Overview
+            driveState={driveState}
+            stats={stats}
+            queueItems={[]}
+            onOpenPicker={handleOpenPicker}
+            onConnectDrive={handleConnectDrive}
+            onCheckDrive={handleCheckDrive}
+            onNavigateToDocuments={() => handleNavSelect('documents')}
+            onNavigateToActivityLog={() => handleNavSelect('activity-log')}
+            isEmptyData={fetchedDocuments.length === 0}
+          />
         )}
-      </div>
+      </Box>
 
       {/* Second Modal: Shows Selected Folder Name + Agreement Type & Sectorial Dropdowns */}
       <FolderMetadataModal
@@ -303,19 +337,84 @@ function App() {
         isSaving={isSavingConfig}
       />
 
-      {/* Toast Alert */}
-      {toastMessage && (
-        <div className="toast-msg">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <circle cx="12" cy="12" r="10" />
-            <line x1="12" y1="16" x2="12" y2="12" />
-            <line x1="12" y1="8" x2="12.01" y2="8" />
-          </svg>
-          <span>{toastMessage}</span>
-        </div>
-      )}
-    </div>
+      {/* Toast Alert using MUI Snackbar */}
+      <Snackbar
+        open={Boolean(toastMessage)}
+        autoHideDuration={4500}
+        onClose={() => setToastMessage('')}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+      >
+        <Alert
+          onClose={() => setToastMessage('')}
+          severity="info"
+          variant="filled"
+          sx={{
+            bgcolor: '#1e3a5f',
+            color: '#ffffff',
+            fontSize: '13px',
+            borderRadius: 2,
+            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+            alignItems: 'center',
+          }}
+        >
+          {toastMessage}
+        </Alert>
+      </Snackbar>
+    </Box>
   );
 }
 
-export default App;
+// Root Application with React Router Dom
+export default function App() {
+  return (
+    <Routes>
+      {/* Public Auth Routes */}
+      <Route
+        path="/login"
+        element={
+          <PublicRoute>
+            <Login />
+          </PublicRoute>
+        }
+      />
+      <Route
+        path="/signup"
+        element={
+          <PublicRoute>
+            <Signup />
+          </PublicRoute>
+        }
+      />
+
+      {/* Protected Main Workspace Route */}
+      <Route
+        path="/overview"
+        element={
+          <ProtectedRoute>
+            <AppWorkspace />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/documents"
+        element={
+          <ProtectedRoute>
+            <AppWorkspace />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/activity-log"
+        element={
+          <ProtectedRoute>
+            <AppWorkspace />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Default redirect: goes to /overview (which redirects to /login if unauthenticated) */}
+      <Route path="/" element={<Navigate to="/overview" replace />} />
+      <Route path="*" element={<Navigate to="/overview" replace />} />
+    </Routes>
+  );
+}

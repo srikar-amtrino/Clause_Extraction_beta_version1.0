@@ -1,4 +1,19 @@
 import React, { useState } from 'react';
+import {
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Box,
+  Typography,
+  TextField,
+  MenuItem,
+  Button,
+  IconButton,
+  CircularProgress,
+} from '@mui/material';
+import CloseIcon from '@mui/icons-material/Close';
+import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 
 const AGREEMENT_TYPES = [
   'Master Services Agreement (MSA)',
@@ -50,103 +65,172 @@ export default function FolderMetadataModal({
   };
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ width: '480px' }}>
-        <div className="modal-header">
-          <div className="modal-title">Configure Selected Folder</div>
-          <button type="button" className="modal-close-btn" onClick={onClose}>
-            ✕
-          </button>
-        </div>
+    <Dialog
+      open={Boolean(isOpen && folder)}
+      onClose={isSaving ? undefined : onClose}
+      maxWidth="xs"
+      fullWidth
+      PaperProps={{
+        sx: {
+          borderRadius: 2.5,
+          border: '1px solid #e3e3de',
+          boxShadow: '0 20px 35px -10px rgba(0,0,0,0.15)',
+        },
+      }}
+    >
+      <DialogTitle
+        sx={{
+          m: 0,
+          p: 2,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          borderBottom: '1px solid #e3e3de',
+        }}
+      >
+        <Typography variant="subtitle1" sx={{ fontWeight: 600, color: '#1b1f24' }}>
+          Configure Selected Folder
+        </Typography>
+        <IconButton
+          aria-label="close"
+          onClick={onClose}
+          disabled={isSaving}
+          size="small"
+          sx={{ color: '#7b838c' }}
+        >
+          <CloseIcon fontSize="small" />
+        </IconButton>
+      </DialogTitle>
 
-        <form onSubmit={handleSubmit}>
-          <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            {/* Selected Folder Highlight */}
-            <div style={{
+      <Box component="form" onSubmit={handleSubmit}>
+        <DialogContent sx={{ p: 2.5, display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {/* Selected Folder Highlight */}
+          <Box
+            sx={{
               display: 'flex',
               alignItems: 'center',
-              gap: '12px',
-              padding: '14px',
-              background: 'var(--surface-2)',
-              borderRadius: '6px',
-              border: '1px solid var(--rule)'
-            }}>
-              <div style={{
-                width: '38px',
-                height: '38px',
-                borderRadius: '6px',
-                background: '#e8f0fe',
+              gap: 1.5,
+              p: 1.5,
+              bgcolor: '#f5f5f2',
+              borderRadius: 1.5,
+              border: '1px solid #e3e3de',
+            }}
+          >
+            <Box
+              sx={{
+                width: 38,
+                height: 38,
+                borderRadius: 1,
+                bgcolor: '#e8f0fe',
                 color: '#1a73e8',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                flexShrink: 0
-              }}>
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
-                </svg>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                <span style={{ fontSize: '11px', color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.4px', fontWeight: 600 }}>
-                  Selected Google Drive Folder
-                </span>
-                <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {folder.name || 'Google Drive Folder'}
-                </span>
-              </div>
-            </div>
-
-            {/* Dropdown 1: Agreement Type */}
-            <div>
-              <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: 'var(--ink)', marginBottom: '6px' }}>
-                Agreement Type <span style={{ color: '#c5221f' }}>*</span>
-              </label>
-              <select
-                className="input-field"
-                value={agreementType}
-                onChange={(e) => setAgreementType(e.target.value)}
-                style={{ cursor: 'pointer', height: '38px' }}
-                required
+                flexShrink: 0,
+              }}
+            >
+              <FolderOutlinedIcon sx={{ fontSize: 22 }} />
+            </Box>
+            <Box sx={{ minWidth: 0, flex: 1 }}>
+              <Typography variant="caption" sx={{ color: '#7b838c', fontWeight: 500 }}>
+                Selected Google Drive Folder
+              </Typography>
+              <Typography
+                variant="body2"
+                sx={{
+                  fontWeight: 600,
+                  color: '#1b1f24',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
               >
-                {AGREEMENT_TYPES.map((type) => (
-                  <option key={type} value={type}>
-                    {type}
-                  </option>
-                ))}
-              </select>
-            </div>
+                {folder.name}
+              </Typography>
+            </Box>
+          </Box>
 
-            {/* Dropdown 2: Sectorial */}
-            <div>
-              <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: 'var(--ink)', marginBottom: '6px' }}>
-                Sectorial / Industry Domain <span style={{ color: '#c5221f' }}>*</span>
-              </label>
-              <select
-                className="input-field"
-                value={sectorial}
-                onChange={(e) => setSectorial(e.target.value)}
-                style={{ cursor: 'pointer', height: '38px' }}
-                required
-              >
-                {SECTORIAL_OPTIONS.map((sec) => (
-                  <option key={sec} value={sec}>
-                    {sec}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
+          {/* Agreement Type Dropdown */}
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+            <Typography variant="body2" sx={{ fontWeight: 600, color: '#1b1f24' }}>
+              Agreement Type
+            </Typography>
+            <TextField
+              select
+              size="small"
+              fullWidth
+              value={agreementType}
+              onChange={(e) => setAgreementType(e.target.value)}
+              disabled={isSaving}
+            >
+              {AGREEMENT_TYPES.map((type) => (
+                <MenuItem key={type} value={type} sx={{ fontSize: '13px' }}>
+                  {type}
+                </MenuItem>
+              ))}
+            </TextField>
+          </Box>
 
-          <div className="modal-footer">
-            <button type="button" className="btn-secondary" onClick={onClose} disabled={isSaving}>
-              Cancel
-            </button>
-            <button type="submit" className="btn-primary" disabled={isSaving}>
-              {isSaving ? 'Saving...' : 'Save & Fetch Files'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+          {/* Sectorial Classification Dropdown */}
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+            <Typography variant="body2" sx={{ fontWeight: 600, color: '#1b1f24' }}>
+              Sectorial Classification
+            </Typography>
+            <TextField
+              select
+              size="small"
+              fullWidth
+              value={sectorial}
+              onChange={(e) => setSectorial(e.target.value)}
+              disabled={isSaving}
+            >
+              {SECTORIAL_OPTIONS.map((sec) => (
+                <MenuItem key={sec} value={sec} sx={{ fontSize: '13px' }}>
+                  {sec}
+                </MenuItem>
+              ))}
+            </TextField>
+          </Box>
+        </DialogContent>
+
+        <DialogActions sx={{ p: 2, borderTop: '1px solid #e3e3de', bgcolor: '#f5f5f2' }}>
+          <Button
+            variant="outlined"
+            onClick={onClose}
+            disabled={isSaving}
+            size="small"
+            sx={{
+              color: '#4a5159',
+              borderColor: '#cfcfc8',
+              bgcolor: '#ffffff',
+              fontSize: '12.5px',
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="submit"
+            variant="contained"
+            disabled={isSaving}
+            size="small"
+            sx={{
+              bgcolor: '#1e3a5f',
+              fontSize: '12.5px',
+              fontWeight: 600,
+              minWidth: 100,
+            }}
+          >
+            {isSaving ? (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <CircularProgress size={14} color="inherit" />
+                <span>Saving...</span>
+              </Box>
+            ) : (
+              'Save & Fetch'
+            )}
+          </Button>
+        </DialogActions>
+      </Box>
+    </Dialog>
   );
 }

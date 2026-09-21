@@ -1,4 +1,7 @@
 import React from 'react';
+import { Box, Typography, TextField, InputAdornment, Button, CircularProgress } from '@mui/material';
+import SearchIcon from '@mui/icons-material/Search';
+import SyncIcon from '@mui/icons-material/Sync';
 
 export default function TopNav({
   title = 'Overview',
@@ -8,45 +11,94 @@ export default function TopNav({
   isCheckingDrive = false,
 }) {
   return (
-    <header className="top-nav">
-      <div className="top-title">{title}</div>
+    <Box
+      component="header"
+      sx={{
+        height: 54,
+        minHeight: 54,
+        bgcolor: '#ffffff',
+        borderBottom: '1px solid #e3e3de',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        px: { xs: 2, sm: 3.5 },
+      }}
+    >
+      <Typography
+        variant="h6"
+        sx={{
+          fontSize: '15px',
+          fontWeight: 600,
+          color: '#1b1f24',
+          textTransform: 'capitalize',
+        }}
+      >
+        {title}
+      </Typography>
 
-      <div className="top-actions">
-
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
         {/* Search bar */}
-        <div className="search-container">
-          <span className="search-icon">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="11" cy="11" r="8" />
-              <line x1="21" y1="21" x2="16.65" y2="16.65" />
-            </svg>
-          </span>
-          <input
-            type="text"
-            className="search-input"
-            placeholder="Search documents by name, party or type"
-            value={searchQuery}
-            onChange={(e) => onSearchChange && onSearchChange(e.target.value)}
-          />
-        </div>
+        <TextField
+          size="small"
+          placeholder="Search documents by name, party or type"
+          value={searchQuery}
+          onChange={(e) => onSearchChange && onSearchChange(e.target.value)}
+          sx={{
+            width: { xs: 200, sm: 280, md: 320 },
+            '& .MuiOutlinedInput-root': {
+              height: 34,
+              fontSize: '12.5px',
+              bgcolor: '#fafaf8',
+              borderRadius: '6px',
+              '& fieldset': { borderColor: '#e3e3de' },
+              '&:hover fieldset': { borderColor: '#b9cde0' },
+              '&.Mui-focused fieldset': { borderColor: '#1e3a5f' },
+            },
+          }}
+          slotProps={{
+            input: {
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon sx={{ color: '#7b838c', fontSize: 18 }} />
+                </InputAdornment>
+              ),
+            },
+          }}
+        />
 
         {/* Check Drive Button */}
-        <button
-          type="button"
-          className={`top-btn ${isCheckingDrive ? 'spinning' : ''}`}
+        <Button
+          variant="outlined"
+          size="small"
           onClick={onCheckDrive}
           disabled={isCheckingDrive}
+          startIcon={
+            isCheckingDrive ? (
+              <CircularProgress size={14} color="inherit" />
+            ) : (
+              <SyncIcon sx={{ fontSize: 16 }} />
+            )
+          }
+          sx={{
+            height: 34,
+            textTransform: 'none',
+            fontSize: '12.5px',
+            fontWeight: 500,
+            borderColor: '#e3e3de',
+            color: '#1b1f24',
+            bgcolor: '#ffffff',
+            borderRadius: '6px',
+            px: 1.75,
+            whiteSpace: 'nowrap',
+            '&:hover': {
+              borderColor: '#b9cde0',
+              bgcolor: '#f5f5f2',
+            },
+          }}
         >
-          <span className={`spin-icon`}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="23 4 23 10 17 10" />
-              <polyline points="1 20 1 14 7 14" />
-              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-            </svg>
-          </span>
-          <span>{isCheckingDrive ? 'Checking Drive...' : 'Check Drive'}</span>
-        </button>
-      </div>
-    </header>
+          {isCheckingDrive ? 'Checking Drive...' : 'Check Drive'}
+        </Button>
+      </Box>
+    </Box>
   );
 }
