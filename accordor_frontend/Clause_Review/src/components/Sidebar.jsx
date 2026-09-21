@@ -1,0 +1,350 @@
+import React from 'react';
+import { useNavigate } from 'react-router-dom';
+import {
+  Box,
+  Typography,
+  List,
+  ListItemButton,
+  ListItemIcon,
+  ListItemText,
+  Avatar,
+  IconButton,
+  Tooltip,
+} from '@mui/material';
+import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
+import DashboardOutlinedIcon from '@mui/icons-material/DashboardOutlined';
+import HistoryOutlinedIcon from '@mui/icons-material/HistoryOutlined';
+import LogoutIcon from '@mui/icons-material/Logout';
+import ArticleIcon from '@mui/icons-material/Article';
+import { useAuth } from '../context/AuthContext';
+
+export default function Sidebar({
+  activeNav = 'overview',
+  onNavSelect,
+  _documentCount = 0,
+  documentCount = _documentCount,
+  user,
+}) {
+  const { currentUser, logout } = useAuth();
+  const navigate = useNavigate();
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login', { replace: true });
+  };
+
+  const displayName = currentUser?.username || user?.name || 'Reviewer';
+  const displayEmail = currentUser?.email || user?.email || 'reviewer@clausewright.com';
+  const initial = (displayName[0] || 'R').toUpperCase();
+
+  return (
+    <Box
+      component="aside"
+      sx={{
+        width: 230,
+        minWidth: 230,
+        height: '100%',
+        bgcolor: '#ffffff',
+        borderRight: '1px solid #e3e3de',
+        display: 'flex',
+        flexDirection: 'column',
+        userSelect: 'none',
+      }}
+    >
+      {/* Brand Header */}
+      <Box
+        sx={{
+          p: '16px 18px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 1.5,
+          borderBottom: '1px solid transparent',
+        }}
+      >
+        <Box
+          sx={{
+            width: 32,
+            height: 32,
+            bgcolor: '#1e3a5f',
+            borderRadius: '6px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#ffffff',
+            boxShadow: '0 1px 2px rgba(0,0,0,0.08)',
+          }}
+        >
+          <ArticleIcon sx={{ fontSize: 18 }} />
+        </Box>
+        <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+          <Typography
+            sx={{
+              fontSize: '15px',
+              fontWeight: 700,
+              color: '#1b1f24',
+              letterSpacing: '-0.2px',
+              lineHeight: 1.2,
+            }}
+          >
+            clausereview
+          </Typography>
+          <Typography sx={{ fontSize: '11px', color: '#7b838c', mt: '1px' }}>
+            Review & update
+          </Typography>
+        </Box>
+      </Box>
+
+      {/* Navigation Sections */}
+      <Box
+        sx={{
+          flex: 1,
+          overflowY: 'auto',
+          p: '12px 10px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 2,
+        }}
+      >
+        {/* Section: Review */}
+        <Box>
+          <Typography
+            sx={{
+              fontSize: '11px',
+              fontWeight: 600,
+              textTransform: 'uppercase',
+              letterSpacing: '0.5px',
+              color: '#7b838c',
+              px: 1.25,
+              py: 0.5,
+            }}
+          >
+            Review
+          </Typography>
+          <List disablePadding sx={{ mt: 0.5 }}>
+            <ListItemButton
+              selected={activeNav === 'overview'}
+              onClick={() => onNavSelect && onNavSelect('overview')}
+              sx={{
+                borderRadius: '6px',
+                py: 0.8,
+                px: 1.25,
+                mb: 0.5,
+                '&.Mui-selected': {
+                  bgcolor: '#edf2f7',
+                  color: '#1e3a5f',
+                  fontWeight: 600,
+                  '&:hover': { bgcolor: '#e2e8f0' },
+                  '& .MuiListItemIcon-root': { color: '#1e3a5f' },
+                },
+                '&:hover': {
+                  bgcolor: '#f5f5f2',
+                },
+              }}
+            >
+              <ListItemIcon sx={{ minWidth: 28, color: '#7b838c' }}>
+                <DashboardOutlinedIcon sx={{ fontSize: 18 }} />
+              </ListItemIcon>
+              <ListItemText
+                primary="Overview"
+                slotProps={{
+                  primary: {
+                    sx: {
+                      fontSize: '13px',
+                      fontWeight: activeNav === 'overview' ? 600 : 500,
+                    },
+                  },
+                }}
+              />
+            </ListItemButton>
+
+            <ListItemButton
+              selected={activeNav === 'documents'}
+              onClick={() => onNavSelect && onNavSelect('documents')}
+              sx={{
+                borderRadius: '6px',
+                py: 0.8,
+                px: 1.25,
+                mb: 0.5,
+                '&.Mui-selected': {
+                  bgcolor: '#edf2f7',
+                  color: '#1e3a5f',
+                  fontWeight: 600,
+                  '&:hover': { bgcolor: '#e2e8f0' },
+                  '& .MuiListItemIcon-root': { color: '#1e3a5f' },
+                },
+                '&:hover': {
+                  bgcolor: '#f5f5f2',
+                },
+              }}
+            >
+              <ListItemIcon sx={{ minWidth: 28, color: '#7b838c' }}>
+                <DescriptionOutlinedIcon sx={{ fontSize: 18 }} />
+              </ListItemIcon>
+              <ListItemText
+                primary="Documents"
+                slotProps={{
+                  primary: {
+                    sx: {
+                      fontSize: '13px',
+                      fontWeight: activeNav === 'documents' ? 600 : 500,
+                    },
+                  },
+                }}
+              />
+              {documentCount > 0 && (
+                <Box
+                  sx={{
+                    bgcolor: activeNav === 'documents' ? '#1e3a5f' : '#f0f4f8',
+                    color: activeNav === 'documents' ? '#ffffff' : '#1e3a5f',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    px: 0.9,
+                    py: 0.2,
+                    borderRadius: '10px',
+                    lineHeight: 1,
+                  }}
+                >
+                  {documentCount}
+                </Box>
+              )}
+            </ListItemButton>
+          </List>
+        </Box>
+
+        {/* Section: Audit */}
+        <Box>
+          <Typography
+            sx={{
+              fontSize: '11px',
+              fontWeight: 600,
+              textTransform: 'uppercase',
+              letterSpacing: '0.5px',
+              color: '#7b838c',
+              px: 1.25,
+              py: 0.5,
+            }}
+          >
+            Audit
+          </Typography>
+          <List disablePadding sx={{ mt: 0.5 }}>
+            <ListItemButton
+              selected={activeNav === 'activity-log'}
+              onClick={() => onNavSelect && onNavSelect('activity-log')}
+              sx={{
+                borderRadius: '6px',
+                py: 0.8,
+                px: 1.25,
+                mb: 0.5,
+                '&.Mui-selected': {
+                  bgcolor: '#edf2f7',
+                  color: '#1e3a5f',
+                  fontWeight: 600,
+                  '&:hover': { bgcolor: '#e2e8f0' },
+                  '& .MuiListItemIcon-root': { color: '#1e3a5f' },
+                },
+                '&:hover': {
+                  bgcolor: '#f5f5f2',
+                },
+              }}
+            >
+              <ListItemIcon sx={{ minWidth: 28, color: '#7b838c' }}>
+                <HistoryOutlinedIcon sx={{ fontSize: 18 }} />
+              </ListItemIcon>
+              <ListItemText
+                primary="Activity log"
+                slotProps={{
+                  primary: {
+                    sx: {
+                      fontSize: '13px',
+                      fontWeight: activeNav === 'activity-log' ? 600 : 500,
+                    },
+                  },
+                }}
+              />
+            </ListItemButton>
+          </List>
+        </Box>
+      </Box>
+
+      {/* Footer User Info & Logout */}
+      <Box
+        sx={{
+          p: '14px 16px',
+          borderTop: '1px solid #e3e3de',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+        }}
+      >
+        <Tooltip title={`${displayName} (${displayEmail})`} arrow placement="top">
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1,
+              flex: 1,
+              minWidth: 0,
+              cursor: 'default',
+            }}
+          >
+            <Avatar
+              sx={{
+                width: 26,
+                height: 26,
+                bgcolor: '#1e3a5f',
+                fontSize: '11.5px',
+                fontWeight: 600,
+              }}
+            >
+              {initial}
+            </Avatar>
+            <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+              <Typography
+                sx={{
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  color: '#1b1f24',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {displayName}
+              </Typography>
+              <Typography
+                sx={{
+                  fontSize: '10.5px',
+                  color: '#7b838c',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {displayEmail}
+              </Typography>
+            </Box>
+          </Box>
+        </Tooltip>
+
+        <Tooltip title="Sign Out" arrow placement="top">
+          <IconButton
+            id="sidebar-logout-btn"
+            size="small"
+            onClick={handleLogout}
+            sx={{
+              color: '#7b838c',
+              p: 0.75,
+              ml: 1,
+              '&:hover': {
+                color: '#ef4444',
+                bgcolor: 'rgba(239, 68, 68, 0.08)',
+              },
+            }}
+          >
+            <LogoutIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+        </Tooltip>
+      </Box>
+    </Box>
+  );
+}
