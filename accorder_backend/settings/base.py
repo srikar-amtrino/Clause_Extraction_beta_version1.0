@@ -145,6 +145,11 @@ PERSIST_BULK_BATCH_SIZE = env_int("PERSIST_BULK_BATCH_SIZE", 500)
 CHUNKER_VERSION = os.environ.get("CHUNKER_VERSION") or "2026.09.18"
 CHUNK_BULK_BATCH_SIZE = env_int("CHUNK_BULK_BATCH_SIZE", 500)
 
+# ---------------------------------------------------------------- Pipeline
+# Where export_documents writes each document's extraction.json and
+# classification.json. Holds contract text: git-ignored.
+PIPELINE_EXPORT_DIR = os.environ.get("PIPELINE_EXPORT_DIR") or str(BASE_DIR / "pipeline_output")
+
 # ---------------------------------------------------------------- Classification
 # Credentials are the standard AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, read
 # by the SDK straight from the environment; they are never copied into settings.
