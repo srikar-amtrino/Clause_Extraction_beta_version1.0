@@ -37,6 +37,10 @@ ENV/
 .env.development
 .env.production
 
+# Google Drive OAuth credentials
+document_pipeline/connectors/GoogleDrive/client_secret.json
+document_pipeline/connectors/GoogleDrive/token.json
+
 # IDEs
 .vscode/
 .idea/
@@ -60,3 +64,10 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Local credentials and parse output
+.secrets/
+parse_output/
+
+# Notebooks (POC notebooks carry credentials)
+*.ipynb
