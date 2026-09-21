@@ -2,12 +2,12 @@ from celery import chord, group
 
 from document_pipeline.tasks.classify import classify_chunk_batch_task
 from document_pipeline.tasks.finalize import finalize_document_classification_task
-from document_pipeline.tasks.ingest import stream_and_parse_document
+from document_pipeline.tasks.ingest import stream_document_task
 
 
-def trigger_full_document_pipeline(drive_file_id: str, document_id: int):
-    """Start document streaming and parsing on the parsing queue."""
-    parse_result = stream_and_parse_document.delay(drive_file_id, document_id)
+def trigger_full_document_pipeline(credentials_json: str, document_id: str):
+    """Start Drive streaming and ingestion on the streaming I/O queue."""
+    parse_result = stream_document_task.delay(credentials_json, document_id)
     return parse_result
 
 

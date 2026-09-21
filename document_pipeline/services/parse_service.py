@@ -30,6 +30,7 @@ def stream_and_parse(credentials, file_id, max_file_bytes=None):
     Raises DriveFileError when Drive cannot serve the file, since a retry may
     succeed. A file Drive can serve but this pipeline does not parse comes back
     as a `rejected` result, like any other rejection."""
+    print('[parse] starting Drive file %s' % file_id, flush=True)
     max_file_bytes = max_file_bytes or settings.PARSE_MAX_FILE_BYTES
     client = build_drive_client(credentials)
     drive_file = fetch_file_metadata(client, file_id)
@@ -67,6 +68,7 @@ def stream_and_parse(credentials, file_id, max_file_bytes=None):
 
     result.source = source
     result.timings_ms = {"download": download_ms, "parse": parse_ms}
+    print('[parse] completed Drive file %s: %s' % (file_id, result.status), flush=True)
     logger.info("parsed %s: %s, %d paragraph records in %d ms",
                 file_id, result.status, len(result.paragraphs), parse_ms)
     return result

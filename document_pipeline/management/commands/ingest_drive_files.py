@@ -1,7 +1,8 @@
 """Parse and persist every Drive document that needs it.
 
 The other half of Step 2.4. `POST /api/google-drive/sync/` records what exists
-in Drive; this downloads and parses what that turned up:
+in Drive and queues changed files for Celery; this command remains available
+for manual or recovery ingestion:
 
     python manage.py ingest_drive_files
     python manage.py ingest_drive_files --limit 5
