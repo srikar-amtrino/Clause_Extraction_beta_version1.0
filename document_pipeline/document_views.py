@@ -44,7 +44,7 @@ def _get_document(document_id):
     """-> (document, error response). Not get_object_or_404, so an unknown id
     answers with the same JSON shape as every other error here instead of
     Django's HTML 404 page."""
-    document = Document.objects.filter(pk=document_id).first()
+    document = Document.objects.filter(pk=document_id).select_related('current_reviewer').first()
     if document is None:
         return None, JsonResponse({'detail': 'No document with that id.'}, status=404)
     return document, None
@@ -90,6 +90,8 @@ def _document_links(document):
     base = '/api/documents/%s/' % document.id
     return {
         'self': base,
+        'workspace': base + 'workspace/',
+        'activity': base + 'activity/',
         'extraction': base + 'extraction/',
         'classification_input': base + 'classification-input/',
         'classification': base + 'classification/',
@@ -106,6 +108,9 @@ def _document_row(document, extraction_run, classification_run):
         'drive_web_link': document.drive_web_link or None,
         'mime_type': document.mime_type,
         'extraction_status': document.extraction_status,
+        'review_status': getattr(document, 'review_status', 'needs_review'),
+        'current_reviewer': (document.current_reviewer.username
+                             if getattr(document, 'current_reviewer', None) else None),
         'last_extracted_at': (document.last_extracted_at.isoformat()
                               if document.last_extracted_at else None),
         'stages': _stage_summary(extraction_run, classification_run),
@@ -131,6 +136,8 @@ def document_list(request):
       folder_id=<drive folder id>   repeatable; the folder the file was found in
       status=<extraction status>    repeatable; pending | extracted |
                                     extracted_with_warnings | rejected | failed
+      review_status=<review status> repeatable; needs_review | in_review | draft | reviewed | published
+      reviewer=<username>           filter by current reviewer username
       classified=true|false         whether a current classification run exists
       q=<text>                      substring of the file name, case-insensitive
       limit=<n>  offset=<n>         page window; limit defaults to 50, caps at 200
@@ -143,7 +150,7 @@ def document_list(request):
         return JsonResponse({'detail': error}, status=400)
 
     documents = Document.objects.filter(ingestion_source=google_drive_source(),
-                                        deleted_at__isnull=True)
+                                        deleted_at__isnull=True).select_related('current_reviewer')
 
     folder_ids = [f for f in request.GET.getlist('folder_id') if f]
     if folder_ids:
@@ -159,6 +166,14 @@ def document_list(request):
                 'allowed': sorted(allowed),
             }, status=400)
         documents = documents.filter(extraction_status__in=statuses)
+
+    review_statuses = [s for s in request.GET.getlist('review_status') if s]
+    if review_statuses:
+        documents = documents.filter(review_status__in=review_statuses)
+
+    reviewer = (request.GET.get('reviewer') or '').strip()
+    if reviewer:
+        documents = documents.filter(current_reviewer__username__icontains=reviewer)
 
     search = (request.GET.get('q') or '').strip()
     if search:
