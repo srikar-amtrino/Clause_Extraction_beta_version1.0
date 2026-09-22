@@ -5,6 +5,7 @@ from .chunk import Chunk
 from .chunk_run import ChunkRun
 from .classification import Classification
 from .classification_call import ClassificationCall
+from .classification_review import ClassificationReview
 from .classification_run import ClassificationRun
 from .document import Document
 from .document_activity_log import DocumentActivityLog

@@ -10,6 +10,7 @@ os.environ.setdefault(
 app = Celery(
 	"accorder_backend",
 	include=(
+		"document_pipeline.tasks.chunk",
 		"document_pipeline.tasks.classify",
 		"document_pipeline.tasks.finalize",
 		"document_pipeline.tasks.ingest",
