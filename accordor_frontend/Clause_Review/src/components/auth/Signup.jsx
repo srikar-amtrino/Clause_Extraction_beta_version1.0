@@ -12,6 +12,10 @@ import {
   Divider,
   Link,
   LinearProgress,
+  Select,
+  MenuItem,
+  FormControl,
+  FormHelperText,
 } from '@mui/material';
 import Visibility from '@mui/icons-material/Visibility';
 import VisibilityOff from '@mui/icons-material/VisibilityOff';
@@ -19,8 +23,17 @@ import PersonOutlinedIcon from '@mui/icons-material/PersonOutlined';
 import EmailOutlinedIcon from '@mui/icons-material/EmailOutlined';
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import CheckCircleOutlinedIcon from '@mui/icons-material/CheckCircleOutlined';
+import WorkOutlineIcon from '@mui/icons-material/WorkOutlined';
 import AuthLayout from './AuthLayout';
 import { useAuth } from '../../context/AuthContext';
+
+const ROLES = [
+  'Senior Legal Product Analyst',
+  'Legal Product Analyst',
+  'Senior AI Engineer',
+  'AI Engineer',
+  'Full Stack Developer',
+];
 
 export default function Signup() {
   const navigate = useNavigate();
@@ -31,6 +44,7 @@ export default function Signup() {
     email: '',
     password: '',
     confirmPassword: '',
+    role: '',
   });
 
   const [showPassword, setShowPassword] = useState(false);
@@ -101,6 +115,10 @@ export default function Signup() {
       errors.confirmPassword = 'Passwords do not match';
     }
 
+    if (!formData.role) {
+      errors.role = 'Please select your role';
+    }
+
     setFieldErrors(errors);
     return Object.keys(errors).length === 0;
   };
@@ -114,6 +132,7 @@ export default function Signup() {
         username: formData.username,
         email: formData.email,
         password: formData.password,
+        role: formData.role,
       });
       navigate('/overview', { replace: true });
     } catch (err) {
@@ -333,6 +352,46 @@ export default function Signup() {
           />
         </Box>
 
+        {/* Role Dropdown */}
+        <Box sx={{ mb: 2.5 }}>
+          <Typography
+            variant="body2"
+            sx={{ fontWeight: 600, color: '#1b1f24', mb: 0.75 }}
+          >
+            Role
+          </Typography>
+          <FormControl fullWidth error={Boolean(fieldErrors.role)}>
+            <Select
+              id="signup-role"
+              name="role"
+              value={formData.role}
+              onChange={handleChange}
+              disabled={loading}
+              displayEmpty
+              startAdornment={
+                <InputAdornment position="start">
+                  <WorkOutlineIcon sx={{ color: '#7b838c', fontSize: 20, ml: 0.5 }} />
+                </InputAdornment>
+              }
+              sx={{
+                '& .MuiSelect-select': { pl: 0.5 },
+              }}
+            >
+              <MenuItem value="" disabled>
+                <em style={{ color: '#9ca3af' }}>Select your role</em>
+              </MenuItem>
+              {ROLES.map((r) => (
+                <MenuItem key={r} value={r}>
+                  {r}
+                </MenuItem>
+              ))}
+            </Select>
+            {fieldErrors.role && (
+              <FormHelperText>{fieldErrors.role}</FormHelperText>
+            )}
+          </FormControl>
+        </Box>
+
         {/* Submit Button */}
         <Button
           id="signup-submit-btn"
@@ -354,7 +413,7 @@ export default function Signup() {
               <span>Creating your account...</span>
             </Box>
           ) : (
-            'Create Reviewer Account'
+            'Create Account'
           )}
         </Button>
 
