@@ -5,6 +5,7 @@ from .chunk import Chunk
 from .chunk_run import ChunkRun
 from .classification import Classification
 from .classification_call import ClassificationCall
+from .classification_review import ClassificationReview
 from .classification_run import ClassificationRun
 from .document import Document
 from .extracted_clause import ExtractedClause
@@ -26,4 +27,5 @@ __all__ = [
     'ClassificationRun',
     'Classification',
     'ClassificationCall',
+    'ClassificationReview',
 ]

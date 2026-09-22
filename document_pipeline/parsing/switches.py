@@ -108,6 +108,16 @@ DETECT_COLON_TITLES = True
 TITLE_MAX_WORDS = 5
 TITLE_MAX_CHARS = 70
 
+# ---------------------------------------------------------------- definitions
+# A definitions section usually lists its terms as plain unnumbered paragraphs
+# ('"Business Day" means a day other than...'). Off -> each one continues the
+# clause above it, so a numbered sub-list inside one definition swallows every
+# definition that follows: the entries never become clauses, never become micro
+# chunks, and are never classified.
+DETECT_DEFINITION_TERMS = True
+# The longest a quoted defined term may be. Longer quoted runs are quotations.
+DEFINITION_TERM_MAX_CHARS = 120
+
 # ---------------------------------------------------------------- flags
 # Off -> the flags array is emitted empty on every clause.
 EMIT_FLAGS = True

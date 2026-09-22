@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -12,28 +13,80 @@ SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
 CONNECTOR_DIR = Path(__file__).resolve().parent
 CLIENT_SECRET_FILE = str(CONNECTOR_DIR / 'client_secret.json')
 TOKEN_FILE = str(CONNECTOR_DIR / 'token.json')
+# Where a command-line login stores its token. Outside the repo tree and
+# git-ignored; the same path the picker's connector writes.
+DEV_TOKEN_FILE = str(Path(os.getenv('GOOGLE_DRIVE_TOKEN_PATH')
+                          or '.secrets/drive_token.json'))
+TOKEN_URI = 'https://oauth2.googleapis.com/token'
+
+
+def _stored_credentials(path):
+    """Credentials rebuilt from a token file, or None when there is no usable one.
+
+    Two shapes are accepted, because two things write these files: the full
+    authorized-user JSON google-auth itself emits, and the bare
+    {"refresh_token": ...} the command-line authorization wrote. A refresh
+    token plus the OAuth client from the environment is all that is needed to
+    mint an access token, so the short form stays valid.
+    """
+    if not os.path.exists(path):
+        return None
+    try:
+        data = json.loads(Path(path).read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+
+    if data.get('client_id') and data.get('client_secret'):
+        return Credentials.from_authorized_user_info(data, SCOPES)
+
+    refresh_token = data.get('refresh_token')
+    client_id = os.getenv('GOOGLE_OAUTH_CLIENT_ID')
+    client_secret = os.getenv('GOOGLE_OAUTH_CLIENT_SECRET')
+    if not (refresh_token and client_id and client_secret):
+        return None
+    return Credentials(token=None, refresh_token=refresh_token, token_uri=TOKEN_URI,
+                       client_id=client_id, client_secret=client_secret, scopes=SCOPES)
+
+
+def _save(credentials, path):
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text(credentials.to_json(), encoding='utf-8')
+
 
 def get_credentials():
-    """Retain the command-line helper for manually running this module."""
+    """Drive credentials for a command-line run. -> Credentials
+
+    Ingestion runs headless -- a management command, a Celery worker, a cron --
+    so a stored token is tried before anything that needs a human. Only when no
+    token can be refreshed does this fall back to the browser flow, which needs
+    client_secret.json and someone sitting at the machine.
+    """
     from google_auth_oauthlib.flow import InstalledAppFlow
 
-    creds = None
-    # Reuse saved token if it exists
-    if os.path.exists(TOKEN_FILE):
-        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+    for path in (TOKEN_FILE, DEV_TOKEN_FILE):
+        creds = _stored_credentials(path)
+        if creds is None:
+            continue
+        if creds.valid:
+            return creds
+        if creds.refresh_token:
+            try:
+                creds.refresh(Request())
+            except Exception:
+                continue    # revoked or the client changed; try the next source
+            _save(creds, path)
+            return creds
 
-    # If no valid creds, run the login flow (opens a browser window once)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRET_FILE, SCOPES)
-            creds = flow.run_local_server(port=0)
+    if not os.path.exists(CLIENT_SECRET_FILE):
+        raise RuntimeError(
+            'No usable Google Drive credentials. Expected a token at %s or %s, '
+            'or %s to run the browser sign-in. Connect Drive through the picker, '
+            'or place the OAuth client file.'
+            % (TOKEN_FILE, DEV_TOKEN_FILE, CLIENT_SECRET_FILE))
 
-        # Save the token so we don't need to log in again next run
-        with open(TOKEN_FILE, 'w') as token:
-            token.write(creds.to_json())
-
+    flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRET_FILE, SCOPES)
+    creds = flow.run_local_server(port=0)
+    _save(creds, TOKEN_FILE)
     return creds
 
 def list_files_in_folder(folder_id, creds=None):

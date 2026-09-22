@@ -2,6 +2,7 @@
 or are secret come from the process environment, loaded from `.env`."""
 import os
 import ssl
+import sys
 from urllib.parse import quote, urlparse
 from pathlib import Path
 
@@ -163,7 +164,10 @@ PARSE_STORE_RAW_RESULT = env_bool("PARSE_STORE_RAW_RESULT", True)
 # value falls back to it rather than silently pinning an old build.
 # 2026-09-18: list depth, shared Word list counters, heading nesting.
 # 2026-09-18b: typed multi-letter Roman numerals (II., IV.) start clauses.
-PARSER_BUILD = os.environ.get("PARSER_BUILD") or "2026.09.18b"
+# 2026-09-22: definitions-list entries ('"Business Day" means ...') open their
+# own clause at the list's level, so the entries after one that contains a
+# numbered sub-list are no longer swallowed by it.
+PARSER_BUILD = os.environ.get("PARSER_BUILD") or "2026.09.22"
 # Guards against Postgres's 65535 bind-parameter ceiling on huge documents.
 PERSIST_BULK_BATCH_SIZE = env_int("PERSIST_BULK_BATCH_SIZE", 500)
 
@@ -221,6 +225,12 @@ CLASSIFY_SDK_MAX_RETRIES = env_int("CLASSIFY_SDK_MAX_RETRIES", 4)
 CLASSIFY_MAX_TOKENS = env_int("CLASSIFY_MAX_TOKENS", 16000)
 CLASSIFY_BULK_BATCH_SIZE = env_int("CLASSIFY_BULK_BATCH_SIZE", 500)
 
+# Whether /api/google-drive/sync/ carries a document all the way to a verdict,
+# or stops after chunking. On, so one sync is the whole pipeline. Off is for a
+# bulk sync: classification is the only stage that calls a paid model, so a
+# folder of a hundred contracts otherwise fires a hundred classification runs.
+PIPELINE_CLASSIFY_ON_SYNC = env_bool("PIPELINE_CLASSIFY_ON_SYNC", True)
+
 # ---------------------------------------------------------------- Celery & Redis
 # Upstash exposes the REST URL and token in .env, while Celery uses Redis's
 # TLS wire protocol. The REST hostname and token are valid for that protocol.
@@ -228,4 +238,16 @@ CELERY_BROKER_URL = upstash_redis_url()
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL
 CELERY_BROKER_USE_SSL = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
 CELERY_REDIS_BACKEND_USE_SSL = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
+
+# The test suite must never reach the real broker. A view under test calls
+# .delay(), which on the shared broker leaves a live ingestion task queued
+# against real Drive credentials for whatever worker starts next -- a test run
+# that quietly schedules production work. The in-memory transport accepts the
+# queue call and drops it, so the tests still assert that something was
+# queued without anything being able to run it.
+if "test" in sys.argv:
+    CELERY_BROKER_URL = "memory://"
+    # Not the broker's transport: a result backend needs its own scheme.
+    CELERY_RESULT_BACKEND = "cache+memory://"
+    CELERY_BROKER_USE_SSL = CELERY_REDIS_BACKEND_USE_SSL = None
 

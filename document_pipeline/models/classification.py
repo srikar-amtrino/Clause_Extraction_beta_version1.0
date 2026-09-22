@@ -18,6 +18,10 @@ class Classification(models.Model):
     - failed: the model never produced a valid answer. The row carries the
       error and goes to review.
 
+    The model is still made to justify each answer -- an empty justification
+    fails validation and the item is retried -- but the prose is not kept: the
+    review queue works from the type, the confidence and the review reasons.
+
     The invariants between those states are check constraints, not only Python,
     so no code path -- including a hand-written fix-up -- can store a Non-clause
     with a sub-type or a classified row without a type.
@@ -44,6 +48,12 @@ class Classification(models.Model):
                             related_name='classifications')
     chunk = models.ForeignKey('document_pipeline.Chunk', on_delete=models.CASCADE,
                               related_name='classifications')
+    # The source paragraphs this verdict covers, copied from the chunk so a
+    # row carries its own audit trail: a reviewer or an export can go from a
+    # label straight back to the text it was given without joining through
+    # chunks. Plural because a micro chunk is one clause, and a clause is
+    # regularly several paragraphs -- about a fifth of them are.
+    paragraph_ids = models.JSONField(default=list, blank=True)
 
     outcome = models.CharField(max_length=16, choices=OUTCOME_CHOICES)
     label = models.CharField(max_length=16, choices=LABEL_CHOICES, null=True, blank=True)
@@ -53,7 +63,6 @@ class Classification(models.Model):
                                        related_name='classifications')
     sub_type = models.CharField(max_length=255, null=True, blank=True)
     confidence = models.FloatField(null=True, blank=True)
-    reason = models.TextField(blank=True, default='')
 
     # The types the section's heading trail implies, and whether the answer
     # fell outside them. Computed here, not reported by the model, so the check
@@ -94,9 +103,6 @@ class Classification(models.Model):
             models.CheckConstraint(
                 condition=Q(confidence__isnull=True) | Q(confidence__gte=0.0, confidence__lte=1.0),
                 name='classification_confidence_range'),
-            models.CheckConstraint(
-                condition=Q(outcome='failed') | ~Q(reason=''),
-                name='classification_has_reason'),
         ]
         indexes = [
             models.Index(fields=['chunk'], name='class_chunk_idx'),

@@ -12,6 +12,15 @@
  * - GET /api/documents/<id>/classification/         the verdict on each micro chunk
  * - GET /api/taxonomy/                              the clause types a verdict can use
  *
+ * One group writes: a reviewer's decision about a verdict. These never touch
+ * the classification itself -- the run stays an audit record -- and both
+ * return items in exactly the shape `classification()` returns, so a decided
+ * row can be swapped straight into state without refetching.
+ *
+ * - POST /api/classifications/<id>/review/          decide one verdict
+ * - GET  /api/classifications/<id>/review/history/  every decision ever made on it
+ * - POST /api/documents/<id>/reviews/               decide many at once, all or nothing
+ *
  * Errors come back as { detail: "..." } with a real status code and are thrown
  * as an Error carrying that detail, so a catch block can show it directly.
  */
@@ -26,14 +35,23 @@ const BACKEND_BASE = 'http://127.0.0.1:8000';
  * configure), and falls back to the backend directly if the proxy is not there
  * — the same two-step googleDriveService.js uses.
  */
-async function get(path, params) {
+async function request(path, { params, method = 'GET', body } = {}) {
   const query = params ? `?${params}` : '';
-  const options = { credentials: 'include', headers: { Accept: 'application/json' } };
+  const options = {
+    method,
+    credentials: 'include',
+    headers: { Accept: 'application/json' },
+  };
+  if (body !== undefined) {
+    options.headers['Content-Type'] = 'application/json';
+    options.body = JSON.stringify(body);
+  }
 
   let response = await fetch(`${path}${query}`, options).catch(() => null);
   if (!response || response.status === 404) {
     // 404 here can mean "the proxy is not running", not "no such document";
-    // the direct call below tells the two apart.
+    // the direct call below tells the two apart. Safe to repeat even for a
+    // POST: a 404 means the request reached nothing, so nothing was written.
     const direct = await fetch(`${BACKEND_BASE}${path}${query}`, options).catch(() => null);
     if (direct) response = direct;
   }
@@ -41,10 +59,19 @@ async function get(path, params) {
     throw new Error('Could not reach the backend. Is it running on port 8000?');
   }
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error(body.detail || `Request failed with status ${response.status}`);
+    const problem = await response.json().catch(() => ({}));
+    throw new Error(problem.detail || `Request failed with status ${response.status}`);
   }
   return response.json();
+}
+
+/** Reads. Kept as its own name because every call below but the writes is one. */
+function get(path, params) {
+  return request(path, { params });
+}
+
+function post(path, body) {
+  return request(path, { method: 'POST', body });
 }
 
 /** Turn a filter object into a query string, repeating array values. */
@@ -137,5 +164,62 @@ export const documentService = {
       version,
       include_inactive: includeInactive,
     }));
+  },
+
+  /**
+   * Record a reviewer's decision about one verdict.
+   *
+   *   decision  'accepted' | 'corrected' | 'rejected'
+   *   type      taxonomy key -- required for 'corrected', omit otherwise
+   *   label     'Clause' | 'Non-clause' -- optional, defaults to the verdict's
+   *   subType   optional, and never on a Non-clause
+   *   note      optional; required for 'rejected'
+   *
+   * -> the updated item, in the same shape `classification()` returns in
+   * `items`. Swap it into state; there is no need to refetch the document.
+   *
+   * The reviewer is taken from the Drive session on the backend, so there is
+   * nothing to send about who is deciding. Deciding again supersedes the
+   * previous decision and keeps it in the history.
+   */
+  review(classificationId, { decision, type, label, subType, note } = {}) {
+    return post(`/api/classifications/${classificationId}/review/`, {
+      decision,
+      type,
+      label,
+      sub_type: subType,
+      note,
+    });
+  },
+
+  /**
+   * Every decision ever made about one verdict, newest first.
+   * -> { classification_id, reviews: [{ revision, decision, is_current, ... }] }
+   */
+  reviewHistory(classificationId) {
+    return get(`/api/classifications/${classificationId}/review/history/`);
+  },
+
+  /**
+   * Decide several verdicts for one document at once -- the "accept everything
+   * visible" button. Each entry takes the same fields as `review`, plus the
+   * `classificationId` it applies to.
+   *
+   * All or nothing: if one entry is bad, nothing is written and the thrown
+   * Error says which. -> { updated, items, summary }, where `items` holds only
+   * the rows that changed and `summary` covers the whole run, so a header can
+   * be re-rendered from the one response.
+   */
+  reviewMany(documentId, decisions = []) {
+    return post(`/api/documents/${documentId}/reviews/`, {
+      decisions: decisions.map(({ classificationId, decision, type, label, subType, note }) => ({
+        classification_id: classificationId,
+        decision,
+        type,
+        label,
+        sub_type: subType,
+        note,
+      })),
+    });
   },
 };

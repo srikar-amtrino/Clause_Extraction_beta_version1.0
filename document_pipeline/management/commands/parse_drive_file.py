@@ -5,6 +5,12 @@ This is the harness used to verify clause extraction. How it has been used:
     python manage.py parse_drive_file <drive_file_id>
     python manage.py parse_drive_file <drive_file_id> --output parse_output/result.json
     python manage.py parse_drive_file <drive_file_id> --save
+    python manage.py parse_drive_file <drive_file_id> --file local/copy.docx --save --force
+
+`--file` parses a copy already on disk instead of downloading, which needs no
+Drive credentials: use it to re-parse a document after a parser change. The
+file id is still required because it is what identifies the document, so the
+run lands as that document's next attempt rather than creating a second one.
 
 Without `--save` nothing is written to the database, so the command stays safe
 to run against real documents purely to look at them: the summary goes to
@@ -32,9 +38,10 @@ from pathlib import Path
 from django.core.management.base import BaseCommand, CommandError
 
 from document_pipeline.connectors.GoogleDrive.main import get_credentials
-from document_pipeline.services.drive_service import DriveFileError
+from document_pipeline.models import Document
+from document_pipeline.services.drive_service import DriveFileError, DriveFileRejected
 from document_pipeline.services.ingestion_service import google_drive_source
-from document_pipeline.services.parse_service import stream_and_parse
+from document_pipeline.services.parse_service import parse_local_file, stream_and_parse
 from document_pipeline.services.persistence_service import persist_parse_result
 
 
@@ -43,6 +50,9 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument("file_id", help="Google Drive file ID")
+        parser.add_argument("--file", help="parse this local .docx instead of downloading "
+                                           "from Drive; file_id still says which document "
+                                           "it is, so the run lands on that document")
         parser.add_argument("--output", help="write the full result to this JSON file")
         parser.add_argument("--rows", type=int, default=25, help="paragraph rows to preview (default 25)")
         parser.add_argument("--save", action="store_true",
@@ -52,8 +62,12 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         try:
-            result = stream_and_parse(get_credentials(), options["file_id"])
-        except DriveFileError as exc:
+            if options["file"]:
+                result = parse_local_file(options["file"], options["file_id"],
+                                          known=self._known(options["file_id"]))
+            else:
+                result = stream_and_parse(get_credentials(), options["file_id"])
+        except (DriveFileError, DriveFileRejected) as exc:
             raise CommandError(str(exc)) from exc
 
         out = self.stdout
@@ -91,6 +105,15 @@ class Command(BaseCommand):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(result.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
             out.write(self.style.SUCCESS("\nfull result written to %s" % path))
+
+    def _known(self, file_id):
+        """The Drive metadata already stored for this file, so a local re-parse
+        does not blank the web link or the name Drive gave it."""
+        document = Document.objects.filter(source_external_id=file_id).first()
+        if document is None:
+            return {}
+        return {"name": document.name, "mime_type": document.mime_type,
+                "drive_web_link": document.drive_web_link}
 
     def _save(self, result, *, force):
         outcome = persist_parse_result(result, ingestion_source=google_drive_source(),
