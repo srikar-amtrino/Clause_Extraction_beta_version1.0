@@ -92,6 +92,50 @@ def title_lead_in(text):
     return title, s[cut + 1:].strip()
 
 
+# The quote characters a drafter may wrap a defined term in.
+_QUOTES = "\"'‘’“”„‟«»"
+# The verb that turns a quoted term into a definition. A quoted phrase followed
+# by anything else is a quotation inside ordinary clause text.
+#   "X" means ... / "X" and "Y" shall each have the meanings given ...
+_DEFINING = (r"(?:(?:shall|will|is|are|has|have)\s+)?"
+             r"(?:(?:each|respectively|also|collectively|both|together)\s+)?"
+             r"(?:means?\b|have\s+the\s+meanings?\b|has\s+the\s+meanings?\b"
+             r"|the\s+same\s+meanings?\b|defined\s+(?:as|in|below)\b"
+             r"|refers?\s+to\b|refer\s+to\b|includes?\b|include\b)")
+
+
+def _definition_pattern():
+    quoted = "[%s][^%s]{1,%d}[%s]" % (_QUOTES, _QUOTES,
+                                      switches.DEFINITION_TERM_MAX_CHARS, _QUOTES)
+    return re.compile(
+        r"^\s*(?P<term>" + quoted + r")"
+        # further terms sharing one definition: "BOM" or "Bill of Materials"
+        r"(?:\s*(?:,|;|,?\s*(?:and|or))\s*" + quoted + r")*"
+        # an aside before the verb: "Term" (as used in Clause 3) means ...
+        r"\s*(?:\([^)]{1,60}\)\s*)?"
+        r"[,:\s]\s*" + _DEFINING,
+        re.IGNORECASE)
+
+
+_DEFINITION_ENTRY = _definition_pattern()
+
+
+def definition_term(text):
+    """-> the defined term when the text opens a definitions-list entry,
+    otherwise None.
+
+    '"Business Day" means a day other than a Saturday'   -> 'Business Day'
+    '"BOM" or "Bill of Materials" shall have the meaning' -> 'BOM'
+    'The Customer shall comply with the terms of the AUP' -> None
+    """
+    if not switches.DETECT_DEFINITION_TERMS or not text:
+        return None
+    match = _DEFINITION_ENTRY.match(text.lstrip())
+    if match is None:
+        return None
+    return match.group("term").strip(_QUOTES + " ") or None
+
+
 # a run of underscores or dots, or a [placeholder] / [[placeholder]]
 _FORM_BLANK = re.compile(r"_{4,}|\.{6,}|\[\[?[^\]]{1,80}\]\]?")
 # Words that only a signature block uses, and generic field labels that make a
@@ -184,6 +228,7 @@ def _assign_roles(records, numbering):
     heading_depth = -1
     headings = {}         # depth -> text of each heading in force
     colon_parent = None   # depth of the clause colon lead-ins nest under
+    defn_depth = None     # depth of the definitions list in force, once opened
     front_open = False    # a preamble node has been opened
     open_depth = None     # depth of the most recent clause of any kind
     anchor_depth = None   # depth of the most recent Word-numbered clause
@@ -271,6 +316,8 @@ def _assign_roles(records, numbering):
                      src="word_numbering:" + (r["num_src"] or "?"),
                      conf=0.6 if conflict else 1.0, conflict=conflict)
             open_depth = anchor_depth = colon_parent = r["depth"]
+            if defn_depth is not None and r["depth"] < defn_depth:
+                defn_depth = None   # a clause above the list closes it
             continue
 
         # 2. Outline heading carrying no numbering
@@ -282,6 +329,8 @@ def _assign_roles(records, numbering):
             r.update(role="node", depth=heading_depth, display=None, path=None, heading=True,
                      src="outline_level", conf=0.95, conflict=False)
             open_depth = anchor_depth = colon_parent = r["depth"]
+            if defn_depth is not None and r["depth"] < defn_depth:
+                defn_depth = None   # a heading above the list closes it
             continue
 
         # 3. Typed numbering, always below the clause it appears inside
@@ -310,6 +359,21 @@ def _assign_roles(records, numbering):
                 # a colon line after the block is its sibling, never its child
                 open_depth, colon_parent = r["depth"], r["depth"] - 1
             form_open = True
+            continue
+
+        # 3c. A definitions-list entry ('"Business Day" means ...'), which the
+        #     document writes without numbering. The depth is pinned at the
+        #     first entry and reused, so an entry that follows a numbered
+        #     sub-list inside an earlier definition returns to the list's own
+        #     level instead of nesting under that sub-list's last item.
+        term = definition_term(r["text"])
+        if term is not None:
+            if defn_depth is None:
+                defn_depth = ((open_depth + 1) if open_depth is not None
+                              else max(heading_depth + 1, 0))
+            r.update(role="node", depth=defn_depth, display=None, path=None,
+                     term=term, src="definition_term", conf=0.7, conflict=False)
+            open_depth = colon_parent = defn_depth
             continue
 
         # 4. Unnumbered paragraph opening with a short title and a colon
@@ -385,7 +449,12 @@ def _new_node(r, nid):
            else r["text"])
     node = _empty_node("c%d" % nid, r["depth"])
     # "Employee Signature ____ Date:" has a colon but no title
-    title = None if r.get("src") == "form_line" else title_lead_in(txt)[0]
+    if r.get("src") == "form_line":
+        title = None
+    elif r.get("src") == "definition_term":
+        title = r.get("term")       # the defined term names the clause
+    else:
+        title = title_lead_in(txt)[0]
     node.update(display_number=r.get("display"), clause_title=title,
                 canonical_path=r.get("path"), numbering_source=r.get("src"),
                 confidence=r.get("conf"), conflict=r.get("conflict", False),

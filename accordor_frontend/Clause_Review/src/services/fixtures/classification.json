@@ -1,0 +1,409 @@
+{
+  "_fixture": "GET /api/documents/<id>/classification/ -- invented contract text, real field shapes. Covers every outcome and review_reason the real API can return, plus decided and undecided review states.",
+  "document": {
+    "document_id": "d0adaa81-4501-4ca2-99a9-10e8d4985a9b",
+    "name": "Nexora_MSA_executed.docx",
+    "title": "MASTER SERVICES AGREEMENT",
+    "drive_file_id": "18BdNLjuGbZKg7ATLoPJ0IjkLzxEgSczi",
+    "drive_folder_id": "1pDMacP3Hn3fJHht28uxjxF2wYwykRuF6",
+    "extraction_status": "extracted"
+  },
+  "classification_run": {
+    "classification_run_id": "d9c706c3-a0fd-4d8e-8082-9eaf8f0e88dd",
+    "status": "succeeded",
+    "attempt": 1,
+    "model_id": "arn:aws:bedrock:us-west-1:540742960903:inference-profile/global.anthropic.claude-sonnet-4-6",
+    "taxonomy_version": "v1",
+    "prompt_version": "v1",
+    "started_at": "2026-09-21T07:05:51.495650+00:00",
+    "duration_ms": 142342,
+    "calls": 42,
+    "tokens": {
+      "input": 80508,
+      "output": 24835,
+      "cache_read": 285726,
+      "cache_write": 0
+    },
+    "error": null
+  },
+  "summary": {
+    "micro_chunks": 14,
+    "classified": 12,
+    "unclassified": 1,
+    "failed": 1,
+    "needs_review": 5,
+    "by_outcome": {
+      "classified": 12,
+      "unclassified": 1,
+      "failed": 1
+    },
+    "by_type": {
+      "Clause: Definitions & Interpretation": 5,
+      "Clause: Purpose & Scope of Services": 2,
+      "Clause: Fees & Payment": 2,
+      "Non-clause: Preamble": 1,
+      "Non-clause: Party Identification": 1,
+      "Clause: Limitation of Liability": 1,
+      "failed": 1
+    },
+    "review": {
+      "reviewed": 3,
+      "pending": 11,
+      "accepted": 1,
+      "corrected": 1,
+      "rejected": 1
+    }
+  },
+  "items": [
+    {
+      "classification_id": "8f2c1a94-4d21-4b07-9b60-2f3a6c5d1e77",
+      "clause_id": "c0",
+      "number": null,
+      "heading_trail": "FRONT MATTER",
+      "text": "This Master Services Agreement (the “MSA”) is made on 1 April 2026 (the “Effective Date”) Between:",
+      "outcome": "classified",
+      "label": "Non-clause",
+      "type": "preamble",
+      "type_name": "Preamble",
+      "sub_type": null,
+      "confidence": 0.95,
+      "reason": "Introductory sentence binding the parties and the date into the agreement, characteristic of a preamble.",
+      "needs_review": false,
+      "review_reasons": [],
+      "expected_types": [],
+      "deviated": false,
+      "error": null,
+      "review": {
+        "review_id": "1a0c5e63-8d92-4f17-b4a5-70e3c891d2b6",
+        "revision": 1,
+        "decision": "accepted",
+        "label": null,
+        "type": null,
+        "type_name": null,
+        "sub_type": null,
+        "note": null,
+        "reviewed_by": "reviewer@amtrino.com",
+        "reviewed_by_name": "A Reviewer",
+        "reviewed_at": "2026-09-22T09:14:03+00:00"
+      }
+    },
+    {
+      "classification_id": "b41d7e02-9c55-4a18-8d31-6e2f0a9b4c53",
+      "clause_id": "c1",
+      "number": "1.",
+      "heading_trail": "1 NEXORA SYSTEMS LIMITED",
+      "text": "NEXORA SYSTEMS LIMITED, a company incorporated in England and Wales (No. 10482913), having its registered office at 14 Perivale Way, London EC2A 4BX (“Supplier”);",
+      "outcome": "classified",
+      "label": "Non-clause",
+      "type": "party-identification",
+      "type_name": "Party Identification",
+      "sub_type": null,
+      "confidence": 0.95,
+      "reason": "Names and describes a contracting entity with incorporation details, registered address and defined short name 'Supplier'.",
+      "needs_review": false,
+      "review_reasons": [],
+      "expected_types": [],
+      "deviated": false,
+      "error": null,
+      "review": {
+        "review_id": "2b7f36a1-4e08-4c53-9d81-6a2b40f7e915",
+        "revision": 2,
+        "decision": "corrected",
+        "label": "Clause",
+        "type": "fees-and-payment",
+        "type_name": "Fees & Payment",
+        "sub_type": "Late Payment Interest",
+        "note": "the heading implied scope, but the obligation is a payment term",
+        "reviewed_by": "reviewer@amtrino.com",
+        "reviewed_by_name": "A Reviewer",
+        "reviewed_at": "2026-09-22T09:21:40+00:00"
+      }
+    },
+    {
+      "classification_id": "c7a3f519-2b68-4e94-a0d7-51c8b36e2f10",
+      "clause_id": "c5",
+      "number": "2.2",
+      "heading_trail": "2 DEFINITIONS > 2.2 “Confidential Information” means all informat...",
+      "text": "“Confidential Information” means all information disclosed by one party to the other, whether orally, in writing or by any other means, that is designated as confidential or that ought reasonably to be regarded as confidential.",
+      "outcome": "classified",
+      "label": "Clause",
+      "type": "definitions-and-interpretation",
+      "type_name": "Definitions & Interpretation",
+      "sub_type": "Confidential Information Definition",
+      "confidence": 0.96,
+      "reason": "Defines the term 'Confidential Information' for use throughout the agreement; it states no obligation of its own.",
+      "needs_review": false,
+      "review_reasons": [],
+      "expected_types": [
+        "definitions-and-interpretation"
+      ],
+      "deviated": false,
+      "error": null,
+      "review": {
+        "review_id": "3c8a47b2-5f19-4d64-8e92-7b3c51a8f026",
+        "revision": 1,
+        "decision": "rejected",
+        "label": null,
+        "type": null,
+        "type_name": null,
+        "sub_type": null,
+        "note": "this is boilerplate, not an operative clause",
+        "reviewed_by": null,
+        "reviewed_by_name": null,
+        "reviewed_at": "2026-09-22T09:25:12+00:00"
+      }
+    },
+    {
+      "classification_id": "d2e8c740-6f13-4a25-b8ec-3d90a7f45b61",
+      "clause_id": "c6",
+      "number": "2.3",
+      "heading_trail": "2 DEFINITIONS > 2.3 “Deliverables” means the reports, software...",
+      "text": "“Deliverables” means the reports, software, documentation and other materials produced by the Supplier in the course of providing the Services.",
+      "outcome": "classified",
+      "label": "Clause",
+      "type": "definitions-and-interpretation",
+      "type_name": "Definitions & Interpretation",
+      "sub_type": "Deliverables Definition",
+      "confidence": 0.94,
+      "reason": "Defines 'Deliverables' as the outputs of the Services; definitional rather than operative.",
+      "needs_review": false,
+      "review_reasons": [],
+      "expected_types": [
+        "definitions-and-interpretation"
+      ],
+      "deviated": false,
+      "error": null,
+      "review": null
+    },
+    {
+      "classification_id": "e5b91c38-7a04-4d62-9f13-8c27e0d5a394",
+      "clause_id": "c7",
+      "number": "2.4",
+      "heading_trail": "2 DEFINITIONS > 2.4 “Effective Date” means 1 April 2026.",
+      "text": "“Effective Date” means 1 April 2026.",
+      "outcome": "classified",
+      "label": "Clause",
+      "type": "definitions-and-interpretation",
+      "type_name": "Definitions & Interpretation",
+      "sub_type": "Effective Date Definition",
+      "confidence": 0.74,
+      "reason": "Defines the commencement date. Confidence is moderate because a bare date definition also reads as a term provision.",
+      "needs_review": true,
+      "review_reasons": [
+        "low_confidence"
+      ],
+      "expected_types": [
+        "definitions-and-interpretation"
+      ],
+      "deviated": false,
+      "error": null,
+      "review": null
+    },
+    {
+      "classification_id": "8252c182-64f3-4174-a23f-cc4121e67d62",
+      "clause_id": "c8",
+      "number": "2.5",
+      "heading_trail": "2 DEFINITIONS > 2.5 “Services” means the professional service...",
+      "text": "“Services” means the professional services set out in each Statement of Work agreed between the parties.",
+      "outcome": "classified",
+      "label": "Clause",
+      "type": "definitions-and-interpretation",
+      "type_name": "Definitions & Interpretation",
+      "sub_type": "Services Definition",
+      "confidence": 0.95,
+      "reason": "Defines 'Services' by reference to the Statements of Work; definitional in nature.",
+      "needs_review": false,
+      "review_reasons": [],
+      "expected_types": [
+        "definitions-and-interpretation"
+      ],
+      "deviated": false,
+      "error": null,
+      "review": null
+    },
+    {
+      "classification_id": "9cc6216a-6627-4dd5-b437-24644e90ad70",
+      "clause_id": "c9",
+      "number": "2.6",
+      "heading_trail": "2 DEFINITIONS > 2.6 “Statement of Work” means a document desc...",
+      "text": "“Statement of Work” means a document describing the scope, timetable and fees for a particular engagement, executed by authorised representatives of both parties.",
+      "outcome": "classified",
+      "label": "Clause",
+      "type": "definitions-and-interpretation",
+      "type_name": "Definitions & Interpretation",
+      "sub_type": "Statement of Work Definition",
+      "confidence": 0.93,
+      "reason": "Defines the Statement of Work instrument; the execution requirement is descriptive, not a standalone obligation.",
+      "needs_review": false,
+      "review_reasons": [],
+      "expected_types": [
+        "definitions-and-interpretation"
+      ],
+      "deviated": false,
+      "error": null,
+      "review": null
+    },
+    {
+      "classification_id": "d968acc1-d25a-44cf-884e-33a0c6b1f787",
+      "clause_id": "c12",
+      "number": "3.1",
+      "heading_trail": "3 SCOPE OF SERVICES > 3.1 The Supplier shall provide the Servi...",
+      "text": "The Supplier shall provide the Services with reasonable skill and care and in accordance with each Statement of Work.",
+      "outcome": "classified",
+      "label": "Clause",
+      "type": "purpose-and-scope-of-services",
+      "type_name": "Purpose & Scope of Services",
+      "sub_type": "Standard of Performance",
+      "confidence": 0.89,
+      "reason": "Sets the scope of what the Supplier will deliver and the standard it must meet.",
+      "needs_review": false,
+      "review_reasons": [],
+      "expected_types": [
+        "purpose-and-scope-of-services"
+      ],
+      "deviated": false,
+      "error": null,
+      "review": null
+    },
+    {
+      "classification_id": "5f820a41-3308-485e-82e0-f5c43500cf45",
+      "clause_id": "c14",
+      "number": "(a)",
+      "heading_trail": "3 SCOPE OF SERVICES > 3.3 If the Supplier delays a Phase... > (a) either the payments shall be postponed or...",
+      "text": "If the Supplier delays a Phase, then either the payments shall be postponed or the liability and termination provisions shall apply, at the Customer's election.",
+      "outcome": "classified",
+      "label": "Clause",
+      "type": "service-provider-obligations",
+      "type_name": "Service Provider Obligations",
+      "sub_type": "Delay Consequences",
+      "confidence": 0.82,
+      "reason": "Imposes consequences on the Supplier for delaying a Phase, which is an obligation of the Supplier rather than a statement of scope.",
+      "needs_review": true,
+      "review_reasons": [
+        "deviated"
+      ],
+      "expected_types": [
+        "purpose-and-scope-of-services"
+      ],
+      "deviated": true,
+      "error": null,
+      "review": null
+    },
+    {
+      "classification_id": "8433d14d-ea94-48c2-8111-5d42c9d864a6",
+      "clause_id": "c21",
+      "number": "6.1",
+      "heading_trail": "6 FEES AND PAYMENT > 6.1 The Customer shall pay the fees set o...",
+      "text": "The Customer shall pay the fees set out in the relevant Statement of Work within thirty (30) days of the date of a valid invoice.",
+      "outcome": "classified",
+      "label": "Clause",
+      "type": "fees-and-payment",
+      "type_name": "Fees & Payment",
+      "sub_type": "Payment Terms",
+      "confidence": 0.97,
+      "reason": "States when and on what basis the Customer must pay invoiced fees.",
+      "needs_review": false,
+      "review_reasons": [],
+      "expected_types": [
+        "fees-and-payment"
+      ],
+      "deviated": false,
+      "error": null,
+      "review": null
+    },
+    {
+      "classification_id": "f6166989-eef7-4109-8a02-af68c08b9863",
+      "clause_id": "c22",
+      "number": "6.2",
+      "heading_trail": "6 FEES AND PAYMENT > 6.2 Interest accrues on overdue sums at f...",
+      "text": "Interest accrues on overdue sums at four per cent (4%) per annum above the base rate of the Bank of England from the due date until payment in full.",
+      "outcome": "classified",
+      "label": "Clause",
+      "type": "fees-and-payment",
+      "type_name": "Fees & Payment",
+      "sub_type": "Late Payment Interest",
+      "confidence": 0.95,
+      "reason": "Sets the interest consequence of late payment, a payment provision.",
+      "needs_review": false,
+      "review_reasons": [],
+      "expected_types": [
+        "fees-and-payment"
+      ],
+      "deviated": false,
+      "error": null,
+      "review": null
+    },
+    {
+      "classification_id": "81a3c31e-35b3-4cfb-88c8-509027a96134",
+      "clause_id": "c30",
+      "number": "11.2",
+      "heading_trail": "11 LIABILITY > 11.2 Neither party's aggregate liability shall ...",
+      "text": "Neither party's aggregate liability arising under or in connection with this MSA shall exceed the total fees paid in the twelve (12) months preceding the event giving rise to the claim.",
+      "outcome": "classified",
+      "label": "Clause",
+      "type": "limitation-of-liability",
+      "type_name": "Limitation of Liability",
+      "sub_type": "Aggregate Liability Cap",
+      "confidence": 0.98,
+      "reason": "Caps each party's aggregate liability by reference to fees paid, the defining form of a liability limitation.",
+      "needs_review": true,
+      "review_reasons": [
+        "high_risk"
+      ],
+      "expected_types": [
+        "limitation-of-liability"
+      ],
+      "deviated": false,
+      "error": null,
+      "review": null
+    },
+    {
+      "classification_id": "c3c55805-2c6b-4799-b773-f871507fb36b",
+      "clause_id": "c38",
+      "number": "15.4",
+      "heading_trail": "15 GENERAL > 15.4 The parties acknowledge the Ancillary Protoc...",
+      "text": "The parties acknowledge the Ancillary Protocol circulated on 12 March 2026 and agree to revisit its status at the next governance review.",
+      "outcome": "unclassified",
+      "label": "Clause",
+      "type": null,
+      "type_name": null,
+      "sub_type": null,
+      "confidence": 0.41,
+      "reason": "An operative acknowledgement that does not correspond to any clause type in the v1 taxonomy; recorded as unclassified rather than forced into the nearest type.",
+      "needs_review": true,
+      "review_reasons": [
+        "unclassified"
+      ],
+      "expected_types": [
+        "general-provisions"
+      ],
+      "deviated": false,
+      "error": null,
+      "review": null
+    },
+    {
+      "classification_id": "9e7a5c37-a6da-4025-af4a-0199067ad6a5",
+      "clause_id": "c41",
+      "number": "16.1",
+      "heading_trail": "16 SCHEDULE 1 — SERVICE LEVELS > 16.1",
+      "text": "Availability shall be measured monthly as set out in the table below, excluding Permitted Downtime.",
+      "outcome": "failed",
+      "label": null,
+      "type": null,
+      "type_name": null,
+      "sub_type": null,
+      "confidence": null,
+      "reason": "",
+      "needs_review": true,
+      "review_reasons": [
+        "failed"
+      ],
+      "expected_types": [
+        "service-levels"
+      ],
+      "deviated": false,
+      "error": "The model returned no valid item for this chunk after 3 attempts (last stop_reason: max_tokens).",
+      "review": null
+    }
+  ]
+}

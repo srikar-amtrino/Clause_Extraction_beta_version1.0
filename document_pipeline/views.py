@@ -15,7 +15,7 @@ from .connectors.GoogleDrive.oauth import (
 )
 from .models import Document
 from .services.ingestion_service import google_drive_source, needs_extraction, sync_drive_files
-from .tasks.ingest import stream_document_task
+from .tasks.orchestrate import trigger_full_document_pipeline
 
 
 def _flatten_files(folders):
@@ -85,7 +85,11 @@ def _sync_and_queue(credentials, folders, folder_ids):
     task_ids = []
     refreshed_credentials_json = credentials.to_json()
     for document in to_ingest:
-        result = stream_document_task.delay(refreshed_credentials_json, str(document.id))
+        # Parsing and chunking together: a parsed document nothing has chunked
+        # holds no chunks to retrieve, cite or classify, so stopping after the
+        # parse would leave every synced document half-ingested until someone
+        # ran chunk_documents by hand.
+        result = trigger_full_document_pipeline(refreshed_credentials_json, str(document.id))
         task_ids.append(result.id)
     print(f'[http] queued {len(task_ids)} ingestion tasks', flush=True)
     return outcome, to_ingest, task_ids, refreshed_credentials_json
