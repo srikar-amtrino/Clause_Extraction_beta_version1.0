@@ -141,6 +141,8 @@ def classify_chunk_run(chunk_run, *, force=False, classifier=None, concurrency=N
         batches = plan_run_batches(run)
         context = _context(run, vocab)
         workers = max(1, concurrency or settings.CLASSIFY_CONCURRENCY)
+        logger.info('classification run %s started: %d batches, %d workers, model=%s',
+                    run.id, len(batches), min(workers, len(batches)), classifier.model_id)
         _execute(run, batches, classifier=classifier, context=context, workers=workers)
         run = finalize_run(run)
     except BaseException as exc:
@@ -400,7 +402,9 @@ def _context(run, vocab):
 def _execute(run, batches, *, classifier, context, workers):
     """Resolve batches on worker threads; write each as it lands, here."""
     if not batches:
+        logger.info('classification run %s has no batches', run.id)
         return
+    logger.info('classification run %s dispatching %d batches', run.id, len(batches))
     pool = ThreadPoolExecutor(max_workers=min(workers, len(batches)))
     futures = [pool.submit(resolve_batch, batch, classifier=classifier, context=context)
                for batch in batches]
@@ -437,7 +441,11 @@ def resolve_batch(batch, *, classifier, context):
             attempts[p.chunk_id] += 1
         text = prompts.render_user_message(sub, document_title=context.document_title,
                                            contract_type=context.contract_type)
+        logger.info('classification batch %d sending Sonnet request: %d chunks',
+                batch.index, len(sub.paragraphs))
         call = classifier.complete(context.system, text, output_format)
+        logger.info('classification batch %d received Sonnet response: stop=%s tokens=%d/%d',
+                batch.index, call.stop_reason or '', call.input_tokens, call.output_tokens)
         record = CallRecord(
             batch_index=batch.index, attempt=max(attempts[p.chunk_id] for p in sub.paragraphs),
             chunk_ids=[p.chunk_id for p in sub.paragraphs], status=ClassificationCall.SUCCEEDED,

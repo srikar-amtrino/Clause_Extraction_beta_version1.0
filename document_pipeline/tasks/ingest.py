@@ -13,6 +13,11 @@ def _ingest_document(self, credentials_json: str, document_id: str, force=False)
 		document = Document.objects.select_related("ingestion_source").get(pk=document_id)
 		outcome = ingest_document(credentials, document, force=force)
 		run = outcome.run
+		if not outcome.skipped and run.is_usable:
+			from document_pipeline.tasks.chunk import chunk_document_task
+
+			chunk_document_task.delay(str(document.id), force=False)
+			print("[celery] queued chunking for document %s" % document_id, flush=True)
 		print(
 			"[celery] streaming worker finished document %s: status=%s skipped=%s"
 			% (document_id, run.status, outcome.skipped),
