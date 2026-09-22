@@ -11,7 +11,7 @@ from celery import shared_task
 	rate_limit="60/m",
 	acks_late=True,
 )
-def classify_chunk_batch_task(self, document_id: int, chunk_ids: list[int]):
+def classify_chunk_batch_task(self, run_id: str, chunk_ids: list[str], batch_index: int):
 	"""Classify a batch of document chunks on the LLM queue.
 
 	Routes to ``llm_queue``; run workers with
@@ -20,12 +20,12 @@ def classify_chunk_batch_task(self, document_id: int, chunk_ids: list[int]):
 	from document_pipeline.services.classification_service import classify_batch
 
 	try:
-		classifications = classify_batch(document_id, chunk_ids)
+		chunks_classified = classify_batch(run_id, chunk_ids, batch_index)
 		return {
 			"status": "CLASSIFIED",
-			"document_id": document_id,
-			"chunks_classified": len(chunk_ids),
-			"classifications": classifications,
+			"run_id": run_id,
+			"batch_index": batch_index,
+			"chunks_classified": chunks_classified,
 		}
 	except Exception as exc:
 		response = getattr(exc, "response", None)

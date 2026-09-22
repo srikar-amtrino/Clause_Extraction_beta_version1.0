@@ -62,6 +62,7 @@ htmlcov/
 # Celery
 celerybeat-schedule
 celerybeat.pid
+logs/*.log
 
 # Node (frontend will live elsewhere but just in case)
 node_modules/

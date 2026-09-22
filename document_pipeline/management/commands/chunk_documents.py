@@ -93,6 +93,7 @@ class Command(BaseCommand):
         if outcome.skipped:
             counts["skipped"] += 1
             self.stdout.write("unchanged    %s" % label)
+            return
         elif chunk_run.is_complete:
             counts["chunked"] += 1
             self.stdout.write(self.style.SUCCESS(
@@ -114,3 +115,5 @@ class Command(BaseCommand):
 
         for issue in outcome.issues:
             self.stdout.write(self.style.WARNING("  issue: %s" % issue))
+
+        self.stdout.write("classification queued automatically (batches run in parallel)")

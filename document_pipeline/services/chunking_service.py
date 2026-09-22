@@ -142,6 +142,13 @@ def chunk_extraction_run(run, *, force=False, chunker_version=None):
         chunk_run.duration_ms = duration_ms
         chunk_run.save(update_fields=['duration_ms'])
 
+        def queue_classification():
+            from document_pipeline.tasks.orchestrate import trigger_classification_workflow
+
+            trigger_classification_workflow(run.document_id)
+
+        transaction.on_commit(queue_classification)
+
     logger.info('chunked run %s: attempt %d, %d chunks (%d macro, %d micro, %d indexed)',
                 run.id, attempt, len(rows), stats['macro_chunks'],
                 stats['micro_chunks'], stats['indexed_chunks'])
