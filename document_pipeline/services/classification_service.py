@@ -608,9 +608,14 @@ def write_resolution(run, resolution, *, vocab):
     batch = resolution.batch
     type_pks = dict(CanonicalType.objects.filter(version=vocab.version)
                     .values_list('key', 'id'))
+    chunk_ids = [p.chunk_id for p in batch.paragraphs]
     existing = {str(pk) for pk in Classification.objects.filter(
-        run=run, chunk_id__in=[p.chunk_id for p in batch.paragraphs])
-        .values_list('chunk_id', flat=True)}
+        run=run, chunk_id__in=chunk_ids).values_list('chunk_id', flat=True)}
+    # Read here rather than off the Paragraph: batching carries what the model
+    # is shown, and the paragraph ids are never shown to it.
+    para_ids = {str(pk): ids for pk, ids in
+                Chunk.objects.filter(id__in=chunk_ids)
+                .values_list('id', 'paragraph_ids')}
     high_risk = set(settings.CLASSIFY_HIGH_RISK_TYPES)
     threshold = settings.CLASSIFY_CONFIDENCE_THRESHOLD
 
@@ -623,7 +628,7 @@ def write_resolution(run, resolution, *, vocab):
                 outcome=Classification.FAILED, error='no result was produced')
             expected = vocab.expected_keys(group.section, paragraph.title or '')
             rows.append(_row(run, paragraph, result, expected, batch.index, type_pks,
-                             high_risk, threshold))
+                             high_risk, threshold, para_ids.get(paragraph.chunk_id) or []))
     calls = [ClassificationCall(
         run=run, batch_index=c.batch_index, attempt=c.attempt, chunk_ids=c.chunk_ids,
         item_count=len(c.chunk_ids), status=c.status, stop_reason=c.stop_reason,
@@ -638,7 +643,8 @@ def write_resolution(run, resolution, *, vocab):
     return rows
 
 
-def _row(run, paragraph, result, expected, batch_index, type_pks, high_risk, threshold):
+def _row(run, paragraph, result, expected, batch_index, type_pks, high_risk, threshold,
+         paragraph_ids):
     """An ItemResult plus the computed checks -> an unsaved Classification."""
     classified_clause = (result.outcome == Classification.CLASSIFIED
                          and result.label == Classification.CLAUSE)
@@ -660,12 +666,12 @@ def _row(run, paragraph, result, expected, batch_index, type_pks, high_risk, thr
     return Classification(
         run=run,
         chunk_id=paragraph.chunk_id,
+        paragraph_ids=paragraph_ids,
         outcome=result.outcome,
         label=None if failed else result.label,
         canonical_type_id=type_pks[result.type_key] if result.type_key else None,
         sub_type=result.sub_type,
         confidence=None if failed else result.confidence,
-        reason='' if failed else result.reason,
         expected_type_keys=expected,
         deviated=deviated,
         needs_review=bool(reasons),

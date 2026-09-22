@@ -1,11 +1,14 @@
 from django.urls import path
 
 from .document_views import (
+	classification_review,
+	classification_review_history,
 	document_classification,
 	document_classification_input,
 	document_detail,
 	document_extraction,
 	document_list,
+	document_reviews,
 	taxonomy,
 )
 from .views import (
@@ -37,4 +40,12 @@ urlpatterns = [
 	path('documents/<uuid:document_id>/classification/', document_classification,
 	     name='document-classification'),
 	path('taxonomy/', taxonomy, name='taxonomy'),
+
+	# Review: what a person decided about a verdict. Writes, and the only
+	# writes outside ingestion.
+	path('documents/<uuid:document_id>/reviews/', document_reviews, name='document-reviews'),
+	path('classifications/<uuid:classification_id>/review/', classification_review,
+	     name='classification-review'),
+	path('classifications/<uuid:classification_id>/review/history/',
+	     classification_review_history, name='classification-review-history'),
 ]

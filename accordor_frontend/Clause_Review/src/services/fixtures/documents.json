@@ -1,0 +1,123 @@
+{
+  "_fixture": "GET /api/documents/ — invented names, real field shapes. Row 1 is fully processed, row 2 parsed but not yet classified, row 3 rejected by the parser.",
+  "documents": [
+    {
+      "document_id": "d0adaa81-4501-4ca2-99a9-10e8d4985a9b",
+      "name": "Nexora_MSA_executed.docx",
+      "title": "MASTER SERVICES AGREEMENT",
+      "drive_file_id": "18BdNLjuGbZKg7ATLoPJ0IjkLzxEgSczi",
+      "drive_folder_id": "1pDMacP3Hn3fJHht28uxjxF2wYwykRuF6",
+      "drive_web_link": "https://docs.google.com/document/d/18BdNLjuGbZKg7ATLoPJ0IjkLzxEgSczi/edit",
+      "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "extraction_status": "extracted",
+      "last_extracted_at": "2026-09-18T12:18:12+00:00",
+      "stages": {
+        "extraction": {
+          "run_id": "96736b4b-11e5-459b-86fb-b2049b4f149a",
+          "status": "extracted",
+          "attempt": 1,
+          "pages": 8,
+          "clauses": 430,
+          "paragraphs": 539,
+          "warnings": [],
+          "extracted_at": "2026-09-18T12:18:12+00:00"
+        },
+        "classification": {
+          "run_id": "d9c706c3-a0fd-4d8e-8082-9eaf8f0e88dd",
+          "status": "succeeded",
+          "attempt": 1,
+          "taxonomy_version": "v1",
+          "micro_chunks": 338,
+          "classified": 338,
+          "unclassified": 0,
+          "failed": 0,
+          "needs_review": 97,
+          "classified_at": "2026-09-21T07:08:13+00:00",
+          "review": {
+            "reviewed": 3,
+            "pending": 335,
+            "accepted": 1,
+            "corrected": 1,
+            "rejected": 1
+          }
+        }
+      },
+      "links": {
+        "self": "/api/documents/d0adaa81-4501-4ca2-99a9-10e8d4985a9b/",
+        "extraction": "/api/documents/d0adaa81-4501-4ca2-99a9-10e8d4985a9b/extraction/",
+        "classification_input": "/api/documents/d0adaa81-4501-4ca2-99a9-10e8d4985a9b/classification-input/",
+        "classification": "/api/documents/d0adaa81-4501-4ca2-99a9-10e8d4985a9b/classification/"
+      }
+    },
+    {
+      "document_id": "7430f9f8-2b41-4d0e-9c77-1a5b8e3f2201",
+      "name": "Asset_management_agreement.docx",
+      "title": "ASSET MANAGEMENT AGREEMENT",
+      "drive_file_id": "1QmKpR7sT2vX9wYzA4bC6dE8fG0hJ1kL2",
+      "drive_folder_id": "1pDMacP3Hn3fJHht28uxjxF2wYwykRuF6",
+      "drive_web_link": "https://docs.google.com/document/d/1QmKpR7sT2vX9wYzA4bC6dE8fG0hJ1kL2/edit",
+      "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "extraction_status": "extracted_with_warnings",
+      "last_extracted_at": "2026-09-19T09:41:55+00:00",
+      "stages": {
+        "extraction": {
+          "run_id": "b1c2d3e4-5f60-4712-8394-a5b6c7d8e9f0",
+          "status": "extracted_with_warnings",
+          "attempt": 2,
+          "pages": 22,
+          "clauses": 187,
+          "paragraphs": 249,
+          "warnings": [
+            "ambiguous_numbering",
+            "depth_adjusted"
+          ],
+          "extracted_at": "2026-09-19T09:41:55+00:00"
+        },
+        "classification": null
+      },
+      "links": {
+        "self": "/api/documents/7430f9f8-2b41-4d0e-9c77-1a5b8e3f2201/",
+        "extraction": "/api/documents/7430f9f8-2b41-4d0e-9c77-1a5b8e3f2201/extraction/",
+        "classification_input": "/api/documents/7430f9f8-2b41-4d0e-9c77-1a5b8e3f2201/classification-input/",
+        "classification": "/api/documents/7430f9f8-2b41-4d0e-9c77-1a5b8e3f2201/classification/"
+      }
+    },
+    {
+      "document_id": "a0ad13ec-8877-41f5-b0d2-3e9c1f4a6b78",
+      "name": "Scanned_DPA_signed.pdf",
+      "title": null,
+      "drive_file_id": "1ZyXwVuTsRqPoNmLkJiHgFeDcBa9876543",
+      "drive_folder_id": "1pDMacP3Hn3fJHht28uxjxF2wYwykRuF6",
+      "drive_web_link": null,
+      "mime_type": "application/pdf",
+      "extraction_status": "rejected",
+      "last_extracted_at": "2026-09-20T15:02:07+00:00",
+      "stages": {
+        "extraction": {
+          "run_id": "c9d8e7f6-a5b4-4321-9876-543210fedcba",
+          "status": "rejected",
+          "attempt": 1,
+          "pages": 0,
+          "clauses": 0,
+          "paragraphs": 0,
+          "warnings": [],
+          "extracted_at": "2026-09-20T15:02:07+00:00"
+        },
+        "classification": null
+      },
+      "links": {
+        "self": "/api/documents/a0ad13ec-8877-41f5-b0d2-3e9c1f4a6b78/",
+        "extraction": "/api/documents/a0ad13ec-8877-41f5-b0d2-3e9c1f4a6b78/extraction/",
+        "classification_input": "/api/documents/a0ad13ec-8877-41f5-b0d2-3e9c1f4a6b78/classification-input/",
+        "classification": "/api/documents/a0ad13ec-8877-41f5-b0d2-3e9c1f4a6b78/classification/"
+      }
+    }
+  ],
+  "page": {
+    "total": 198,
+    "limit": 50,
+    "offset": 0,
+    "returned": 3,
+    "has_more": true
+  }
+}
