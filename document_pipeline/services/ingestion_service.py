@@ -14,12 +14,14 @@ any size while Celery handles the slow work in parsing workers.
 import logging
 from dataclasses import dataclass, field
 
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from core.models import IngestionSource
 from document_pipeline.models import Document
+from document_pipeline.parsing.result import SCHEMA_VERSION
 from document_pipeline.services.parse_service import stream_and_parse
 from document_pipeline.services.persistence_service import persist_parse_result
 
@@ -179,11 +181,16 @@ def needs_extraction(document):
     re-syncs with no downloads at all. This is a cheap pre-filter, not the
     authority -- persist_parse_result re-checks the content hash, so a document
     whose mtime moved but whose bytes did not still writes no new run.
+
+    A run from another parser build or output schema is stale even when the
+    file is not: without this, a parser fix never reaches an unchanged corpus.
     """
     if document.deleted_at is not None:
         return False
     run = document.current_run
     if run is None or not run.is_usable:
+        return True
+    if run.parser_build != settings.PARSER_BUILD or run.schema_version != SCHEMA_VERSION:
         return True
     if document.source_modified_time and run.source_modified_time:
         return document.source_modified_time > run.source_modified_time

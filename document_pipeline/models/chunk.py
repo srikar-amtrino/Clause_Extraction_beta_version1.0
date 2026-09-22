@@ -32,6 +32,10 @@ class Chunk(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     chunk_run = models.ForeignKey('document_pipeline.ChunkRun', on_delete=models.CASCADE,
                                   related_name='chunks')
+    # Denormalised from chunk_run.extraction_run.document so a document's chunks
+    # can be listed without two joins.
+    document = models.ForeignKey('document_pipeline.Document', on_delete=models.CASCADE,
+                                 related_name='chunks')
     # Every chunk derives from exactly one clause. CASCADE because a chunk
     # without its clause has nothing to cite.
     clause = models.ForeignKey('document_pipeline.ExtractedClause', on_delete=models.CASCADE,

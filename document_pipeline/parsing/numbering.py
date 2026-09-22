@@ -4,7 +4,14 @@ A numId points at a num, which points at an abstractNum, which may hand off to
 a numbering style, which points back at a different abstractNum. Overrides on
 the way can replace the start value or a whole level. Skip any hop and that
 list loses its numbering entirely. Results are cached.
+
+Word counts per abstractNum, not per numId: two nums pointing at one abstractNum
+are one list and keep counting across each other, unless a num carries a
+startOverride, which restarts its level the first time that num is used.
+Documents lean on this constantly - a new num per section, all continuing
+"1.0, 2.0, 3.0" - so counting per numId shows numbers Word never prints.
 """
+from . import switches
 from .ooxml import W, parse_xml, wv
 
 
@@ -14,6 +21,7 @@ class Numbering:
     def __init__(self, xml, styles):
         self.abstract, self.num, self.styles = {}, {}, styles
         self._cache = {}
+        self._resolved = {}
         if xml is None:
             return
         root = parse_xml(xml)
@@ -42,8 +50,39 @@ class Numbering:
         return a
 
     def resolve(self, num_id):
-        """-> (abstractNum element, {ilvl: override}) or None."""
-        n = self.num.get(str(num_id))
+        """-> (abstractNum element, {ilvl: override}) or None. Cached."""
+        key = str(num_id)
+        if key not in self._resolved:
+            self._resolved[key] = self._resolve(key)
+        return self._resolved[key]
+
+    def counter_key(self, num_id):
+        """Which counter a numId advances: its abstractNum's, shared by every num
+        that points at it. Falls back to the numId when there is no abstractNum."""
+        r = self.resolve(num_id)
+        if not switches.SHARE_ABSTRACT_COUNTERS or r is None or r[0] is None:
+            return "num:%s" % num_id
+        return "abs:%s" % r[0].get(W + "abstractNumId")
+
+    def start_override(self, num_id, ilvl):
+        """The startOverride this num puts on a level, or None."""
+        r = self.resolve(num_id)
+        return r[1].get(ilvl, {}).get("start") if r else None
+
+    def restarts(self, num_id):
+        """True when this num restarts its list rather than continuing it."""
+        r = self.resolve(num_id)
+        return bool(r) and any(o.get("start") is not None for o in r[1].values())
+
+    def list_key(self, num_id):
+        """Identity of the visible list a numId belongs to. Nums continuing one
+        abstractNum are one list; a num that restarts it is a list of its own."""
+        if self.restarts(num_id):
+            return "num:%s" % num_id
+        return self.counter_key(num_id)
+
+    def _resolve(self, num_id):
+        n = self.num.get(num_id)
         if n is None:
             return None
         a = self._follow(self.abstract.get(wv(n.find(W + "abstractNumId"))))
