@@ -38,8 +38,44 @@ REPAIR_SKIPPED_ANCESTORS = True
 LEXICAL_CONTEXT_STACK = True
 
 # A numbered list's base depth is recomputed at each occurrence from the heading
-# in force, so a Schedule that reuses a numbering id nests correctly.
+# in force, so a Schedule that reuses a numbering id nests correctly. It is only
+# ever raised to the heading, never pushed below one that sits deeper than the
+# list itself: a stray heading between items must not bury the rest of the list.
 RECOMPUTE_NUMBERING_BASE = True
+
+# Word counts per abstractNum: nums sharing one continue each other's count
+# unless a startOverride restarts them. Off -> every numId counts from its start,
+# which prints "1.1" under clause 2 when Word prints "2.1".
+SHARE_ABSTRACT_COUNTERS = True
+
+# Heading depth comes from the rank of the outline levels a document actually
+# uses, so a document styled Heading2/Heading3 throughout starts at depth 0 and
+# its first section heading does not nest under the preamble.
+RANK_OUTLINE_LEVELS = True
+
+# A Word-numbered paragraph that is also a heading sits at its heading depth when
+# its list would put it deeper. Off -> a new list's first heading nests under
+# whatever clause is open, and every later section drifts one level deeper.
+ANCHOR_NUMBERED_HEADINGS = True
+
+# A heading is never nested inside a plain list item: the parties "1." / "2." of
+# a preamble must not swallow every section heading that follows them. A heading
+# whose own number names its parent (2.1 under 2.) still nests there.
+HEADINGS_OUTRANK_LIST_ITEMS = True
+
+# "3.0" is how a document writes section 3: it names no parent, and "3.1" belongs
+# under it. Off -> "3.0" invents an empty parent "3" beside itself.
+ZERO_SECTION_NUMBERS = True
+
+# A typed number followed by "and", "or", "of"... is a cross-reference wrapped
+# onto a new line, not a clause. Off -> "22.4 and 22.5 shall apply." becomes
+# clause 22.4 inside clause 13.5.
+REJECT_WRAPPED_REFERENCES = True
+
+# Typed Roman numerals of two or more letters ("II.", "IV.", "vii)") are clause
+# numbers. Off -> only I., V. and X. are seen, so II-IV fold into clause I as
+# body text (5 of 14 NDAs in the first Drive run).
+MULTI_LETTER_ROMAN = True
 
 # ---------------------------------------------------------------- inline clauses
 # Off -> a paragraph is always exactly one record.
@@ -60,6 +96,12 @@ KEEP_SUBSTANTIVE_FRONT_MATTER = True
 # A front-matter line at or under this length carrying no sentence is treated as
 # administrative: an address line, a page counter, a version stamp.
 NOISE_MAX_CHARS = 50
+
+# ---------------------------------------------------------------- signature lines
+# "Print Name ______" and "[[ Signature: ... ]]" form their own block under the
+# heading in force. Off -> they become colon sub-clauses of the last operative
+# clause, or run on as its body text, and are classified inside it.
+SEPARATE_FORM_LINES = True
 
 # ---------------------------------------------------------------- colon lead-ins
 DETECT_COLON_TITLES = True

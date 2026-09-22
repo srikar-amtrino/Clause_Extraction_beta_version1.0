@@ -232,6 +232,7 @@ def _build_clauses(run, rows, issues):
         flags = row.get('flags') or []
         clause = ExtractedClause(
             run=run,
+            document_id=run.document_id,
             local_id=local_id,
             parent=parent,
             has_flags=bool(flags),
@@ -257,6 +258,7 @@ def _build_paragraphs(run, records, by_local, issues):
                               % (row.get('paragraph_id'), clause_local))
         built.append(ExtractedParagraph(
             run=run,
+            document_id=run.document_id,
             clause=clause,
             local_id=row.get('paragraph_id') or '',
             table_position=row.get('table_position'),
