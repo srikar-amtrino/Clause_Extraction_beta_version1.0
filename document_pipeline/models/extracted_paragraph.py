@@ -14,11 +14,19 @@ class ExtractedParagraph(models.Model):
     edge silently orphans every table cell.
 
     `text` is the clean source text and is never rewritten.
+
+    A source paragraph holding several inline clauses is split into pieces that
+    share `source_paragraph_index` and differ by `segment_index`, so only the
+    pair of the two is unique within a run.
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     run = models.ForeignKey('document_pipeline.ExtractionRun', on_delete=models.CASCADE,
                             related_name='paragraphs')
+    # Denormalised from run.document so a document's paragraphs can be listed
+    # without a join. Always equal to run.document_id.
+    document = models.ForeignKey('document_pipeline.Document', on_delete=models.CASCADE,
+                                 related_name='extracted_paragraphs')
     # SET_NULL because a paragraph can legitimately belong to no clause
     # (front matter, removed intro), and losing the paragraph would lose text.
     clause = models.ForeignKey('document_pipeline.ExtractedClause', on_delete=models.SET_NULL,
@@ -45,6 +53,8 @@ class ExtractedParagraph(models.Model):
         db_table = 'extracted_paragraphs'
         constraints = [
             models.UniqueConstraint(fields=['run', 'sequence_order'], name='unique_para_sequence'),
+            models.UniqueConstraint(fields=['run', 'source_paragraph_index', 'segment_index'],
+                                    name='unique_para_source_segment'),
         ]
         indexes = [
             models.Index(fields=['run', 'sequence_order'], name='para_run_seq_idx'),

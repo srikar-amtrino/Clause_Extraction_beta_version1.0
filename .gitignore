@@ -72,6 +72,11 @@ yarn-error.log*
 # Local credentials and parse output
 .secrets/
 parse_output/
+pipeline_output/
 
 # Notebooks (POC notebooks carry credentials)
 *.ipynb
+
+# Contract files dropped in the repo root by hand: client text, never committed.
+/*.docx
+/*.pdf

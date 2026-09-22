@@ -1,0 +1,433 @@
+{
+  "version": "v1",
+  "source": "Canonical clause taxonomy as supplied by the engagement manager on 2026-09-18. Names, definitions and aliases are verbatim. An alias written as an object carries a parenthetical from the source: 'match' is the surface form a document would contain, 'note' is the parenthetical, and 'literal': false marks a sense restriction that is prompt guidance only and never a lookup key.",
+  "types": [
+    {
+      "applies_to": "clause",
+      "number": 1,
+      "key": "definitions-and-interpretation",
+      "name": "Definitions & Interpretation",
+      "definition": "Defined terms and the rules for reading the agreement (singular/plural, headings not affecting meaning, \"including\" non-exhaustive, reference conventions).",
+      "aliases": ["Definitions", "Definitions and Interpretation", "Certain Definitions", "Defined Terms", "Construction", "Rules of Construction", "Interpretation", "Glossary"],
+      "excludes": []
+    },
+    {
+      "applies_to": "clause",
+      "number": 2,
+      "key": "purpose-and-scope-of-services",
+      "name": "Purpose & Scope of Services",
+      "definition": "What the supplier is engaged to do at the master level — the subject matter and outer boundary of the engagement. Excludes how well it must be performed (→ 5) and the mechanism for ordering work (→ 3).",
+      "aliases": ["Services", "Scope of Services", "Scope of the Services", "Service Scope", "SOS", "Scope of Work", "Purpose", "Engagement", "Provision of Services", "General Scope", "Overview of Services"],
+      "excludes": [
+        {"key": "service-provider-obligations", "note": "how well it must be performed"},
+        {"key": "statements-of-work-and-work-orders", "note": "the mechanism for ordering work"}
+      ]
+    },
+    {
+      "applies_to": "clause",
+      "number": 3,
+      "key": "statements-of-work-and-work-orders",
+      "name": "Statements of Work & Work Orders",
+      "definition": "The mechanism by which specific work is ordered under the MSA — form, execution, incorporation, precedence of SOWs, and the master/order relationship.",
+      "aliases": ["SOW", "Statements of Work", "Work Orders", "Task Orders", "Purchase Orders", "Service Orders", "Order Forms", "Engagement Letters", "Schedules of Work", "Individual Agreements"],
+      "excludes": []
+    },
+    {
+      "applies_to": "clause",
+      "number": 4,
+      "key": "customer-obligations",
+      "name": "Customer Obligations",
+      "definition": "Duties binding the customer/client — access, facilities, information, timely decisions, dependencies, and consequences of customer delay.",
+      "aliases": ["Customer Responsibilities", "Client Obligations", "Client Responsibilities", "Buyer Obligations", "Customer Dependencies", "Customer Assumptions", "Company Obligations", "Responsibilities of the Customer"],
+      "excludes": []
+    },
+    {
+      "applies_to": "clause",
+      "number": 5,
+      "key": "service-provider-obligations",
+      "name": "Service Provider Obligations",
+      "definition": "Duties and performance standards binding the supplier — standard of care, skill and diligence, resourcing, cooperation. Excludes measurable SLA metrics (→ 9) and legal compliance duties (→ 21).",
+      "aliases": ["Supplier Obligations", "Vendor Responsibilities", "Contractor Obligations", "Service Provider Responsibilities", "Standard of Care", "Performance Standards", "Manner of Performance", "General Obligations of Supplier"],
+      "excludes": [
+        {"key": "service-levels", "note": "measurable SLA metrics"},
+        {"key": "compliance-with-laws", "note": "legal compliance duties"}
+      ]
+    },
+    {
+      "applies_to": "clause",
+      "number": 6,
+      "key": "governance-and-project-management",
+      "name": "Governance & Project Management",
+      "definition": "Joint management machinery — steering committees, relationship managers, review meetings, reporting cadence, escalation ladders below formal dispute resolution.",
+      "aliases": ["Governance", "Project Management", "Relationship Management", "Contract Management", "Steering Committee", "Account Management", "Escalation", "Meetings and Reporting", "Joint Governance"],
+      "excludes": []
+    },
+    {
+      "applies_to": "clause",
+      "number": 7,
+      "key": "term-and-renewal",
+      "name": "Term & Renewal",
+      "definition": "When the agreement starts, how long it runs, and how it extends — commencement/effective date, initial term, renewal terms, auto-renewal, non-renewal notice. Excludes early exit (→ 26).",
+      "aliases": ["Term", "Effective Date", "Commencement Date", "Duration", "Term of Agreement", "Initial Term", "Renewal", "Extension", "Auto-Renewal", "Term and Renewal"],
+      "excludes": [
+        {"key": "suspension-and-termination", "note": "early exit"}
+      ]
+    },
+    {
+      "applies_to": "clause",
+      "number": 8,
+      "key": "deliverables-and-acceptance",
+      "name": "Deliverables & Acceptance",
+      "definition": "Identification of work product to be handed over and the testing, review, acceptance, rejection and deemed-acceptance process.",
+      "aliases": ["Deliverables", "Acceptance", "Acceptance Testing", "Acceptance Criteria", "Delivery and Acceptance", "UAT", "Review and Approval", "Milestones and Deliverables", "Rejection"],
+      "excludes": []
+    },
+    {
+      "applies_to": "clause",
+      "number": 9,
+      "key": "service-levels",
+      "name": "Service Levels",
+      "definition": "Measurable performance targets and the consequences of missing them — availability, response/resolution times, service credits, earn-back, chronic failure.",
+      "aliases": ["SLA", "Service Levels", "Service Level Agreement", "Service Level Commitments", "Performance Levels", "KPIs", "Service Credits", "Uptime Commitment", "Availability"],
+      "excludes": []
+    },
+    {
+      "applies_to": "clause",
+      "number": 10,
+      "key": "support-and-maintenance",
+      "name": "Support & Maintenance",
+      "definition": "Ongoing sustainment of delivered services or software — helpdesk, incident severity handling, bug fixes, patches, upgrades, maintenance windows, end-of-life.",
+      "aliases": ["Support", "Maintenance", "Support and Maintenance", "Technical Support", "Helpdesk Services", "Updates and Upgrades", "Error Correction", "AMC", "Warranty Support"],
+      "excludes": []
+    },
+    {
+      "applies_to": "clause",
+      "number": 11,
+      "key": "change-control",
+      "name": "Change Control",
+      "definition": "The formal process for varying scope, price or timeline of the services — change requests, impact assessment, change orders, authority to approve. Excludes amendments to the MSA itself (→ 35).",
+      "aliases": ["Change Control", "Change Management", "Change Orders", "Change Control Procedure", "Variations", "Change Requests", "Amendments to SOW", "Scope Changes"],
+      "excludes": [
+        {"key": "general-provisions", "note": "amendments to the MSA itself"}
+      ]
+    },
+    {
+      "applies_to": "clause",
+      "number": 12,
+      "key": "fees-and-payment",
+      "name": "Fees & Payment",
+      "definition": "All money flowing to the supplier and the mechanics of it — rates, rate cards, pricing models, invoicing, payment terms, late payment interest, disputed invoices, reimbursable expenses, taxes, withholding and gross-up, set-off.",
+      "aliases": ["Fees", "Charges", "Pricing", "Compensation", "Consideration", "Payment", "Payment Terms", "Invoicing", "Billing", "Expenses", "Reimbursement", "Taxes", "Tax Gross-Up", "Withholding", "Late Payment", "Fees and Payment"],
+      "excludes": []
+    },
+    {
+      "applies_to": "clause",
+      "number": 13,
+      "key": "confidentiality",
+      "name": "Confidentiality",
+      "definition": "Definition of confidential information and the obligations of non-disclosure, permitted use, permitted recipients, exclusions, compelled disclosure, and return/destruction. Excludes personal data (→ 14) and trade secret ownership (→ 16).",
+      "aliases": ["Confidentiality", "Confidential Information", "Non-Disclosure", "NDA Terms", "Confidentiality Obligations", "Secrecy", "Proprietary Information", "Confidential Information – Definition"],
+      "excludes": [
+        {"key": "data-protection-and-privacy", "note": "personal data"},
+        {"key": "intellectual-property", "note": "trade secret ownership"}
+      ]
+    },
+    {
+      "applies_to": "clause",
+      "number": 14,
+      "key": "data-protection-and-privacy",
+      "name": "Data Protection & Privacy",
+      "definition": "Legal and regulatory obligations regarding personal data — controller/processor roles, lawful processing, data subject rights, cross-border transfer, breach notification, DPA incorporation, sub-processor consent.",
+      "aliases": ["Data Protection", "Privacy", "GDPR", "Data Privacy", "Personal Data", "Data Processing", "DPA", "Processing of Personal Data", "Data Protection and Privacy", "DPDP Compliance"],
+      "excludes": []
+    },
+    {
+      "applies_to": "clause",
+      "number": 15,
+      "key": "information-security-and-data-management",
+      "name": "Information Security & Data Management",
+      "definition": "Technical and organisational controls protecting systems and data — encryption, access control, vulnerability and penetration testing, security standards and certifications, data location, retention, backup, deletion and return of data.",
+      "aliases": ["Information Security", "Security", "Data Security", "Security Requirements", "Cyber Security", "Technical and Organisational Measures", "Data Management", "Data Retention", "Data Storage", "Security Incident", "System Security"],
+      "excludes": []
+    },
+    {
+      "applies_to": "clause",
+      "number": 16,
+      "key": "intellectual-property",
+      "name": "Intellectual Property",
+      "definition": "Ownership and allocation of IP — background vs foreground IP, work product ownership, assignment, licences granted, residuals, feedback, open-source, moral rights, third-party IP.",
+      "aliases": ["Intellectual Property", "IP", "IPR", "Intellectual Property Rights", "IP Ownership", "Ownership", "Ownership of Work Product", "Licence", "License Grant", "Licensing", "Usage Rights", "Proprietary Rights", "Work Made for Hire", "Background IP"],
+      "excludes": []
+    },
+    {
+      "applies_to": "clause",
+      "number": 17,
+      "key": "representations-and-warranties",
+      "name": "Representations & Warranties",
+      "definition": "Statements of fact and promises of quality given by either party — authority to contract, non-infringement, service conformity, warranty period and remedy, and disclaimers of implied warranties.",
+      "aliases": ["Representations", "Warranties", "Representations and Warranties", "Warranty", "Mutual Representations", "Disclaimer", "Disclaimer of Warranties", "No Other Warranties", "Warranty Remedies"],
+      "excludes": []
+    },
+    {
+      "applies_to": "clause",
+      "number": 18,
+      "key": "indemnification",
+      "name": "Indemnification",
+      "definition": "One party's obligation to defend, hold harmless and pay third-party claims — IP infringement, data breach, personal injury, and the indemnity procedure (notice, control of defence, settlement, mitigation).",
+      "aliases": ["Indemnity", "Indemnities", "Indemnification", "Hold Harmless", "Defence Obligations", "IP Indemnity", "Third-Party Claims", "Infringement Indemnity"],
+      "excludes": []
+    },
+    {
+      "applies_to": "clause",
+      "number": 19,
+      "key": "limitation-of-liability",
+      "name": "Limitation of Liability",
+      "definition": "Monetary caps, liability baskets, exclusions of indirect/consequential/special loss, lost profits and data, super-caps and carve-outs from the cap.",
+      "aliases": ["Limitation of Liability", "Liability", "Limitations", "Cap on Liability", "Exclusion of Liability", "Exclusion of Damages", "Consequential Loss", "No Indirect Damages", "Liability Cap", "Liability and Remedies"],
+      "excludes": []
+    },
+    {
+      "applies_to": "clause",
+      "number": 20,
+      "key": "insurance",
+      "name": "Insurance",
+      "definition": "Required policies, minimum coverage limits, insurer ratings, additional insured / waiver of subrogation, certificates of insurance, notice of cancellation.",
+      "aliases": ["Insurance", "Insurance Requirements", "Required Coverages", "Certificates of Insurance", "Liability Insurance", "Insurance and Indemnity"],
+      "excludes": []
+    },
+    {
+      "applies_to": "clause",
+      "number": 21,
+      "key": "compliance-with-laws",
+      "name": "Compliance with Laws",
+      "definition": "Standing duty to comply with applicable law and with sector-specific regulation — anti-bribery, sanctions and export control, modern slavery, anti-money laundering, regulator cooperation and right of examination.",
+      "aliases": ["Compliance", "Compliance with Laws", "Legal Compliance", "Regulatory Compliance", {"alias": "Applicable Law (obligation sense)", "match": "Applicable Law", "literal": false, "note": "obligation sense"}, "Anti-Corruption", "FCPA", "Anti-Bribery", "Sanctions", "Export Control", "Modern Slavery", "Code of Conduct", "Ethical Standards"],
+      "excludes": []
+    },
+    {
+      "applies_to": "clause",
+      "number": 22,
+      "key": "audit-and-records",
+      "name": "Audit & Records",
+      "definition": "Rights to inspect, examine and audit the other party's books, systems and facilities, plus the duty to create and retain records for a stated period.",
+      "aliases": ["Audit", "Audit Rights", "Right to Audit", "Inspection", "Books and Records", "Records", "Record Retention", "Record Keeping", "Regulatory Audit", "Access to Records"],
+      "excludes": []
+    },
+    {
+      "applies_to": "clause",
+      "number": 23,
+      "key": "personnel",
+      "name": "Personnel",
+      "definition": "Human resources assigned to the engagement — key personnel, named individuals, background checks and vetting, training, removal and replacement, continuity of staff, non-solicitation and no-hire.",
+      "aliases": ["Personnel", "Staff", "Employees", "Key Personnel", "Staffing", "Resources", "Personnel Requirements", "Background Checks", "Screening", "Non-Solicitation", "No-Hire", "Employee Non-Solicit"],
+      "excludes": []
+    },
+    {
+      "applies_to": "clause",
+      "number": 24,
+      "key": "subcontracting-and-sub-processors",
+      "name": "Subcontracting & Sub-processors",
+      "definition": "Delegation of performance to third-party entities — prior consent, approved lists, flow-down of terms, and prime contractor liability for subcontractor acts.",
+      "aliases": ["Subcontracting", "Subcontractors", "Use of Subcontractors", "Sub-processors", "Delegation", "Third-Party Providers", "Flow-Down", "Approved Subcontractors"],
+      "excludes": []
+    },
+    {
+      "applies_to": "clause",
+      "number": 25,
+      "key": "business-continuity-and-disaster-recovery",
+      "name": "Business Continuity & Disaster Recovery",
+      "definition": "Resilience planning against disruption — BCP/DR plans, RTO/RPO, failover, testing frequency, invocation and continuity of service during a disaster.",
+      "aliases": ["BCP", "Business Continuity", "Disaster Recovery", "DR", "Business Continuity and Disaster Recovery", "Resilience", "Continuity of Service", "Contingency Planning", "RTO/RPO"],
+      "excludes": []
+    },
+    {
+      "applies_to": "clause",
+      "number": 26,
+      "key": "suspension-and-termination",
+      "name": "Suspension & Termination",
+      "definition": "Ending or pausing the agreement before natural expiry — suspension rights, termination for convenience, for cause, for material breach with cure period, for insolvency, for change of control, plus the immediate consequences of termination (cessation of work, final invoicing, return of property, survival of terms).",
+      "aliases": ["Termination", "Suspension", "Termination Rights", "Termination for Convenience", "Termination for Cause", "Termination for Breach", "Termination for Insolvency", "Early Termination", "Cancellation", "Effect of Termination", "Consequences of Termination", "Survival", "Termination Assistance Fees"],
+      "excludes": []
+    },
+    {
+      "applies_to": "clause",
+      "number": 27,
+      "key": "exit-and-transition-assistance",
+      "name": "Exit & Transition Assistance",
+      "definition": "The forward-looking wind-down programme — exit plan, transition services after termination, knowledge transfer, migration to a successor supplier, handover of data and assets, transition charges.",
+      "aliases": ["Exit", "Exit Management", "Transition Assistance", "Transition Services", "Termination Assistance", "Disengagement", "Wind-Down", "Handover", "Migration Assistance", "Reverse Transition", "Exit Plan"],
+      "excludes": []
+    },
+    {
+      "applies_to": "clause",
+      "number": 28,
+      "key": "assignment-and-novation",
+      "name": "Assignment & Novation",
+      "definition": "Transfer of the agreement or rights under it to another entity — consent requirements, permitted transfers to affiliates or on merger, novation, binding effect on successors.",
+      "aliases": ["Assignment", "Assignment and Novation", "Transfer", "Novation", "Successors and Assigns", "Binding Effect", {"alias": "Change of Control (transfer sense)", "match": "Change of Control", "literal": false, "note": "transfer sense"}, "No Assignment"],
+      "excludes": []
+    },
+    {
+      "applies_to": "clause",
+      "number": 29,
+      "key": "force-majeure",
+      "name": "Force Majeure",
+      "definition": "Relief from performance due to events beyond reasonable control — definition of qualifying events, notice, mitigation, suspension of obligations, and termination if prolonged.",
+      "aliases": ["Force Majeure", "Acts of God", "Events Beyond Control", "Excused Performance", "Force Majeure Events", "Impossibility"],
+      "excludes": []
+    },
+    {
+      "applies_to": "clause",
+      "number": 30,
+      "key": "governing-law-and-dispute-resolution",
+      "name": "Governing Law & Dispute Resolution",
+      "definition": "The law applying to the contract and the machinery for resolving disputes — negotiation/escalation, mediation, arbitration seat and rules, litigation, exclusive or non-exclusive jurisdiction, venue, jury waiver, injunctive relief.",
+      "aliases": ["Governing Law", "Applicable Law", "Choice of Law", "Jurisdiction", "Venue", "Forum", "Dispute Resolution", "Disputes", "Arbitration", "Mediation", "Escalation of Disputes", "Submission to Jurisdiction", "Equitable Relief", "Waiver of Jury Trial"],
+      "excludes": []
+    },
+    {
+      "applies_to": "clause",
+      "number": 31,
+      "key": "notices",
+      "name": "Notices",
+      "definition": "How formal communications are given — permitted methods, addresses and contacts, when notice is deemed received, and updates to notice details.",
+      "aliases": ["Notices", "Notice", "Formal Notices", "Communications", "Service of Notices", "Addresses for Notice", "Manner of Notice"],
+      "excludes": []
+    },
+    {
+      "applies_to": "clause",
+      "number": 32,
+      "key": "order-of-precedence",
+      "name": "Order of Precedence",
+      "definition": "Ranking of contract documents when they conflict — MSA vs SOW vs schedules vs purchase orders vs supplier terms.",
+      "aliases": ["Order of Precedence", "Precedence", "Priority of Documents", "Conflict", "Inconsistency", "Hierarchy of Documents", "Conflicting Terms"],
+      "excludes": []
+    },
+    {
+      "applies_to": "clause",
+      "number": 33,
+      "key": "independent-contractor",
+      "name": "Independent Contractor",
+      "definition": "The legal relationship between the parties — independent contractor status, no partnership/joint venture/agency/employment, no authority to bind, responsibility for own taxes and employees.",
+      "aliases": ["Independent Contractor", "Relationship of the Parties", "No Partnership", "No Agency", "No Joint Venture", "Status of Parties", "Nature of Relationship", "No Employment Relationship"],
+      "excludes": []
+    },
+    {
+      "applies_to": "clause",
+      "number": 34,
+      "key": "publicity-and-use-of-name",
+      "name": "Publicity & Use of Name",
+      "definition": "Control over external communications — press releases, use of names, logos and trademarks, customer references, case studies, marketing and analyst mentions.",
+      "aliases": ["Publicity", "Use of Name", "Marks", "Trademarks", "Press Releases", "Announcements", "Marketing", "References", "Customer References", "Logo Usage", "No Publicity"],
+      "excludes": []
+    },
+    {
+      "applies_to": "clause",
+      "number": 35,
+      "key": "general-provisions",
+      "name": "General Provisions",
+      "definition": "Residual boilerplate with no dedicated type — amendments and modifications to the MSA, waiver, severability, entire agreement/integration, no third-party beneficiaries, counterparts and electronic signature, further assurances, cumulative remedies, headings.",
+      "aliases": ["General", "Miscellaneous", "General Provisions", "Boilerplate", "Amendment", "Modification", "Variation", "Waiver", "No Waiver", "Severability", "Entire Agreement", "Integration", "Merger Clause", "Third-Party Beneficiaries", "Contracts (Rights of Third Parties)", "Counterparts", "Electronic Signature", "Further Assurance", "Cumulative Remedies", "Headings"],
+      "excludes": []
+    },
+    {
+      "applies_to": "non_clause",
+      "number": 1,
+      "key": "agreement-identification",
+      "name": "Agreement Identification",
+      "definition": "The title, contract type and date of the instrument, typically on the cover page or opening line.",
+      "aliases": [{"alias": "Master Services Agreement (as a title)", "match": "Master Services Agreement", "literal": false, "note": "as a title"}, "Agreement Title", "Master Service Agreement", "MSA", "Cover Page", "Dated as of…", "Agreement Date", "Execution Date"],
+      "excludes": []
+    },
+    {
+      "applies_to": "non_clause",
+      "number": 2,
+      "key": "party-identification",
+      "name": "Party Identification",
+      "definition": "Naming and describing the contracting entities — legal names, incorporation details, registered addresses, defined short names (\"Supplier\", \"Customer\").",
+      "aliases": ["Parties", "Between", "Party Details", "The Parties", "Contracting Parties", "By and Between", "Party Information"],
+      "excludes": []
+    },
+    {
+      "applies_to": "non_clause",
+      "number": 3,
+      "key": "preamble",
+      "name": "Preamble",
+      "definition": "The introductory sentence binding the parties and the date into an agreement, before any recital. Typically \"This Master Services Agreement is made and entered into as of … by and between …\".",
+      "aliases": ["Preamble", "Introduction", "Introductory Statement", "Opening Paragraph", "Commencement Wording"],
+      "excludes": []
+    },
+    {
+      "applies_to": "non_clause",
+      "number": 4,
+      "key": "recitals",
+      "name": "Recitals",
+      "definition": "Background and context narrative explaining why the parties are contracting, usually WHEREAS-form, closing with a NOW THEREFORE consideration statement.",
+      "aliases": ["Recitals", "Background", "Whereas Clauses", "Preliminary", "Context", {"alias": "Introduction (recital sense)", "match": "Introduction", "literal": false, "note": "recital sense"}, "Now Therefore"],
+      "excludes": []
+    },
+    {
+      "applies_to": "non_clause",
+      "number": 5,
+      "key": "table-of-contents",
+      "name": "Table of Contents",
+      "definition": "Navigational index of clauses, schedules and page numbers.",
+      "aliases": ["Table of Contents", "TOC", "Contents", "Index", "List of Schedules", "List of Exhibits"],
+      "excludes": []
+    },
+    {
+      "applies_to": "non_clause",
+      "number": 6,
+      "key": "signature-block",
+      "name": "Signature Block",
+      "definition": "The execution apparatus — signature lines, signatory name/title/date, \"IN WITNESS WHEREOF\" wording, company seals, witness and attestation blocks.",
+      "aliases": ["Signature", "Signatures", "Execution", "Executed by", "In Witness Whereof", "Signed for and on behalf of", "Signatory Details", "Witness", "Attestation", "Seal", "Authorised Signatory"],
+      "excludes": []
+    },
+    {
+      "applies_to": "non_clause",
+      "number": 7,
+      "key": "schedule-and-exhibit-identification",
+      "name": "Schedule & Exhibit Identification",
+      "definition": "Headers and cover markers that identify an annexed document, without themselves containing obligations.",
+      "aliases": ["Schedule", "Schedule 1", "Annex", "Annexure", "Exhibit", "Exhibit A", "Appendix", "Attachment", "Addendum", {"alias": "Statement of Work (as a cover header)", "match": "Statement of Work", "literal": false, "note": "as a cover header"}, "SOW No.", "Work Order No."],
+      "excludes": []
+    },
+    {
+      "applies_to": "non_clause",
+      "number": 8,
+      "key": "page-furniture",
+      "name": "Page Furniture",
+      "definition": "Repeating page-level artefacts — running headers and footers, page numbers, document control IDs, version stamps, confidentiality watermarks.",
+      "aliases": ["Header", "Footer", "Page 3 of 40", {"alias": "Confidential (watermark)", "match": "Confidential", "literal": false, "note": "watermark"}, "Document Reference", "Version", "Doc ID"],
+      "excludes": []
+    },
+    {
+      "applies_to": "non_clause",
+      "number": 9,
+      "key": "notes-and-references",
+      "name": "Notes & References",
+      "definition": "Footnotes, endnotes, drafting notes and cross-reference apparatus sitting outside the operative text.",
+      "aliases": ["Footnote", "Endnote", "Note", "Drafting Note", "Comment", {"alias": "NTD (note to draft)", "match": "NTD", "literal": true, "note": "note to draft"}],
+      "excludes": []
+    },
+    {
+      "applies_to": "non_clause",
+      "number": 10,
+      "key": "template-placeholder",
+      "name": "Template Placeholder",
+      "definition": "Unfilled template fields and bracketed instructions left in the document.",
+      "aliases": ["[●]", "[INSERT]", "[TBD]", "XXXX", "<Client Name>", "________", "[Specify]", "TBC"],
+      "excludes": []
+    },
+    {
+      "applies_to": "non_clause",
+      "number": 11,
+      "key": "other-non-clause-content",
+      "name": "Other Non-Clause Content",
+      "definition": "Any structural, layout or residual text that is not an operative provision and fits none of the above — stray fragments, OCR artefacts, orphaned headings, blank-section markers.",
+      "aliases": [],
+      "excludes": []
+    }
+  ]
+}

@@ -202,6 +202,7 @@ def _build_chunks(chunk_run, chunk_dicts, pk_by_local, issues):
             continue
         rows.append(Chunk(
             chunk_run=chunk_run,
+            document_id=chunk_run.extraction_run.document_id,
             clause_id=clause_pk,
             local_id=data['chunk_id'],
             kind=data['chunk_kind'],

@@ -21,7 +21,7 @@ from .result import ParagraphRecord
 from .segmentation import CONTENT, TABLE
 from .tree import MINOR_WORDS
 
-_SOURCE_LABELS = {"front_matter": "FRONT MATTER"}
+_SOURCE_LABELS = {"front_matter": "FRONT MATTER", "form_line": "FORM LINES"}
 _TITLE_MAX_CHARS = 80
 _TITLE_MAX_WORDS = 12
 _RUN_IN_MAX_WORDS = 8
@@ -78,6 +78,8 @@ def breadcrumb_step(row):
     """One breadcrumb step for a clause row."""
     number = (row.get("display_number") or "").strip()
     text = (row.get("text") or "").strip()
+    if row.get("numbering_source") == "form_line":
+        return _SOURCE_LABELS["form_line"]
     label = (row.get("clause_title") or "").strip() or (
         text and (_whole_title(text) or _run_in_title(text) or _leading_capitals(text)))
     if not label and not number:
