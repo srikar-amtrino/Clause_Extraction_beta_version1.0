@@ -24,6 +24,18 @@ class Document(models.Model):
         ('failed', 'failed'),
     ]
 
+    # Review lifecycle: set by the finalize task and updated by workspace views.
+    REVIEW_STATUS_CHOICES = [
+        ('pending_classification', 'Pending Classification'),
+        ('needs_review', 'Needs Review'),
+        ('in_review', 'In Review'),
+        ('draft', 'Draft'),
+        ('reviewed', 'Reviewed'),
+        ('published', 'Published'),
+        ('reopened_in_review', 'Re-opened (In Review)'),
+        ('reopened_reviewed', 'Re-opened (Reviewed)'),
+    ]
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     contract = models.ForeignKey('core.Contract', on_delete=models.SET_NULL,
                                  null=True, blank=True, related_name='documents')
@@ -49,6 +61,22 @@ class Document(models.Model):
     # Set when the file disappears from the source. Filled by the sync path.
     deleted_at = models.DateTimeField(null=True, blank=True)
 
+    # Review lifecycle status (see REVIEW_STATUS_CHOICES). Set to
+    # 'needs_review' by the finalize task once classification succeeds.
+    review_status = models.CharField(
+        max_length=32,
+        choices=REVIEW_STATUS_CHOICES,
+        default='pending_classification',
+    )
+    # The user currently holding the soft workspace lock (denormalised from
+    # WorkspaceLock for cheap list-view queries -- avoid the extra join).
+    current_reviewer = models.ForeignKey(
+        'core.User',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='documents_under_review',
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -60,6 +88,7 @@ class Document(models.Model):
         ]
         indexes = [
             models.Index(fields=['extraction_status'], name='doc_extract_status_idx'),
+            models.Index(fields=['review_status'], name='doc_review_status_idx'),
             models.Index(fields=['ingestion_source', 'source_external_id'],
                          name='doc_source_ext_idx'),
             models.Index(fields=['contract'], name='doc_contract_idx'),

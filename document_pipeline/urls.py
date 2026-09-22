@@ -11,6 +11,24 @@ from .document_views import (
 	document_reviews,
 	taxonomy,
 )
+from .review_views import (
+	activity_calendar,
+	bulk_update,
+	document_activity,
+	document_contributors,
+	document_note,
+	document_queue,
+	document_stats,
+	draft_discard,
+	draft_save,
+	lock_acquire,
+	lock_heartbeat,
+	lock_release,
+	paragraph_update,
+	workspace_detail,
+	workspace_publish,
+	workspace_save,
+)
 from .views import (
 	google_drive_callback,
 	google_drive_connect,
@@ -41,11 +59,25 @@ urlpatterns = [
 	     name='document-classification'),
 	path('taxonomy/', taxonomy, name='taxonomy'),
 
-	# Review: what a person decided about a verdict. Writes, and the only
-	# writes outside ingestion.
-	path('documents/<uuid:document_id>/reviews/', document_reviews, name='document-reviews'),
-	path('classifications/<uuid:classification_id>/review/', classification_review,
-	     name='classification-review'),
-	path('classifications/<uuid:classification_id>/review/history/',
-	     classification_review_history, name='classification-review-history'),
+	# Review workspace -- overview helpers.
+	path('documents/stats/', document_stats, name='document-stats'),
+	path('documents/queue/', document_queue, name='document-queue'),
+
+	# Review workspace -- per document.
+	path('documents/<uuid:document_id>/workspace/', workspace_detail, name='workspace-detail'),
+	path('documents/<uuid:document_id>/workspace/lock/', lock_acquire, name='workspace-lock-acquire'),
+	path('documents/<uuid:document_id>/workspace/lock/heartbeat/', lock_heartbeat, name='workspace-lock-heartbeat'),
+	path('documents/<uuid:document_id>/workspace/lock/release/', lock_release, name='workspace-lock-release'),
+	path('documents/<uuid:document_id>/workspace/paragraphs/<str:para_id>/', paragraph_update, name='workspace-paragraph-update'),
+	path('documents/<uuid:document_id>/workspace/bulk-update/', bulk_update, name='workspace-bulk-update'),
+	path('documents/<uuid:document_id>/workspace/draft/', draft_save, name='workspace-draft-save'),
+	path('documents/<uuid:document_id>/workspace/draft/discard/', draft_discard, name='workspace-draft-discard'),
+	path('documents/<uuid:document_id>/workspace/save/', workspace_save, name='workspace-save'),
+	path('documents/<uuid:document_id>/workspace/publish/', workspace_publish, name='workspace-publish'),
+
+	# Activity log & contributions.
+	path('documents/<uuid:document_id>/activity/', document_activity, name='document-activity'),
+	path('documents/<uuid:document_id>/contributors/', document_contributors, name='document-contributors'),
+	path('documents/<uuid:document_id>/note/', document_note, name='document-note'),
+	path('activity/calendar/', activity_calendar, name='activity-calendar'),
 ]
