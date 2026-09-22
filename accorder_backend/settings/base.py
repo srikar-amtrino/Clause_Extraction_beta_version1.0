@@ -58,6 +58,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.contenttypes",
     "django.contrib.auth",
+    "corsheaders",
     "core",
     "document_pipeline",
 ]
@@ -66,9 +67,25 @@ INSTALLED_APPS = [
 # to /api/google-drive/sync/ without a CSRF token; adding the middleware breaks
 # that flow. Add both together when the ingestion UI is hardened.
 MIDDLEWARE = [
+    "corsheaders.middleware.CorsMiddleware",  # Must be before any response-generating middleware
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
 ]
+
+# ---------------------------------------------------------------- CORS
+# Allow the Vite dev server and production SPA origins to call the API.
+# Credentials (cookies) are not used — Bearer tokens in Authorization header.
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+CORS_ALLOW_HEADERS = [
+    "accept",
+    "authorization",
+    "content-type",
+    "x-requested-with",
+]
+CORS_ALLOW_CREDENTIALS = True
 
 ROOT_URLCONF = "accorder_backend.urls"
 
@@ -99,6 +116,16 @@ LOGGING = {
     },
     "handlers": {
         "console": {"class": "logging.StreamHandler", "formatter": "standard"},
+        # Dedicated auth log — signup, login, logout, token failures.
+        # Written to logs/auth.log relative to BASE_DIR; directory is git-ignored.
+        "auth_file": {
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": str(BASE_DIR / "logs" / "auth.log"),
+            "maxBytes": 10 * 1024 * 1024,   # 10 MB per file
+            "backupCount": 5,
+            "formatter": "standard",
+            "encoding": "utf-8",
+        },
     },
     "root": {"handlers": ["console"], "level": os.environ.get("LOG_LEVEL", "INFO")},
     # The HTTP and AWS clients under the Bedrock SDK log every request at INFO.
@@ -106,6 +133,12 @@ LOGGING = {
     "loggers": {
         "httpx2": {"level": "WARNING"},
         "botocore": {"level": "WARNING"},
+        # auth logger used by core.auth_helpers.log_auth_event and auth_views.
+        "auth": {
+            "handlers": ["console", "auth_file"],
+            "level": "DEBUG",
+            "propagate": False,
+        },
     },
 }
 
