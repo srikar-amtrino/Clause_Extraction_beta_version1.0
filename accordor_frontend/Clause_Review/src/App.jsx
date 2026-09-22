@@ -5,6 +5,7 @@ import Sidebar from './components/Sidebar';
 import TopNav from './components/TopNav';
 import Overview from './components/Overview';
 import Documents from './components/Documents';
+import ReviewWorkspace from './components/ReviewWorkspace';
 import ActivityLog from './components/ActivityLog';
 import FolderMetadataModal from './components/FolderMetadataModal';
 import Login from './components/auth/Login';
@@ -20,20 +21,19 @@ function AppWorkspace() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  // Derive active nav directly from route location
-  const activeNav = location.pathname.includes('/documents')
+  const isReviewRoute = location.pathname.includes('/review');
+
+  // Derive active nav directly from route location (keep documents selected on review route)
+  const activeNav = isReviewRoute
+    ? 'documents'
+    : location.pathname.includes('/documents')
     ? 'documents'
     : location.pathname.includes('/activity-log')
     ? 'activity-log'
     : 'overview';
 
+  const [selectedReviewDoc, setSelectedReviewDoc] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
-
-  const handleNavSelect = (nav) => {
-    if (nav === 'overview') navigate('/overview');
-    else if (nav === 'documents') navigate('/documents');
-    else if (nav === 'activity-log') navigate('/activity-log');
-  };
 
   // Google Drive connection and sync state
   const [driveState, setDriveState] = useState({
@@ -47,8 +47,38 @@ function AppWorkspace() {
     user: null,
   });
 
-  // Documents fetched from Google Drive
+  // Real Documents fetched from Google Drive
   const [fetchedDocuments, setFetchedDocuments] = useState([]);
+
+  // Derive review document directly from route docId or selected state
+  const currentReviewDoc = React.useMemo(() => {
+    if (location.pathname.startsWith('/review/')) {
+      const docId = location.pathname.split('/review/')[1];
+      if (docId) {
+        const found = fetchedDocuments.find((d) => d.id === docId);
+        if (found) return found;
+      }
+    }
+    return selectedReviewDoc || fetchedDocuments[0] || null;
+  }, [location.pathname, selectedReviewDoc, fetchedDocuments]);
+
+  const handleNavSelect = (nav) => {
+    if (nav === 'overview') navigate('/overview');
+    else if (nav === 'documents') navigate('/documents');
+    else if (nav === 'activity-log') navigate('/activity-log');
+  };
+
+  const handleOpenReviewWorkspace = (doc) => {
+    const selected = doc || fetchedDocuments[0];
+    if (selected) {
+      setSelectedReviewDoc(selected);
+      navigate(`/review/${selected.id || 'doc'}`);
+    }
+  };
+
+  const handleBackToDocuments = () => {
+    navigate('/documents');
+  };
 
   // Second modal state (after selecting folder in Google Picker)
   const [selectedFolderForConfig, setSelectedFolderForConfig] = useState(null);
@@ -278,50 +308,61 @@ function AppWorkspace() {
           overflow: 'hidden',
         }}
       >
-        <TopNav
-          title={activeNav === 'overview' ? 'Overview' : activeNav === 'documents' ? 'Documents' : activeNav === 'activity-log' ? 'Activity Log' : activeNav.replace('-', ' ')}
-          searchQuery={searchQuery}
-          onSearchChange={setSearchQuery}
-          onCheckDrive={handleCheckDrive}
-          isCheckingDrive={driveState.isSyncing}
-        />
-
-        {activeNav === 'overview' ? (
-          <Overview
-            driveState={driveState}
-            stats={stats}
-            queueItems={[]}
-            onOpenPicker={handleOpenPicker}
-            onConnectDrive={handleConnectDrive}
-            onCheckDrive={handleCheckDrive}
-            onNavigateToDocuments={() => handleNavSelect('documents')}
-            onNavigateToActivityLog={() => handleNavSelect('activity-log')}
-            isEmptyData={fetchedDocuments.length === 0}
+        {isReviewRoute ? (
+          <ReviewWorkspace
+            document={currentReviewDoc}
+            onBackToDocuments={handleBackToDocuments}
+            showToast={showToast}
           />
-        ) : activeNav === 'documents' ? (
-          <Documents
-            driveState={driveState}
-            documents={filteredDocs}
-            onOpenPicker={handleOpenPicker}
-            onConnectDrive={handleConnectDrive}
-            onCheckDrive={handleCheckDrive}
-            onViewDocument={handleViewDocument}
-            isEmptyData={fetchedDocuments.length === 0}
-          />
-        ) : activeNav === 'activity-log' ? (
-          <ActivityLog />
         ) : (
-          <Overview
-            driveState={driveState}
-            stats={stats}
-            queueItems={[]}
-            onOpenPicker={handleOpenPicker}
-            onConnectDrive={handleConnectDrive}
-            onCheckDrive={handleCheckDrive}
-            onNavigateToDocuments={() => handleNavSelect('documents')}
-            onNavigateToActivityLog={() => handleNavSelect('activity-log')}
-            isEmptyData={fetchedDocuments.length === 0}
-          />
+          <>
+            <TopNav
+              title={activeNav === 'overview' ? 'Overview' : activeNav === 'documents' ? 'Documents' : activeNav === 'activity-log' ? 'Activity Log' : activeNav.replace('-', ' ')}
+              searchQuery={searchQuery}
+              onSearchChange={setSearchQuery}
+              onCheckDrive={handleCheckDrive}
+              isCheckingDrive={driveState.isSyncing}
+            />
+
+            {activeNav === 'overview' ? (
+              <Overview
+                driveState={driveState}
+                stats={stats}
+                queueItems={[]}
+                onOpenPicker={handleOpenPicker}
+                onConnectDrive={handleConnectDrive}
+                onCheckDrive={handleCheckDrive}
+                onNavigateToDocuments={() => handleNavSelect('documents')}
+                onNavigateToActivityLog={() => handleNavSelect('activity-log')}
+                isEmptyData={fetchedDocuments.length === 0}
+              />
+            ) : activeNav === 'documents' ? (
+              <Documents
+                driveState={driveState}
+                documents={filteredDocs}
+                onOpenWorkspace={handleOpenReviewWorkspace}
+                onOpenPicker={handleOpenPicker}
+                onConnectDrive={handleConnectDrive}
+                onCheckDrive={handleCheckDrive}
+                onViewDocument={handleViewDocument}
+                isEmptyData={fetchedDocuments.length === 0}
+              />
+            ) : activeNav === 'activity-log' ? (
+              <ActivityLog />
+            ) : (
+              <Overview
+                driveState={driveState}
+                stats={stats}
+                queueItems={[]}
+                onOpenPicker={handleOpenPicker}
+                onConnectDrive={handleConnectDrive}
+                onCheckDrive={handleCheckDrive}
+                onNavigateToDocuments={() => handleNavSelect('documents')}
+                onNavigateToActivityLog={() => handleNavSelect('activity-log')}
+                isEmptyData={fetchedDocuments.length === 0}
+              />
+            )}
+          </>
         )}
       </Box>
 
@@ -397,6 +438,22 @@ export default function App() {
       />
       <Route
         path="/documents"
+        element={
+          <ProtectedRoute>
+            <AppWorkspace />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/review"
+        element={
+          <ProtectedRoute>
+            <AppWorkspace />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/review/:docId"
         element={
           <ProtectedRoute>
             <AppWorkspace />
