@@ -1,0 +1,174 @@
+{
+  "_fixture": "GET /api/documents/<id>/extraction/ — invented contract text, real field shapes. Trimmed to the clauses and paragraphs behind the classification fixture, so clause_id values line up across the two files.",
+  "document": {
+    "document_id": "d0adaa81-4501-4ca2-99a9-10e8d4985a9b",
+    "name": "Nexora_MSA_executed.docx",
+    "title": "MASTER SERVICES AGREEMENT",
+    "drive_file_id": "18BdNLjuGbZKg7ATLoPJ0IjkLzxEgSczi",
+    "drive_folder_id": "1pDMacP3Hn3fJHht28uxjxF2wYwykRuF6",
+    "extraction_status": "extracted"
+  },
+  "extraction": {
+    "run_id": "96736b4b-11e5-459b-86fb-b2049b4f149a",
+    "attempt": 1,
+    "status": "extracted",
+    "parser_build": "2026.09.18b",
+    "extracted_at": "2026-09-18T12:18:12+00:00",
+    "page_count": 8,
+    "clause_count": 12,
+    "paragraph_count": 11,
+    "max_level": 3,
+    "warnings": [],
+    "rejection": null
+  },
+  "clauses": [
+    {
+      "clause_id": "c0",
+      "parent_id": null,
+      "level": 1,
+      "number": null,
+      "title": null,
+      "path": null,
+      "source": "front_matter",
+      "confidence": 0.9,
+      "flags": [],
+      "text": "This Master Services Agreement (the “MSA”) is made on 1 April 2026 (the “Effective Date”) Between:",
+      "body_text": "This Master Services Agreement (the “MSA”) is made on 1 April 2026 (the “Effective Date”) Between:"
+    },
+    {
+      "clause_id": "c1",
+      "parent_id": null,
+      "level": 1,
+      "number": "1.",
+      "title": null,
+      "path": "1",
+      "source": "outline_level",
+      "confidence": 0.95,
+      "flags": [],
+      "text": "NEXORA SYSTEMS LIMITED, a company incorporated in England and Wales (No. 10482913), having its registered office at 14 Perivale Way, London EC2A 4BX (“Supplier”);",
+      "body_text": "NEXORA SYSTEMS LIMITED, a company incorporated in England and Wales (No. 10482913), having its registered office at 14 Perivale Way, London EC2A 4BX (“Supplier”);"
+    },
+    {
+      "clause_id": "c4",
+      "parent_id": null,
+      "level": 1,
+      "number": "2",
+      "title": "DEFINITIONS",
+      "path": "2",
+      "source": "numbered_heading",
+      "confidence": 0.98,
+      "flags": [],
+      "text": "DEFINITIONS\n“Confidential Information” means all information disclosed by one party to the other…\n“Deliverables” means the reports, software, documentation and other materials…",
+      "body_text": "DEFINITIONS"
+    },
+    {
+      "clause_id": "c5",
+      "parent_id": "c4",
+      "level": 2,
+      "number": "2.2",
+      "title": null,
+      "path": "2.2",
+      "source": "numbered_heading",
+      "confidence": 0.97,
+      "flags": [],
+      "text": "“Confidential Information” means all information disclosed by one party to the other, whether orally, in writing or by any other means, that is designated as confidential or that ought reasonably to be regarded as confidential.",
+      "body_text": "“Confidential Information” means all information disclosed by one party to the other, whether orally, in writing or by any other means, that is designated as confidential or that ought reasonably to be regarded as confidential."
+    },
+    {
+      "clause_id": "c6",
+      "parent_id": "c4",
+      "level": 2,
+      "number": "2.3",
+      "title": null,
+      "path": "2.3",
+      "source": "numbered_heading",
+      "confidence": 0.97,
+      "flags": [],
+      "text": "“Deliverables” means the reports, software, documentation and other materials produced by the Supplier in the course of providing the Services.",
+      "body_text": "“Deliverables” means the reports, software, documentation and other materials produced by the Supplier in the course of providing the Services."
+    },
+    {
+      "clause_id": "c7",
+      "parent_id": "c4",
+      "level": 2,
+      "number": "2.4",
+      "title": null,
+      "path": "2.4",
+      "source": "numbered_heading",
+      "confidence": 0.96,
+      "flags": [],
+      "text": "“Effective Date” means 1 April 2026.",
+      "body_text": "“Effective Date” means 1 April 2026."
+    },
+    {
+      "clause_id": "c12",
+      "parent_id": "c11",
+      "level": 2,
+      "number": "3.1",
+      "title": null,
+      "path": "3.1",
+      "source": "numbered_heading",
+      "confidence": 0.95,
+      "flags": [],
+      "text": "The Supplier shall provide the Services with reasonable skill and care and in accordance with each Statement of Work.",
+      "body_text": "The Supplier shall provide the Services with reasonable skill and care and in accordance with each Statement of Work."
+    },
+    {
+      "clause_id": "c14",
+      "parent_id": "c13",
+      "level": 3,
+      "number": "(a)",
+      "title": null,
+      "path": "3.3(a)",
+      "source": "list_marker",
+      "confidence": 0.81,
+      "flags": [
+        "depth_adjusted"
+      ],
+      "text": "If the Supplier delays a Phase, then either the payments shall be postponed or the liability and termination provisions shall apply, at the Customer's election.",
+      "body_text": "If the Supplier delays a Phase, then either the payments shall be postponed or the liability and termination provisions shall apply, at the Customer's election."
+    }
+  ],
+  "paragraphs": [
+    {
+      "paragraph_id": "P-001",
+      "page": 1,
+      "bucket": "front_matter",
+      "clause_id": "c0",
+      "breadcrumb": "FRONT MATTER",
+      "text": "This Master Services Agreement (the “MSA”) is made on 1 April 2026 (the “Effective Date”) Between:"
+    },
+    {
+      "paragraph_id": "P-002",
+      "page": 1,
+      "bucket": "content",
+      "clause_id": "c1",
+      "breadcrumb": "1.",
+      "text": "NEXORA SYSTEMS LIMITED, a company incorporated in England and Wales (No. 10482913), having its registered office at 14 Perivale Way, London EC2A 4BX (“Supplier”);"
+    },
+    {
+      "paragraph_id": "P-005",
+      "page": 2,
+      "bucket": "content",
+      "clause_id": "c5",
+      "breadcrumb": "2 DEFINITIONS > 2.2",
+      "text": "“Confidential Information” means all information disclosed by one party to the other, whether orally, in writing or by any other means, that is designated as confidential or that ought reasonably to be regarded as confidential."
+    },
+    {
+      "paragraph_id": "P-006",
+      "page": 2,
+      "bucket": "content",
+      "clause_id": "c6",
+      "breadcrumb": "2 DEFINITIONS > 2.3",
+      "text": "“Deliverables” means the reports, software, documentation and other materials produced by the Supplier in the course of providing the Services."
+    },
+    {
+      "paragraph_id": "P-007",
+      "page": 2,
+      "bucket": "content",
+      "clause_id": "c7",
+      "breadcrumb": "2 DEFINITIONS > 2.4",
+      "text": "“Effective Date” means 1 April 2026."
+    }
+  ]
+}

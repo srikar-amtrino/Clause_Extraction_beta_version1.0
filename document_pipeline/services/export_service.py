@@ -8,7 +8,7 @@ Three views of a document's current runs:
                         grouped by section. Built with the classifier's own
                         grouping, so what you read here is what it reads.
   classification        the verdict on every micro chunk: label, type, sub-type,
-                        confidence, reason, and why it is flagged for review.
+                        confidence, and why it is flagged for review.
 
 Written to PIPELINE_EXPORT_DIR/<document name>__<document id>/ and served by
 the document endpoints. Contract text is client data: the export directory is
@@ -29,6 +29,7 @@ from document_pipeline.models import (
     ExtractedParagraph,
 )
 from document_pipeline.services.classification_service import _groups_for
+from document_pipeline.services.review_service import current_reviews_for_run, review_json
 
 EXTRACTION_FILE = 'extraction.json'
 CLASSIFICATION_FILE = 'classification_input.json'
@@ -148,7 +149,7 @@ def current_classification_run(document):
 
 def classification_json(document):
     """The current classification run: a summary, then one entry per micro chunk
-    in reading order with the verdict, the reason and why it needs review."""
+    in reading order with the verdict and why it needs review."""
     run = document.current_run
     classification_run = current_classification_run(document)
     header = _document_header(document, run)
@@ -158,16 +159,29 @@ def classification_json(document):
     rows = (Classification.objects.filter(run=classification_run)
             .select_related('chunk', 'chunk__clause', 'canonical_type')
             .order_by('chunk__order_index'))
-    items, by_type, by_outcome = [], Counter(), Counter()
+    # Every decision made against this run, in one query rather than one per
+    # item. An item nobody has decided on carries review: null.
+    reviews = current_reviews_for_run(classification_run)
+    items, by_type, by_outcome, by_decision = [], Counter(), Counter(), Counter()
     for c in rows:
         chunk = c.chunk
         type_name = c.canonical_type.name if c.canonical_type else None
         by_outcome[c.outcome] += 1
         by_type['%s: %s' % (c.label, type_name) if c.label else 'failed'] += 1
+        review = reviews.get(c.id)
+        if review is not None:
+            by_decision[review.decision] += 1
         items.append({
+            # The handle a review decision is posted against. Stable across
+            # requests, unlike clause_id, which is local to an extraction run.
+            'classification_id': str(c.id),
             'clause_id': chunk.clause.local_id,
+            # The source paragraphs behind the verdict, so a reader can point
+            # at the exact text. Several per clause is normal.
+            'paragraph_ids': c.paragraph_ids,
             'number': chunk.clause_identifier,
-            'heading_trail': chunk.breadcrumb,
+            # The section trail this clause sits under.
+            'breadcrumb': chunk.breadcrumb,
             'text': chunk.text,
             'outcome': c.outcome,
             'label': c.label,
@@ -175,12 +189,12 @@ def classification_json(document):
             'type_name': type_name,
             'sub_type': c.sub_type,
             'confidence': c.confidence,
-            'reason': c.reason,
             'needs_review': c.needs_review,
             'review_reasons': c.review_reasons,
             'expected_types': c.expected_type_keys,
             'deviated': c.deviated,
             'error': c.error or None,
+            'review': review_json(review),
         })
 
     r = classification_run
@@ -208,8 +222,25 @@ def classification_json(document):
             'needs_review': r.review_count,
             'by_outcome': dict(by_outcome),
             'by_type': dict(by_type.most_common()),
+            # Review progress over the whole run, so a header can read
+            # "41 of 338 reviewed" without the client counting items itself.
+            'review': _review_progress(by_decision, len(items)),
         },
         'items': items,
+    }
+
+
+def _review_progress(by_decision, total):
+    """How far the human pass has got. Always present, zeroed when nobody has
+    decided anything yet -- a count of zero is a fact, unlike a stage that has
+    not run, so this is never null."""
+    reviewed = sum(by_decision.values())
+    return {
+        'reviewed': reviewed,
+        'pending': total - reviewed,
+        'accepted': by_decision.get('accepted', 0),
+        'corrected': by_decision.get('corrected', 0),
+        'rejected': by_decision.get('rejected', 0),
     }
 
 
