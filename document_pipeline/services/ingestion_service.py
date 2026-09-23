@@ -86,21 +86,70 @@ def sync_drive_files(files, *, ingestion_source, folder_ids=()):
     is gone, but a document belonging to a folder nobody asked about is left
     alone.
     """
+    from document_pipeline.pipeline_logger import (
+        log_deduplication_decision,
+        log_deduplication_summary,
+    )
+
     print('[ingestion] reconciling %d Drive files' % len(files), flush=True)
     outcome = SyncOutcome()
     scope = set(folder_ids) | {meta.get('parent_id') for meta in files.values()}
     scope.discard(None)
 
     with transaction.atomic():
-        existing = {d.source_external_id: d for d in
-                    Document.objects.select_for_update()
-                    .filter(ingestion_source=ingestion_source)}
+        all_docs = list(
+            Document.objects.select_for_update()
+            .filter(ingestion_source=ingestion_source)
+        )
+        existing = {d.source_external_id: d for d in all_docs}
+        # Secondary index: active docs by (name, parent_id) to catch re-uploads / duplicates
+        existing_by_name = {
+            (d.name, d.source_parent_id): d
+            for d in all_docs
+            if d.deleted_at is None
+        }
 
         for file_id, meta in files.items():
+            name = meta.get('name') or ''
+            parent = meta.get('parent_id') or ''
             document = existing.get(file_id)
+
             if document is None:
-                outcome.created.append(_create_document(ingestion_source, file_id, meta))
+                # Check if this file was re-uploaded to Drive under the same name and folder
+                duplicate_match = existing_by_name.get((name, parent))
+                if duplicate_match is not None:
+                    # Update external ID rather than creating a duplicate row
+                    old_id = duplicate_match.source_external_id
+                    duplicate_match.source_external_id = file_id
+                    _reconcile(duplicate_match, meta, outcome)
+                    # Ensure it is treated as updated for ingestion if mtime changed
+                    if duplicate_match not in outcome.updated and duplicate_match not in outcome.renamed:
+                        outcome.updated.append(duplicate_match)
+                    log_deduplication_decision(
+                        "DEDUPLICATED (REPLACED)",
+                        name,
+                        file_id,
+                        parent,
+                        str(duplicate_match.id),
+                        f"Matched existing document '{name}' (ID: {duplicate_match.id}). Replaced old Drive ID '{old_id}' with '{file_id}'. Duplicate prevented!",
+                    )
+                    continue
+
+                # Truly new file
+                new_doc = _create_document(ingestion_source, file_id, meta)
+                outcome.created.append(new_doc)
+                existing[file_id] = new_doc
+                existing_by_name[(name, parent)] = new_doc
+                log_deduplication_decision(
+                    "CREATED",
+                    name,
+                    file_id,
+                    parent,
+                    str(new_doc.id),
+                    "New document registered in database.",
+                )
                 continue
+
             _reconcile(document, meta, outcome)
 
         for file_id, document in existing.items():
@@ -112,7 +161,19 @@ def sync_drive_files(files, *, ingestion_source, folder_ids=()):
             document.deleted_at = timezone.now()
             document.save(update_fields=['deleted_at', 'updated_at'])
             outcome.deleted.append(document)
+            log_deduplication_decision(
+                "SOFT-DELETED",
+                document.name,
+                file_id,
+                document.source_parent_id,
+                str(document.id),
+                "File no longer present in Google Drive folder snapshot.",
+            )
 
+    log_deduplication_summary(
+        outcome.created, outcome.updated, outcome.renamed,
+        outcome.restored, outcome.deleted, outcome.unchanged
+    )
     logger.info('drive sync: %d created, %d updated, %d deleted, %d unchanged',
                 len(outcome.created), len(outcome.updated) + len(outcome.renamed),
                 len(outcome.deleted), outcome.unchanged)
