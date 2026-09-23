@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -10,6 +10,12 @@ import {
   Avatar,
   IconButton,
   Tooltip,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogContentText,
+  DialogActions,
+  Button,
 } from '@mui/material';
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import DashboardOutlinedIcon from '@mui/icons-material/DashboardOutlined';
@@ -27,15 +33,32 @@ export default function Sidebar({
 }) {
   const { currentUser, logout } = useAuth();
   const navigate = useNavigate();
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
-  const handleLogout = () => {
+  const handleOpenLogoutConfirm = () => {
+    setShowLogoutConfirm(true);
+  };
+
+  const handleCloseLogoutConfirm = () => {
+    setShowLogoutConfirm(false);
+  };
+
+  const handleConfirmLogout = () => {
+    setShowLogoutConfirm(false);
     logout();
     navigate('/login', { replace: true });
   };
 
-  const displayName = currentUser?.username || user?.name || 'Reviewer';
-  const displayEmail = currentUser?.email || user?.email || 'reviewer@clausewright.com';
-  const initial = (displayName[0] || 'R').toUpperCase();
+  const displayName =
+    currentUser?.username ||
+    currentUser?.name ||
+    user?.name ||
+    user?.username ||
+    (currentUser?.email ? currentUser.email.split('@')[0] : '') ||
+    (user?.email ? user.email.split('@')[0] : '') ||
+    'User';
+  const displayEmail = currentUser?.email || user?.email || '';
+  const initial = (displayName?.[0] || displayEmail?.[0] || 'U').toUpperCase();
 
   return (
     <Box
@@ -330,7 +353,7 @@ export default function Sidebar({
           <IconButton
             id="sidebar-logout-btn"
             size="small"
-            onClick={handleLogout}
+            onClick={handleOpenLogoutConfirm}
             sx={{
               color: '#7b838c',
               p: 0.75,
@@ -345,6 +368,60 @@ export default function Sidebar({
           </IconButton>
         </Tooltip>
       </Box>
+
+      {/* Logout Confirmation Dialog */}
+      <Dialog
+        open={showLogoutConfirm}
+        onClose={handleCloseLogoutConfirm}
+        PaperProps={{
+          sx: {
+            borderRadius: 2.5,
+            p: 1,
+            width: '100%',
+            maxWidth: 380,
+            boxShadow: '0 20px 45px -12px rgba(15, 23, 42, 0.15)',
+          },
+        }}
+      >
+        <DialogTitle sx={{ fontWeight: 700, fontSize: '1.05rem', color: '#1b1f24', pb: 0.75 }}>
+          Sign Out
+        </DialogTitle>
+        <DialogContent sx={{ pb: 2 }}>
+          <DialogContentText sx={{ color: '#4a5159', fontSize: '0.88rem', lineHeight: 1.5 }}>
+            Are you sure you want to sign out of your workspace?
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions sx={{ px: 2, pb: 1.5, gap: 1 }}>
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={handleCloseLogoutConfirm}
+            sx={{
+              textTransform: 'none',
+              fontWeight: 600,
+              color: '#4a5159',
+              borderColor: '#cfcfc8',
+              '&:hover': { borderColor: '#9ca3af', bgcolor: '#f8fafc' },
+            }}
+          >
+            No, Cancel
+          </Button>
+          <Button
+            variant="contained"
+            size="small"
+            onClick={handleConfirmLogout}
+            sx={{
+              textTransform: 'none',
+              fontWeight: 600,
+              bgcolor: '#dc2626',
+              color: '#ffffff',
+              '&:hover': { bgcolor: '#b91c1c' },
+            }}
+          >
+            Yes, Sign Out
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

@@ -129,12 +129,25 @@ export default function Signup() {
 
     try {
       await signup({
-        username: formData.username,
-        email: formData.email,
+        username: formData.username.trim(),
+        email: formData.email.trim(),
         password: formData.password,
         role: formData.role,
       });
-      navigate('/overview', { replace: true });
+      // Redirect to login page, not overview page directly
+      try {
+        sessionStorage.setItem('clausewright_flash_signup', 'Account created successfully! Please sign in with your credentials.');
+      } catch {
+        /* ignore */
+      }
+      navigate('/login', {
+        replace: true,
+        state: {
+          signupSuccess: true,
+          registeredEmail: formData.email.trim(),
+          message: 'Account created successfully! Please sign in with your credentials.',
+        },
+      });
     } catch (err) {
       setErrorMsg(err.message || 'Registration failed. Please try again.');
     }
@@ -149,9 +162,10 @@ export default function Signup() {
         <Alert
           severity="error"
           sx={{
-            mb: 2.5,
-            borderRadius: 2,
-            fontSize: '0.84rem',
+            mb: 1.5,
+            borderRadius: 1.5,
+            fontSize: '0.82rem',
+            py: 0.5,
             alignItems: 'center',
           }}
           onClose={() => setErrorMsg('')}
@@ -162,10 +176,10 @@ export default function Signup() {
 
       <Box component="form" onSubmit={handleSubmit} noValidate>
         {/* Username Field */}
-        <Box sx={{ mb: 2 }}>
+        <Box sx={{ mb: 1.2 }}>
           <Typography
             variant="body2"
-            sx={{ fontWeight: 600, color: '#1b1f24', mb: 0.75 }}
+            sx={{ fontWeight: 600, color: '#1b1f24', mb: 0.35, fontSize: '0.78rem' }}
           >
             Username
           </Typography>
@@ -173,6 +187,7 @@ export default function Signup() {
             id="signup-username"
             name="username"
             type="text"
+            size="small"
             placeholder="e.g. janesmith"
             fullWidth
             value={formData.username}
@@ -184,7 +199,7 @@ export default function Signup() {
               input: {
                 startAdornment: (
                   <InputAdornment position="start">
-                    <PersonOutlinedIcon sx={{ color: '#7b838c', fontSize: 20 }} />
+                    <PersonOutlinedIcon sx={{ color: '#7b838c', fontSize: 18 }} />
                   </InputAdornment>
                 ),
               },
@@ -193,10 +208,10 @@ export default function Signup() {
         </Box>
 
         {/* Email Field */}
-        <Box sx={{ mb: 2 }}>
+        <Box sx={{ mb: 1.2 }}>
           <Typography
             variant="body2"
-            sx={{ fontWeight: 600, color: '#1b1f24', mb: 0.75 }}
+            sx={{ fontWeight: 600, color: '#1b1f24', mb: 0.35, fontSize: '0.78rem' }}
           >
             Email address
           </Typography>
@@ -204,6 +219,7 @@ export default function Signup() {
             id="signup-email"
             name="email"
             type="email"
+            size="small"
             placeholder="name@organization.com"
             fullWidth
             value={formData.email}
@@ -215,7 +231,7 @@ export default function Signup() {
               input: {
                 startAdornment: (
                   <InputAdornment position="start">
-                    <EmailOutlinedIcon sx={{ color: '#7b838c', fontSize: 20 }} />
+                    <EmailOutlinedIcon sx={{ color: '#7b838c', fontSize: 18 }} />
                   </InputAdornment>
                 ),
               },
@@ -224,10 +240,10 @@ export default function Signup() {
         </Box>
 
         {/* Password Field */}
-        <Box sx={{ mb: formData.password ? 1 : 2 }}>
+        <Box sx={{ mb: formData.password ? 0.75 : 1.2 }}>
           <Typography
             variant="body2"
-            sx={{ fontWeight: 600, color: '#1b1f24', mb: 0.75 }}
+            sx={{ fontWeight: 600, color: '#1b1f24', mb: 0.35, fontSize: '0.78rem' }}
           >
             Password
           </Typography>
@@ -235,7 +251,8 @@ export default function Signup() {
             id="signup-password"
             name="password"
             type={showPassword ? 'text' : 'password'}
-            placeholder="Create a strong password (min 6 characters)"
+            size="small"
+            placeholder="Create a password (min 6 characters)"
             fullWidth
             value={formData.password}
             onChange={handleChange}
@@ -246,7 +263,7 @@ export default function Signup() {
               input: {
                 startAdornment: (
                   <InputAdornment position="start">
-                    <LockOutlinedIcon sx={{ color: '#7b838c', fontSize: 20 }} />
+                    <LockOutlinedIcon sx={{ color: '#7b838c', fontSize: 18 }} />
                   </InputAdornment>
                 ),
                 endAdornment: (
@@ -256,9 +273,9 @@ export default function Signup() {
                       onClick={handleTogglePassword}
                       edge="end"
                       size="small"
-                      sx={{ color: '#7b838c' }}
+                      sx={{ color: '#7b838c', p: 0.5 }}
                     >
-                      {showPassword ? <VisibilityOff fontSize="small" /> : <Visibility fontSize="small" />}
+                      {showPassword ? <VisibilityOff sx={{ fontSize: 18 }} /> : <Visibility sx={{ fontSize: 18 }} />}
                     </IconButton>
                   </InputAdornment>
                 ),
@@ -269,9 +286,9 @@ export default function Signup() {
 
         {/* Password Strength Indicator */}
         {formData.password && (
-          <Box sx={{ mb: 2 }}>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-              <Typography variant="caption" sx={{ color: '#7b838c', fontSize: '0.74rem' }}>
+          <Box sx={{ mb: 1 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.3 }}>
+              <Typography variant="caption" sx={{ color: '#7b838c', fontSize: '0.7rem' }}>
                 Password strength
               </Typography>
               <Typography
@@ -279,7 +296,7 @@ export default function Signup() {
                 sx={{
                   color: getStrengthColor(),
                   fontWeight: 600,
-                  fontSize: '0.74rem',
+                  fontSize: '0.7rem',
                 }}
               >
                 {strength < 40 ? 'Weak' : strength < 70 ? 'Good' : 'Strong'}
@@ -289,8 +306,8 @@ export default function Signup() {
               variant="determinate"
               value={strength}
               sx={{
-                height: 4,
-                borderRadius: 2,
+                height: 3,
+                borderRadius: 1.5,
                 backgroundColor: '#e3e3de',
                 '& .MuiLinearProgress-bar': {
                   backgroundColor: getStrengthColor(),
@@ -301,10 +318,10 @@ export default function Signup() {
         )}
 
         {/* Confirm Password Field */}
-        <Box sx={{ mb: 2.5 }}>
+        <Box sx={{ mb: 1.2 }}>
           <Typography
             variant="body2"
-            sx={{ fontWeight: 600, color: '#1b1f24', mb: 0.75 }}
+            sx={{ fontWeight: 600, color: '#1b1f24', mb: 0.35, fontSize: '0.78rem' }}
           >
             Confirm Password
           </Typography>
@@ -312,6 +329,7 @@ export default function Signup() {
             id="signup-confirm-password"
             name="confirmPassword"
             type={showConfirmPassword ? 'text' : 'password'}
+            size="small"
             placeholder="Re-enter your password"
             fullWidth
             value={formData.confirmPassword}
@@ -329,7 +347,7 @@ export default function Signup() {
                           formData.confirmPassword && formData.password === formData.confirmPassword
                             ? '#10b981'
                             : '#7b838c',
-                        fontSize: 20,
+                        fontSize: 18,
                       }}
                     />
                   </InputAdornment>
@@ -341,9 +359,9 @@ export default function Signup() {
                       onClick={handleToggleConfirmPassword}
                       edge="end"
                       size="small"
-                      sx={{ color: '#7b838c' }}
+                      sx={{ color: '#7b838c', p: 0.5 }}
                     >
-                      {showConfirmPassword ? <VisibilityOff fontSize="small" /> : <Visibility fontSize="small" />}
+                      {showConfirmPassword ? <VisibilityOff sx={{ fontSize: 18 }} /> : <Visibility sx={{ fontSize: 18 }} />}
                     </IconButton>
                   </InputAdornment>
                 ),
@@ -353,14 +371,14 @@ export default function Signup() {
         </Box>
 
         {/* Role Dropdown */}
-        <Box sx={{ mb: 2.5 }}>
+        <Box sx={{ mb: 1.5 }}>
           <Typography
             variant="body2"
-            sx={{ fontWeight: 600, color: '#1b1f24', mb: 0.75 }}
+            sx={{ fontWeight: 600, color: '#1b1f24', mb: 0.35, fontSize: '0.78rem' }}
           >
             Role
           </Typography>
-          <FormControl fullWidth error={Boolean(fieldErrors.role)}>
+          <FormControl fullWidth size="small" error={Boolean(fieldErrors.role)}>
             <Select
               id="signup-role"
               name="role"
@@ -370,18 +388,19 @@ export default function Signup() {
               displayEmpty
               startAdornment={
                 <InputAdornment position="start">
-                  <WorkOutlineIcon sx={{ color: '#7b838c', fontSize: 20, ml: 0.5 }} />
+                  <WorkOutlineIcon sx={{ color: '#7b838c', fontSize: 18, ml: 0.5 }} />
                 </InputAdornment>
               }
               sx={{
-                '& .MuiSelect-select': { pl: 0.5 },
+                fontSize: '0.85rem',
+                '& .MuiSelect-select': { pl: 0.5, py: '8.5px' },
               }}
             >
               <MenuItem value="" disabled>
-                <em style={{ color: '#9ca3af' }}>Select your role</em>
+                <em style={{ color: '#9ca3af', fontStyle: 'normal' }}>Select your role</em>
               </MenuItem>
               {ROLES.map((r) => (
-                <MenuItem key={r} value={r}>
+                <MenuItem key={r} value={r} sx={{ fontSize: '0.85rem' }}>
                   {r}
                 </MenuItem>
               ))}
@@ -400,16 +419,16 @@ export default function Signup() {
           fullWidth
           disabled={loading}
           sx={{
-            py: 1.25,
-            fontSize: '0.92rem',
+            py: 0.95,
+            fontSize: '0.88rem',
             fontWeight: 600,
             textTransform: 'none',
-            mb: 2.5,
+            mb: 1.25,
           }}
         >
           {loading ? (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
-              <CircularProgress size={18} color="inherit" />
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <CircularProgress size={16} color="inherit" />
               <span>Creating your account...</span>
             </Box>
           ) : (
@@ -417,11 +436,11 @@ export default function Signup() {
           )}
         </Button>
 
-        <Divider sx={{ my: 1.5 }} />
+        <Divider sx={{ my: 1 }} />
 
         {/* Switch to Login Link */}
-        <Box sx={{ textAlign: 'center', mt: 1.5 }}>
-          <Typography variant="body2" sx={{ color: '#4a5159', fontSize: '0.86rem' }}>
+        <Box sx={{ textAlign: 'center', mt: 1 }}>
+          <Typography variant="body2" sx={{ color: '#4a5159', fontSize: '0.82rem' }}>
             Already have an account?{' '}
             <Link
               component={RouterLink}

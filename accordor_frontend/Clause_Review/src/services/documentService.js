@@ -153,6 +153,15 @@ export const documentService = {
   },
 
   /**
+   * The workspace endpoint for the document: returns clauses, micro chunks,
+   * heading trails, labels, type names, and sub types.
+   */
+  workspace(documentId, { needsReview } = {}) {
+    return get(`/api/documents/${documentId}/workspace/`,
+      toQuery({ needs_review: needsReview }));
+  },
+
+  /**
    * The clause types a verdict can carry, for filter menus and legends.
    * -> { version, clause_types: [...], non_clause_types: [...] }
    *

@@ -4,7 +4,7 @@ import SecurityIcon from '@mui/icons-material/Security';
 import SyncAltIcon from '@mui/icons-material/SyncAlt';
 import ArticleIcon from '@mui/icons-material/Article';
 
-export default function AuthLayout({ children, title, subtitle }) {
+export default function AuthLayout({ children, title, subtitle, maxWidth = 860 }) {
   return (
     <Box
       sx={{
@@ -14,7 +14,7 @@ export default function AuthLayout({ children, title, subtitle }) {
         alignItems: 'center',
         justifyContent: 'center',
         backgroundColor: '#fafaf8',
-        p: { xs: 2, sm: 3, md: 4 },
+        p: { xs: 1.5, sm: 2 },
         position: 'relative',
         overflow: 'auto',
       }}
@@ -54,15 +54,16 @@ export default function AuthLayout({ children, title, subtitle }) {
           position: 'relative',
           zIndex: 1,
           width: '100%',
-          maxWidth: 960,
-          minHeight: 580,
-          borderRadius: 3,
+          maxWidth: maxWidth,
+          maxHeight: { xs: 'none', md: 'calc(100vh - 24px)' },
+          borderRadius: 2.5,
           border: '1px solid #e3e3de',
           boxShadow: '0 20px 45px -12px rgba(15, 23, 42, 0.08), 0 1px 3px rgba(0, 0, 0, 0.04)',
           overflow: 'hidden',
           display: 'grid',
           gridTemplateColumns: { xs: '1fr', md: '1fr 1.15fr' },
           backgroundColor: '#ffffff',
+          my: 'auto',
         }}
       >
         {/* Left Side: Brand & Feature Showcase */}
@@ -70,7 +71,7 @@ export default function AuthLayout({ children, title, subtitle }) {
           sx={{
             background: 'linear-gradient(155deg, #10243e 0%, #1a365d 50%, #0f1d31 100%)',
             color: '#ffffff',
-            p: { xs: 3.5, sm: 4.5, md: 5 },
+            p: { xs: 2.5, sm: 3, md: 3.5 },
             display: 'flex',
             flexDirection: 'column',
             justifyContent: 'space-between',
@@ -92,11 +93,11 @@ export default function AuthLayout({ children, title, subtitle }) {
 
           {/* Top Branding */}
           <Box sx={{ position: 'relative', zIndex: 1 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 3 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, mb: 2 }}>
               <Box
                 sx={{
-                  width: 36,
-                  height: 36,
+                  width: 32,
+                  height: 32,
                   borderRadius: 1.5,
                   backgroundColor: 'rgba(255, 255, 255, 0.12)',
                   backdropFilter: 'blur(8px)',
@@ -106,7 +107,7 @@ export default function AuthLayout({ children, title, subtitle }) {
                   justifyContent: 'center',
                 }}
               >
-                <ArticleIcon sx={{ fontSize: 20, color: '#93c5fd' }} />
+                <ArticleIcon sx={{ fontSize: 18, color: '#93c5fd' }} />
               </Box>
               <Box>
                 <Typography
@@ -116,12 +117,13 @@ export default function AuthLayout({ children, title, subtitle }) {
                     fontWeight: 700,
                     letterSpacing: '-0.02em',
                     lineHeight: 1.1,
+                    fontSize: '1rem',
                     color: '#ffffff',
                   }}
                 >
                   clausereview
                 </Typography>
-                <Typography variant="caption" sx={{ color: '#94a3b8', fontSize: '0.72rem' }}>
+                <Typography variant="caption" sx={{ color: '#94a3b8', fontSize: '0.7rem' }}>
                   Workspace 
                 </Typography>
               </Box>
@@ -133,8 +135,8 @@ export default function AuthLayout({ children, title, subtitle }) {
                 fontWeight: 700,
                 lineHeight: 1.25,
                 color: '#ffffff',
-                mb: 1.5,
-                fontSize: { xs: '1.4rem', sm: '1.75rem' },
+                mb: 1,
+                fontSize: { xs: '1.25rem', sm: '1.45rem' },
               }}
             >
               Analyze legal clauses with precision.
@@ -144,8 +146,8 @@ export default function AuthLayout({ children, title, subtitle }) {
               variant="body2"
               sx={{
                 color: '#cbd5e1',
-                lineHeight: 1.6,
-                fontSize: '0.88rem',
+                lineHeight: 1.45,
+                fontSize: '0.82rem',
               }}
             >
               Streamline Google Drive document syncing, review critical agreement clauses, and index contracts seamlessly.
@@ -157,51 +159,51 @@ export default function AuthLayout({ children, title, subtitle }) {
             sx={{
               position: 'relative',
               zIndex: 1,
-              mt: { xs: 3, md: 4 },
+              mt: { xs: 2, md: 2.5 },
               display: 'flex',
               flexDirection: 'column',
-              gap: 2,
+              gap: 1.5,
             }}
           >
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25 }}>
               <Box
                 sx={{
-                  p: 0.8,
+                  p: 0.7,
                   borderRadius: 1,
                   bgcolor: 'rgba(255, 255, 255, 0.08)',
                   display: 'flex',
                   color: '#60a5fa',
                 }}
               >
-                <SyncAltIcon sx={{ fontSize: 18 }} />
+                <SyncAltIcon sx={{ fontSize: 16 }} />
               </Box>
               <Box>
-                <Typography variant="subtitle2" sx={{ color: '#f8fafc', fontWeight: 600, fontSize: '0.82rem' }}>
+                <Typography variant="subtitle2" sx={{ color: '#f8fafc', fontWeight: 600, fontSize: '0.8rem' }}>
                   Google Drive Integration
                 </Typography>
-                <Typography variant="caption" sx={{ color: '#94a3b8', fontSize: '0.73rem' }}>
+                <Typography variant="caption" sx={{ color: '#94a3b8', fontSize: '0.71rem' }}>
                   Direct folder binding with live two-way sync
                 </Typography>
               </Box>
             </Box>
 
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25 }}>
               <Box
                 sx={{
-                  p: 0.8,
+                  p: 0.7,
                   borderRadius: 1,
                   bgcolor: 'rgba(255, 255, 255, 0.08)',
                   display: 'flex',
                   color: '#34d399',
                 }}
               >
-                <SecurityIcon sx={{ fontSize: 18 }} />
+                <SecurityIcon sx={{ fontSize: 16 }} />
               </Box>
               <Box>
-                <Typography variant="subtitle2" sx={{ color: '#f8fafc', fontWeight: 600, fontSize: '0.82rem' }}>
+                <Typography variant="subtitle2" sx={{ color: '#f8fafc', fontWeight: 600, fontSize: '0.8rem' }}>
                   Enterprise Role Security
                 </Typography>
-                <Typography variant="caption" sx={{ color: '#94a3b8', fontSize: '0.73rem' }}>
+                <Typography variant="caption" sx={{ color: '#94a3b8', fontSize: '0.71rem' }}>
                   Authenticated auditor & reviewer access
                 </Typography>
               </Box>
@@ -213,8 +215,8 @@ export default function AuthLayout({ children, title, subtitle }) {
             variant="caption"
             sx={{
               color: '#64748b',
-              fontSize: '0.72rem',
-              mt: 3,
+              fontSize: '0.7rem',
+              mt: 2,
               position: 'relative',
               zIndex: 1,
             }}
@@ -226,27 +228,32 @@ export default function AuthLayout({ children, title, subtitle }) {
         {/* Right Side: Authentication Form Card */}
         <Box
           sx={{
-            p: { xs: 3.5, sm: 4.5, md: 5 },
+            p: { xs: 2.5, sm: 3, md: 3.5 },
             display: 'flex',
             flexDirection: 'column',
             justifyContent: 'center',
             backgroundColor: '#ffffff',
+            overflowY: 'auto',
+            maxHeight: { xs: 'none', md: 'calc(100vh - 24px)' },
+            '&::-webkit-scrollbar': { width: '5px' },
+            '&::-webkit-scrollbar-thumb': { backgroundColor: '#e2e8f0', borderRadius: '4px' },
           }}
         >
           {/* Form Header */}
-          <Box sx={{ mb: 3 }}>
+          <Box sx={{ mb: 1.75 }}>
             <Typography
               variant="h5"
               sx={{
                 fontWeight: 700,
                 color: '#1b1f24',
                 letterSpacing: '-0.01em',
-                mb: 0.8,
+                fontSize: { xs: '1.2rem', sm: '1.35rem' },
+                mb: 0.3,
               }}
             >
               {title}
             </Typography>
-            <Typography variant="body2" sx={{ color: '#4a5159', lineHeight: 1.5 }}>
+            <Typography variant="body2" sx={{ color: '#4a5159', lineHeight: 1.35, fontSize: '0.82rem' }}>
               {subtitle}
             </Typography>
           </Box>

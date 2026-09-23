@@ -4,28 +4,25 @@ import * as authService from '../services/authService';
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [currentUser, setCurrentUser] = useState(null);
-  // `loading` is true during the initial session rehydration on mount and
-  // during any login / signup / logout call so the UI can show a spinner.
-  const [loading, setLoading] = useState(true);
+  const [currentUser, setCurrentUser] = useState(() => authService.getStoredUser());
+  const [loading, setLoading] = useState(false);
 
   // -------------------------------------------------------------------------
-  // On mount: rehydrate the session from the stored token by calling /me/.
-  // If the token is missing, expired, or revoked on the server the call
-  // returns null and we stay unauthenticated.
+  // On mount: validate the session in the background from /me/.
   // -------------------------------------------------------------------------
   useEffect(() => {
     let cancelled = false;
 
     authService.me()
       .then((user) => {
-        if (!cancelled) setCurrentUser(user);
+        if (!cancelled && user) {
+          setCurrentUser(user);
+        }
       })
-      .catch(() => {
-        if (!cancelled) setCurrentUser(null);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+      .catch((err) => {
+        if (!cancelled && err?.status === 401) {
+          setCurrentUser(null);
+        }
       });
 
     return () => {
@@ -57,37 +54,29 @@ export function AuthProvider({ children }) {
   const signup = async ({ username, email, password, role, rememberMe = false }) => {
     setLoading(true);
     try {
-      const { user } = await authService.signup({
+      const data = await authService.signup({
         username,
         email,
         password,
         role,
         remember_me: rememberMe,
       });
-      setCurrentUser(user);
-      return user;
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // -------------------------------------------------------------------------
-  // logout
-  // -------------------------------------------------------------------------
-  const logout = async () => {
-    setLoading(true);
-    try {
-      await authService.logout();
-    } finally {
+      authService.clearStoredToken();
       setCurrentUser(null);
+      return data?.user || data;
+    } finally {
       setLoading(false);
     }
   };
 
   // -------------------------------------------------------------------------
-  // demoLogin — hits the real backend with the demo account
+  // logout — instant local clear, server call in background
   // -------------------------------------------------------------------------
-  const demoLogin = () => login('reviewer@clausewright.com', 'password123');
+  const logout = () => {
+    authService.clearStoredToken();
+    setCurrentUser(null);
+    authService.logout().catch(() => {});
+  };
 
   return (
     <AuthContext.Provider
@@ -98,7 +87,6 @@ export function AuthProvider({ children }) {
         login,
         signup,
         logout,
-        demoLogin,
       }}
     >
       {children}

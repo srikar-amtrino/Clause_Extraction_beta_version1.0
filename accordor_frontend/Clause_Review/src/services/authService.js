@@ -11,9 +11,10 @@
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
 const TOKEN_KEY = 'clausewright_token';
+const USER_KEY = 'clausewright_user';
 
 // ---------------------------------------------------------------------------
-// Token storage helpers
+// Token & User storage helpers
 // ---------------------------------------------------------------------------
 
 export function getStoredToken() {
@@ -35,6 +36,26 @@ function storeToken(token) {
 export function clearStoredToken() {
   try {
     localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function getStoredUser() {
+  try {
+    const raw = localStorage.getItem(USER_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function storeUser(user) {
+  try {
+    if (user) {
+      localStorage.setItem(USER_KEY, JSON.stringify(user));
+    }
   } catch {
     /* ignore */
   }
@@ -97,7 +118,7 @@ async function request(path, method = 'GET', body = null) {
  */
 export async function signup(payload) {
   const data = await request('/api/auth/signup/', 'POST', payload);
-  storeToken(data.token);
+  // User must explicitly sign in through the login page
   return data;
 }
 
@@ -110,6 +131,7 @@ export async function signup(payload) {
 export async function login(payload) {
   const data = await request('/api/auth/login/', 'POST', payload);
   storeToken(data.token);
+  storeUser(data.user);
   return data;
 }
 
@@ -137,6 +159,9 @@ export async function me() {
 
   try {
     const data = await request('/api/auth/me/', 'GET');
+    if (data.user) {
+      storeUser(data.user);
+    }
     return data.user ?? null;
   } catch (err) {
     if (err.status === 401) {

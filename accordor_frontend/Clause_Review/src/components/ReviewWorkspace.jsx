@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Box,
   Typography,
@@ -32,21 +32,167 @@ import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import CheckCircleOutlinedIcon from '@mui/icons-material/CheckCircleOutlined';
 import HistoryIcon from '@mui/icons-material/History';
 import NoteAltOutlinedIcon from '@mui/icons-material/NoteAltOutlined';
-import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
-import AddIcon from '@mui/icons-material/Add';
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
+import { documentService } from '../services/documentService';
+import { useAuth } from '../context/AuthContext';
 
 export default function ReviewWorkspace({
   document: doc,
   onBackToDocuments,
   showToast,
 }) {
+  const { currentUser } = useAuth();
+  const currentUserName = currentUser?.username || currentUser?.name || (currentUser?.email ? currentUser.email.split('@')[0] : 'Reviewer');
+
   const [activeTab, setActiveTab] = useState('review');
   const [activeFilter, setActiveFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedRows, setSelectedRows] = useState([]);
   const [templateTypeMenuAnchor, setTemplateTypeMenuAnchor] = useState(null);
-  const [extractedClauses, setExtractedClauses] = useState(doc?.clauses || []);
+  const [extractedClauses, setExtractedClauses] = useState([]);
+  const [isLoadingClauses, setIsLoadingClauses] = useState(false);
+
+  // Load real extracted clauses from backend pipeline API
+  useEffect(() => {
+    if (!doc) return;
+    const docId = doc.documentId || doc.id;
+    if (!docId) return;
+
+    if (doc.clauses && Array.isArray(doc.clauses) && doc.clauses.length > 0) {
+      setExtractedClauses(doc.clauses);
+      return;
+    }
+
+    let isMounted = true;
+    const loadClauses = async () => {
+      setIsLoadingClauses(true);
+      try {
+        let rows = [];
+
+        // 1. Try classification endpoint with needsReview query param
+        const classRes = await documentService.classification(docId, {
+          needsReview: activeFilter === 'to-review' ? true : undefined,
+        }).catch(() => null);
+
+        if (classRes && classRes.items && classRes.items.length > 0) {
+          rows = classRes.items.map((item, i) => {
+            const clauseId = item.clause_id || (item.chunk_id ? `c${i}` : `c${i}`);
+            const headingTrail = item.heading_trail || item.heading || item.clause_number || `Clause ${i + 1}`;
+            return {
+              id: item.classification_id || item.id || `clause-${i}`,
+              clause_id: clauseId,
+              paraId: clauseId,
+              heading_trail: headingTrail,
+              breadcrumb: headingTrail,
+              text: item.text || item.chunk_text || '',
+              label: item.label || 'Clause',
+              type_name: item.type_name || item.type || 'Unassigned',
+              canonicalType: item.type_name || item.type || 'Unassigned',
+              sub_type: item.sub_type || 'null',
+              subType: item.sub_type || 'null',
+              preview: item.preview || doc.webViewLink || '',
+              confidence: item.confidence,
+              needsReview: item.needs_review,
+            };
+          });
+        }
+
+        // 2. If no classification items, try classificationInput endpoint
+        if (rows.length === 0) {
+          const inputRes = await documentService.classificationInput(docId).catch(() => null);
+          if (inputRes && inputRes.groups && inputRes.groups.length > 0) {
+            const allParas = [];
+            inputRes.groups.forEach((g) => {
+              (g.paragraphs || []).forEach((p) => {
+                allParas.push({
+                  ...p,
+                  groupSection: g.section,
+                });
+              });
+            });
+
+            if (allParas.length > 0) {
+              rows = allParas.map((p, i) => {
+                const clauseId = p.clause_id || `c${i}`;
+                const headingTrail = p.heading_trail || p.groupSection || (p.number ? `Clause ${p.number}` : `Clause ${i + 1}`);
+                const isFrontMatter = headingTrail && headingTrail.toUpperCase().includes('FRONT MATTER');
+                return {
+                  id: p.chunk_id || `chunk-${i}`,
+                  clause_id: clauseId,
+                  paraId: clauseId,
+                  heading_trail: headingTrail,
+                  breadcrumb: headingTrail,
+                  text: p.text || '',
+                  label: isFrontMatter ? 'Non-clause' : (p.label || 'Clause'),
+                  type_name: isFrontMatter ? 'Parties' : 'Unassigned',
+                  canonicalType: isFrontMatter ? 'Parties' : 'Unassigned',
+                  sub_type: 'null',
+                  subType: 'null',
+                  preview: doc.webViewLink || '',
+                };
+              });
+            }
+          }
+        }
+
+        // 3. Fallback to extraction endpoint
+        if (rows.length === 0) {
+          const res = await documentService.extraction(docId).catch(() => null);
+          if (res && res.clauses && res.clauses.length > 0) {
+            rows = res.clauses.map((c, i) => {
+              const clauseId = c.clause_id || `c${i}`;
+              let headingTrail = c.heading_trail || c.path || c.title || (c.number ? `${c.number}` : `Clause ${i + 1}`);
+              if (c.source === 'front_matter') {
+                headingTrail = 'FRONT MATTER > Parties';
+              }
+
+              let fullText = c.text || '';
+              if (c.body_text && c.body_text.trim()) {
+                fullText = fullText ? `${fullText}\n${c.body_text}` : c.body_text;
+              }
+
+              const isFrontMatter = c.source === 'front_matter';
+              return {
+                id: c.clause_id || `clause-${i}`,
+                clause_id: clauseId,
+                paraId: clauseId,
+                heading_trail: headingTrail,
+                breadcrumb: headingTrail,
+                text: fullText,
+                label: isFrontMatter ? 'Non-clause' : (c.label || 'Clause'),
+                type_name: c.type_name || (isFrontMatter ? 'Parties' : (c.canonical_type || c.type || (c.confidence > 0.8 ? 'Interpretation' : 'Unassigned'))),
+                canonicalType: c.type_name || (isFrontMatter ? 'Parties' : (c.canonical_type || c.type || (c.confidence > 0.8 ? 'Interpretation' : 'Unassigned'))),
+                sub_type: c.sub_type || 'null',
+                subType: c.sub_type || 'null',
+                preview: doc.webViewLink || '',
+                confidence: c.confidence,
+                flags: c.flags || [],
+                level: c.level,
+              };
+            });
+          }
+        }
+
+        if (isMounted) {
+          setExtractedClauses(rows);
+        }
+      } catch (err) {
+        if (isMounted) {
+          console.warn('Loading clauses from API failed:', err);
+          setExtractedClauses([]);
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingClauses(false);
+        }
+      }
+    };
+
+    loadClauses();
+    return () => {
+      isMounted = false;
+    };
+  }, [doc, activeFilter]);
 
   if (!doc) {
     return (
@@ -101,24 +247,6 @@ export default function ReviewWorkspace({
     } else {
       setSelectedRows([...selectedRows, index]);
     }
-  };
-
-  const handleExtractClauses = () => {
-    showToast?.(`Initiating clause extraction for ${doc.name}...`);
-  };
-
-  const handleAddEmptyClause = () => {
-    const nextIndex = extractedClauses.length + 1;
-    const newClause = {
-      paraId: `P-${String(nextIndex).padStart(3, '0')}`,
-      breadcrumb: `Clause ${nextIndex}\nUnclassified`,
-      text: '',
-      label: 'Clause',
-      canonicalType: 'Unassigned',
-      subType: 'null',
-    };
-    setExtractedClauses([...extractedClauses, newClause]);
-    showToast?.(`Added new clause template slot P-${String(nextIndex).padStart(3, '0')}`);
   };
 
   return (
@@ -215,28 +343,6 @@ export default function ReviewWorkspace({
                 ...getStatusBadgeStyle(doc.status),
               }}
             />
-
-            {/* Mini Progress */}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: 1 }}>
-              <Typography sx={{ fontSize: '12.5px', fontWeight: 700, color: '#1b1f24' }}>
-                {reviewedCount} / {totalParas}
-              </Typography>
-              <Box sx={{ width: 64 }}>
-                <LinearProgress
-                  variant="determinate"
-                  value={progressPercent}
-                  sx={{
-                    height: 5,
-                    borderRadius: 3,
-                    bgcolor: '#e5e7eb',
-                    '& .MuiLinearProgress-bar': {
-                      bgcolor: '#15803d',
-                      borderRadius: 3,
-                    },
-                  }}
-                />
-              </Box>
-            </Box>
           </Box>
 
           {/* Right Top Actions */}
@@ -320,13 +426,13 @@ export default function ReviewWorkspace({
         >
           {/* Real file details */}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-            <span>{totalParas} paragraphs</span>
+            <span>pages: {doc.pages ?? 1} · clauses: {doc.clauses ?? totalParas} · paragraphs: {doc.paragraphs ?? totalParas} · {doc.size}</span>
             <span>|</span>
-            <span>{doc.fileName} · {doc.size}</span>
+            <span>Extraction: <strong style={{ color: doc.extractionStatus === 'rejected' ? '#b91c1c' : '#1b1f24', textTransform: 'capitalize' }}>{doc.extractionStatus ? doc.extractionStatus.replace(/_/g, ' ') : 'Extracted'}</strong></span>
             <span>|</span>
-            <span>In Drive since {doc.inDriveSince || 'Recently'}</span>
+            <span>Needs review: <strong style={{ color: doc.needsReview > 0 ? '#c2410c' : '#1b1f24' }}>{doc.needsReview ?? 0}</strong></span>
             <span>|</span>
-            <span>Reviewer <strong style={{ color: '#1b1f24' }}>{doc.reviewer || 'Reviewer'}</strong></span>
+            <span>Reviewer <strong style={{ color: '#1b1f24' }}>{doc.reviewer || currentUserName}</strong></span>
           </Box>
 
           {/* Status color count pills */}
@@ -425,48 +531,6 @@ export default function ReviewWorkspace({
             <NoteAltOutlinedIcon sx={{ fontSize: 16 }} />
             <span>Document note</span>
           </Box>
-        </Box>
-
-        {/* Action Buttons: Add Clause & Extract Clauses */}
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Button
-            size="small"
-            startIcon={<AddIcon sx={{ fontSize: 15 }} />}
-            onClick={handleAddEmptyClause}
-            sx={{
-              height: 28,
-              fontSize: '11.5px',
-              fontWeight: 500,
-              textTransform: 'none',
-              px: 1.25,
-              bgcolor: '#ffffff',
-              color: '#1e3a5f',
-              border: '1px solid #cfcfc8',
-              borderRadius: 1.5,
-              '&:hover': { bgcolor: '#f5f5f2', borderColor: '#1e3a5f' },
-            }}
-          >
-            Add clause slot
-          </Button>
-
-          <Button
-            size="small"
-            startIcon={<AutoAwesomeOutlinedIcon sx={{ fontSize: 14 }} />}
-            onClick={handleExtractClauses}
-            sx={{
-              height: 28,
-              fontSize: '11.5px',
-              fontWeight: 600,
-              textTransform: 'none',
-              px: 1.25,
-              bgcolor: '#1e3a5f',
-              color: '#ffffff',
-              borderRadius: 1.5,
-              '&:hover': { bgcolor: '#152943' },
-            }}
-          >
-            Extract clauses
-          </Button>
         </Box>
       </Box>
 
@@ -668,7 +732,28 @@ export default function ReviewWorkspace({
               </TableRow>
             </TableHead>
             <TableBody>
-              {extractedClauses.length === 0 ? (
+              {isLoadingClauses ? (
+                <TableRow>
+                  <TableCell colSpan={8} sx={{ py: 6, textAlign: 'center' }}>
+                    <Box
+                      sx={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 2,
+                        maxWidth: 360,
+                        mx: 'auto',
+                      }}
+                    >
+                      <LinearProgress sx={{ width: '100%', height: 4, borderRadius: 2 }} />
+                      <Typography sx={{ fontSize: '13px', color: '#64748b' }}>
+                        Loading extracted clauses from backend pipeline...
+                      </Typography>
+                    </Box>
+                  </TableCell>
+                </TableRow>
+              ) : extractedClauses.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={8} sx={{ py: 6, textAlign: 'center' }}>
                     <Box
@@ -700,28 +785,8 @@ export default function ReviewWorkspace({
                         Clause template ready for {doc.name}
                       </Typography>
                       <Typography sx={{ fontSize: '12px', color: '#64748b', lineHeight: 1.5 }}>
-                        No clauses extracted yet for this document. Click "Extract clauses" to run clause classification, or click "Add clause slot" to enter clauses manually.
+                        No clauses extracted yet for this document from the backend pipeline.
                       </Typography>
-                      <Box sx={{ display: 'flex', gap: 1.5, mt: 1 }}>
-                        <Button
-                          variant="contained"
-                          size="small"
-                          startIcon={<AutoAwesomeOutlinedIcon sx={{ fontSize: 15 }} />}
-                          onClick={handleExtractClauses}
-                          sx={{ bgcolor: '#1e3a5f', textTransform: 'none', fontWeight: 600, fontSize: '12px' }}
-                        >
-                          Extract clauses
-                        </Button>
-                        <Button
-                          variant="outlined"
-                          size="small"
-                          startIcon={<AddIcon sx={{ fontSize: 15 }} />}
-                          onClick={handleAddEmptyClause}
-                          sx={{ borderColor: '#cfcfc8', color: '#1b1f24', textTransform: 'none', fontWeight: 600, fontSize: '12px' }}
-                        >
-                          Add clause slot
-                        </Button>
-                      </Box>
                     </Box>
                   </TableCell>
                 </TableRow>
@@ -749,34 +814,38 @@ export default function ReviewWorkspace({
                         />
                       </TableCell>
 
-                      {/* Para ID with bullet circle */}
+                      {/* Clause ID / Para ID with bullet circle */}
                       <TableCell sx={{ py: 1 }}>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                           <Box
                             sx={{
-                              width: 10,
-                              height: 10,
+                              width: 8,
+                              height: 8,
                               borderRadius: '50%',
                               bgcolor: idx === 0 ? '#15803d' : '#22c55e',
                               flexShrink: 0,
                             }}
                           />
                           <Typography sx={{ fontSize: '12px', fontWeight: 600, color: '#1e293b' }}>
-                            {row.paraId}
+                            {row.clause_id || row.paraId}
                           </Typography>
                         </Box>
                       </TableCell>
 
-                      {/* Breadcrumb */}
+                      {/* Breadcrumb (heading_trail) */}
                       <TableCell sx={{ py: 1 }}>
                         <Typography sx={{ fontSize: '11.5px', fontWeight: 600, color: '#1e293b', lineHeight: 1.2 }}>
-                          {row.breadcrumb.split('\n')[0]}
+                          {row.heading_trail ? row.heading_trail.split(' > ')[0] : (row.breadcrumb ? row.breadcrumb.split('\n')[0] : 'General')}
                         </Typography>
-                        {row.breadcrumb.split('\n')[1] && (
+                        {(row.heading_trail && row.heading_trail.includes(' > ')) ? (
+                          <Typography sx={{ fontSize: '10.5px', color: '#64748b', lineHeight: 1.2 }}>
+                            {row.heading_trail.split(' > ').slice(1).join(' > ')}
+                          </Typography>
+                        ) : row.breadcrumb && row.breadcrumb.split('\n')[1] ? (
                           <Typography sx={{ fontSize: '10.5px', color: '#64748b', lineHeight: 1.2 }}>
                             {row.breadcrumb.split('\n')[1]}
                           </Typography>
-                        )}
+                        ) : null}
                       </TableCell>
 
                       {/* Text Information */}
@@ -790,32 +859,32 @@ export default function ReviewWorkspace({
                             maxWidth: { xs: 300, sm: 480, md: 620 },
                           }}
                         >
-                          {row.text || '[Empty clause text — type or paste clause text here]'}
+                          {row.text || '[Empty clause text]'}
                         </Typography>
                       </TableCell>
 
                       {/* Label */}
                       <TableCell sx={{ py: 1 }}>
                         <Chip
-                          label={row.label}
+                          label={row.label || 'Clause'}
                           size="small"
                           sx={{
                             height: 22,
                             fontSize: '11px',
                             fontWeight: 500,
-                            bgcolor: row.label === 'Clause' ? '#eff6ff' : '#f8fafc',
-                            color: row.label === 'Clause' ? '#1d4ed8' : '#64748b',
+                            bgcolor: (row.label === 'Clause' || !row.label) ? '#eff6ff' : '#f8fafc',
+                            color: (row.label === 'Clause' || !row.label) ? '#1d4ed8' : '#64748b',
                             border: '1px solid',
-                            borderColor: row.label === 'Clause' ? '#bfdbfe' : '#e2e8f0',
+                            borderColor: (row.label === 'Clause' || !row.label) ? '#bfdbfe' : '#e2e8f0',
                           }}
                         />
                       </TableCell>
 
-                      {/* Canonical Type */}
+                      {/* Canonical Type (type_name) */}
                       <TableCell sx={{ py: 1 }}>
                         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                          <Typography sx={{ fontSize: '12px', color: row.canonicalType === 'Unassigned' ? '#94a3b8' : '#1e293b' }}>
-                            {row.canonicalType}
+                          <Typography sx={{ fontSize: '12px', color: (row.type_name || row.canonicalType) === 'Unassigned' ? '#94a3b8' : '#1e293b' }}>
+                            {row.type_name || row.canonicalType || 'Unassigned'}
                           </Typography>
                           <KeyboardArrowDownIcon sx={{ fontSize: 14, color: '#94a3b8' }} />
                         </Box>
@@ -824,18 +893,32 @@ export default function ReviewWorkspace({
                       {/* Sub-type */}
                       <TableCell sx={{ py: 1 }}>
                         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                          <Typography sx={{ fontSize: '12px', color: row.subType === 'null' ? '#94a3b8' : '#1e293b' }}>
-                            {row.subType}
+                          <Typography sx={{ fontSize: '12px', color: (row.sub_type || row.subType) === 'null' ? '#94a3b8' : '#1e293b' }}>
+                            {row.sub_type || row.subType || 'null'}
                           </Typography>
                           <KeyboardArrowDownIcon sx={{ fontSize: 14, color: '#94a3b8' }} />
                         </Box>
                       </TableCell>
 
-                      {/* Preview eye icon */}
+                      {/* Preview */}
                       <TableCell align="center" sx={{ py: 1 }}>
-                        <IconButton size="small" sx={{ p: 0.25, color: '#94a3b8', '&:hover': { color: '#0284c7' } }}>
-                          <VisibilityOutlinedIcon sx={{ fontSize: 15 }} />
-                        </IconButton>
+                        <Tooltip title={row.preview || doc.webViewLink ? "Open preview" : "Preview"}>
+                          <IconButton
+                            size="small"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const previewUrl = row.preview || doc.webViewLink;
+                              if (previewUrl) {
+                                window.open(previewUrl, '_blank');
+                              } else {
+                                showToast?.(`Preview: ${row.clause_id || row.paraId} (${row.heading_trail || row.breadcrumb || 'Clause'})`);
+                              }
+                            }}
+                            sx={{ p: 0.25, color: '#94a3b8', '&:hover': { color: '#0284c7' } }}
+                          >
+                            <VisibilityOutlinedIcon sx={{ fontSize: 15 }} />
+                          </IconButton>
+                        </Tooltip>
                       </TableCell>
                     </TableRow>
                   );
