@@ -176,8 +176,12 @@ def _unchanged(current, chunker_version):
 
 
 def _create_chunk_run(run, stats, attempt, chunker_version):
+    document_id = run.document_id
+    if not document_id:
+        raise ValueError('Cannot create a chunk run without its document.')
     return ChunkRun.objects.create(
         extraction_run=run,
+        document_id=document_id,
         attempt=attempt,
         is_current=True,
         chunker_version=chunker_version,

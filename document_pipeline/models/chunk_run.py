@@ -23,6 +23,8 @@ class ChunkRun(models.Model):
     extraction_run = models.ForeignKey('document_pipeline.ExtractionRun',
                                        on_delete=models.CASCADE,
                                        related_name='chunk_runs')
+    document = models.ForeignKey('document_pipeline.Document', on_delete=models.CASCADE,
+                                 related_name='chunk_runs')
     attempt = models.PositiveIntegerField(default=1)
     is_current = models.BooleanField(default=True)
 

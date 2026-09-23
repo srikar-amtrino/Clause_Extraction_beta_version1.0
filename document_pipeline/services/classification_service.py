@@ -625,7 +625,8 @@ def write_resolution(run, resolution, *, vocab):
             rows.append(_row(run, paragraph, result, expected, batch.index, type_pks,
                              high_risk, threshold))
     calls = [ClassificationCall(
-        run=run, batch_index=c.batch_index, attempt=c.attempt, chunk_ids=c.chunk_ids,
+        run=run, document_id=run.document_id, batch_index=c.batch_index,
+        attempt=c.attempt, chunk_ids=c.chunk_ids,
         item_count=len(c.chunk_ids), status=c.status, stop_reason=c.stop_reason,
         request_id=c.request_id, input_tokens=c.input_tokens, output_tokens=c.output_tokens,
         cache_read_tokens=c.cache_read_tokens, cache_write_tokens=c.cache_write_tokens,
@@ -659,6 +660,7 @@ def _row(run, paragraph, result, expected, batch_index, type_pks, high_risk, thr
     failed = result.outcome == Classification.FAILED
     return Classification(
         run=run,
+        document_id=run.document_id,
         chunk_id=paragraph.chunk_id,
         outcome=result.outcome,
         label=None if failed else result.label,
