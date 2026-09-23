@@ -78,10 +78,23 @@ def _sync_and_queue(credentials, folders, folder_ids):
         source_external_id__in=current_files,
         deleted_at__isnull=True,
     )
-    to_ingest = [
-        document for document in current_documents
-        if document.id in changed_ids or needs_extraction(document)
-    ]
+    # Immediately mark non-.docx files as rejected and only dispatch .docx documents to Celery
+    to_ingest = []
+    for document in current_documents:
+        if not document.name.lower().endswith('.docx'):
+            if document.extraction_status != 'rejected':
+                document.extraction_status = 'rejected'
+                document.save(update_fields=['extraction_status'])
+            continue
+        if document.id in changed_ids or needs_extraction(document):
+            to_ingest.append(document)
+
+    from document_pipeline.pipeline_logger import (
+        log_celery_task_dispatched,
+        log_drive_connected,
+        log_folder_selected,
+    )
+
     task_ids = []
     refreshed_credentials_json = credentials.to_json()
     for document in to_ingest:
@@ -91,6 +104,7 @@ def _sync_and_queue(credentials, folders, folder_ids):
         # ran chunk_documents by hand.
         result = trigger_full_document_pipeline(refreshed_credentials_json, str(document.id))
         task_ids.append(result.id)
+        log_celery_task_dispatched("trigger_full_document_pipeline", str(result.id), "default -> llm_queue", str(document.id))
     print(f'[http] queued {len(task_ids)} ingestion tasks', flush=True)
     return outcome, to_ingest, task_ids, refreshed_credentials_json
 
@@ -128,7 +142,15 @@ def google_drive_callback(request):
             'error': str(error),
         }, status=400)
     request.session['google_drive_credentials'] = credentials.to_json()
-    request.session['google_drive_user'] = get_user_details(credentials)
+    user_info = get_user_details(credentials)
+    request.session['google_drive_user'] = user_info
+
+    # Save session to ensure session_key exists, then log
+    if not request.session.session_key:
+        request.session.save()
+    from document_pipeline.pipeline_logger import log_drive_connected
+    log_drive_connected(user_info, request.session.session_key)
+
     return redirect(request.session.pop(
         'google_drive_oauth_next',
         os.getenv('GOOGLE_OAUTH_FRONTEND_URL', 'http://127.0.0.1:5173/overview'),
@@ -172,6 +194,10 @@ def google_drive_files(request):
         credentials = credentials_from_json(credentials_json)
         folder_ids = list(dict.fromkeys(folder_ids))
         folders = _build_folder_snapshot(request, credentials, folder_ids)
+        current_files = _flatten_files(folders)
+        from document_pipeline.pipeline_logger import log_folder_selected
+        log_folder_selected(folder_ids, folders, len(current_files))
+
         outcome, to_ingest, task_ids, credentials_json = _sync_and_queue(
             credentials, folders, folder_ids)
         request.session['google_drive_folder_ids'] = folder_ids
@@ -207,6 +233,10 @@ def google_drive_sync(request):
     try:
         credentials = credentials_from_json(credentials_json)
         folders = _build_folder_snapshot(request, credentials, folder_ids)
+        current_files = _flatten_files(folders)
+        from document_pipeline.pipeline_logger import log_folder_selected
+        log_folder_selected(folder_ids, folders, len(current_files))
+
         outcome, to_ingest, task_ids, credentials_json = _sync_and_queue(
             credentials, folders, folder_ids)
         request.session['google_drive_credentials'] = credentials_json
