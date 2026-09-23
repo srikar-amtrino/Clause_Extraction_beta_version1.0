@@ -10,7 +10,14 @@ def _ingest_document(self, credentials_json: str, document_id: str, force=False)
 	print("[celery] streaming worker starting document %s" % document_id, flush=True)
 	try:
 		credentials = credentials_from_json(credentials_json)
-		document = Document.objects.select_related("ingestion_source").get(pk=document_id)
+		try:
+			document = Document.objects.select_related("ingestion_source").get(pk=document_id)
+		except Document.DoesNotExist:
+			print(
+				"[celery] streaming worker skipped missing document %s" % document_id,
+				flush=True,
+			)
+			return {"status": "missing", "document_id": document_id, "skipped": True}
 		outcome = ingest_document(credentials, document, force=force)
 		run = outcome.run
 		if not outcome.skipped and run.is_usable:
