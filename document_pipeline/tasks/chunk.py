@@ -22,7 +22,13 @@ def chunk_document_task(self, document_id: str, force=False):
 	"""
 	from document_pipeline.models import ExtractionRun
 	from document_pipeline.services.chunking_service import chunk_extraction_run
+	from document_pipeline.pipeline_logger import (
+		log_celery_task_started,
+		log_chunking_result,
+	)
 
+	task_id = str(getattr(self.request, "id", "local"))
+	log_celery_task_started("chunk_document_task", task_id, document_id)
 	print("[celery] chunking document %s" % document_id, flush=True)
 	run = (ExtractionRun.objects
 	       .filter(document_id=document_id, is_current=True,
@@ -37,6 +43,12 @@ def chunk_document_task(self, document_id: str, force=False):
 
 	outcome = chunk_extraction_run(run, force=force)
 	chunk_run = outcome.chunk_run
+	log_chunking_result(
+		document_id,
+		chunk_run,
+		macro_count=chunk_run.macro_count,
+		micro_count=chunk_run.micro_count,
+	)
 	print("[celery] chunked document %s: %d chunks, skipped=%s"
 	      % (document_id, chunk_run.chunk_count, outcome.skipped), flush=True)
 	return {

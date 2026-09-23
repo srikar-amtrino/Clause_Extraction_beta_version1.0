@@ -259,8 +259,49 @@ def classify_batch(run_id, chunk_ids, batch_index=0, *, classifier=None):
         return 0
     vocab = load_vocabulary(run.taxonomy_version)
     batch = Batch(batch_index, tuple(_groups_for(run.chunk_run, only=todo)))
+
+    from document_pipeline.pipeline_logger import (
+        log_claude_call_details,
+        log_claude_call_start,
+    )
+    log_claude_call_start(str(run.id), batch_index, len(todo), classifier.model_id)
+
     resolution = resolve_batch(batch, classifier=classifier, context=_context(run, vocab))
-    return len(write_resolution(run, resolution, vocab=vocab))
+    written = write_resolution(run, resolution, vocab=vocab)
+
+    try:
+        context = _context(run, vocab)
+        batch_prompt_text = prompts.render_user_message(
+            batch,
+            document_title=context.document_title,
+            contract_type=context.contract_type,
+        )
+
+        for call in resolution.calls:
+            parsed_summary = []
+            for cid, res in resolution.results.items():
+                parsed_summary.append({
+                    'paragraph_id': getattr(res, 'paragraph_id', str(cid)),
+                    'label': getattr(res, 'label', 'Clause') or 'Clause',
+                    'canonical_type': getattr(res, 'type_key', '') or '',
+                    'confidence': getattr(res, 'confidence', 0.0) or 0.0,
+                    'issues': list(getattr(res, 'notes', [])),
+                })
+            log_claude_call_details(
+                run_id=str(run.id),
+                batch_index=batch_index,
+                system_prompt=run.system_prompt or '',
+                batch_prompt=batch_prompt_text,
+                raw_response=call.raw_output,
+                input_tokens=call.input_tokens,
+                output_tokens=call.output_tokens,
+                latency_ms=call.latency_ms,
+                parsed_results=parsed_summary,
+            )
+    except Exception as log_err:
+        logger.warning("Error logging Claude call details: %s", log_err)
+
+    return len(written)
 
 
 def finalize_run(run):
@@ -320,6 +361,21 @@ def finalize_run(run):
             run.is_current = True
         run.save()
         PipelineStageLog.objects.create(**_stage_log(run))
+
+    from document_pipeline.pipeline_logger import log_classification_saved
+    log_classification_saved(
+        str(run.id),
+        str(run.document_id),
+        {
+            'status': run.status,
+            'micro_count': run.micro_count,
+            'classified_count': run.classified_count,
+            'review_count': run.review_count,
+            'call_count': run.call_count,
+            'input_tokens': run.input_tokens,
+            'output_tokens': run.output_tokens,
+        },
+    )
 
     logger.info('classification run %s %s: %d micro, %d classified, %d unclassified, '
                 '%d failed, %d for review, %d calls, tokens in %d / out %d / cache read %d',

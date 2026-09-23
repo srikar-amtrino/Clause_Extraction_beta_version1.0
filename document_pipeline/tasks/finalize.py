@@ -10,7 +10,7 @@ from celery import shared_task
     max_retries=3,
     acks_late=True,
 )
-def finalize_document_classification_task(self, document_id: int):
+def finalize_document_classification_task(self, document_id: str):
     """Finalize classification, materialise Postgres review records, and gate.
 
     Pipeline stops here. Embedding is NOT triggered automatically.
@@ -30,6 +30,7 @@ def finalize_document_classification_task(self, document_id: int):
         materialise_paragraph_records,
     )
     from document_pipeline.activity import log_activity
+    from document_pipeline.pipeline_logger import log_finalization_complete
 
     try:
         # 1. Optionally run the haiku judge for low-confidence chunks.
@@ -64,7 +65,14 @@ def finalize_document_classification_task(self, document_id: int):
             actor_system='Pipeline',
         )
 
-        # 5. Notify the frontend that the document is ready for review.
+        # 5. Log storytelling completion
+        log_finalization_complete(
+            str(document_id),
+            paragraph_records_count=stats.get("total", 0),
+            flagged_for_review=stats.get("flagged", 0),
+        )
+
+        # 6. Notify the frontend that the document is ready for review.
         notify_frontend_via_websocket(document_id, event="DOCUMENT_CLASSIFIED")
 
         return {
