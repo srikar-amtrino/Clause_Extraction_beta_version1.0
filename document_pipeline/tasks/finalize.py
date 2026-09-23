@@ -10,7 +10,7 @@ from celery import shared_task
     max_retries=3,
     acks_late=True,
 )
-def finalize_document_classification_task(self, document_id: int):
+def finalize_document_classification_task(self, run_id: str, document_id: int):
     """Finalize classification, materialise Postgres review records, and gate.
 
     Pipeline stops here. Embedding is NOT triggered automatically.
