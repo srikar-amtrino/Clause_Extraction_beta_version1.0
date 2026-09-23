@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate, Link as RouterLink } from 'react-router-dom';
+import { useNavigate, useLocation, Link as RouterLink } from 'react-router-dom';
 import {
   Box,
   TextField,
@@ -19,22 +19,34 @@ import Visibility from '@mui/icons-material/Visibility';
 import VisibilityOff from '@mui/icons-material/VisibilityOff';
 import EmailOutlinedIcon from '@mui/icons-material/EmailOutlined';
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
-import FlashOnIcon from '@mui/icons-material/FlashOn';
 import AuthLayout from './AuthLayout';
 import { useAuth } from '../../context/AuthContext';
 
 export default function Login() {
   const navigate = useNavigate();
-  const { login, demoLogin, loading } = useAuth();
+  const location = useLocation();
+  const { login, loading } = useAuth();
 
   const [formData, setFormData] = useState({
-    email: '',
+    email: location.state?.registeredEmail || '',
     password: '',
     rememberMe: true,
   });
 
   const [showPassword, setShowPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [successMsg, setSuccessMsg] = useState(() => {
+    try {
+      const flash = sessionStorage.getItem('clausewright_flash_signup');
+      if (flash) {
+        sessionStorage.removeItem('clausewright_flash_signup');
+        return flash;
+      }
+    } catch {
+      /* ignore */
+    }
+    return location.state?.message || '';
+  });
   const [fieldErrors, setFieldErrors] = useState({});
 
   const handleTogglePassword = () => {
@@ -52,6 +64,9 @@ export default function Login() {
     }
     if (errorMsg) {
       setErrorMsg('');
+    }
+    if (successMsg) {
+      setSuccessMsg('');
     }
   };
 
@@ -76,26 +91,26 @@ export default function Login() {
     if (!validate()) return;
 
     try {
-      await login(formData.email, formData.password);
-      navigate('/overview', { replace: true });
-    } catch (err) {
-      setErrorMsg(err.message || 'Authentication failed');
-    }
-  };
-
-  const handleFillDemo = async () => {
-    try {
-      setFormData({
-        email: 'reviewer@clausewright.com',
-        password: 'password123',
-        rememberMe: true,
+      try {
+        sessionStorage.setItem('clausewright_flash_login', 'You have logged in successfully!');
+      } catch {
+        /* ignore */
+      }
+      await login(formData.email.trim(), formData.password, formData.rememberMe);
+      navigate('/overview', {
+        replace: true,
+        state: {
+          loginSuccess: true,
+          message: 'You have logged in successfully!',
+        },
       });
-      setErrorMsg('');
-      setFieldErrors({});
-      await demoLogin();
-      navigate('/overview', { replace: true });
     } catch (err) {
-      setErrorMsg(err.message || 'Demo login failed');
+      try {
+        sessionStorage.removeItem('clausewright_flash_login');
+      } catch {
+        /* ignore */
+      }
+      setErrorMsg(err.message || 'Authentication failed');
     }
   };
 
@@ -104,13 +119,30 @@ export default function Login() {
       title="Welcome back"
       subtitle="Sign in to your legal reviewer workspace to continue"
     >
+      {successMsg && (
+        <Alert
+          severity="success"
+          sx={{
+            mb: 1.5,
+            borderRadius: 1.5,
+            fontSize: '0.82rem',
+            py: 0.5,
+            alignItems: 'center',
+          }}
+          onClose={() => setSuccessMsg('')}
+        >
+          {successMsg}
+        </Alert>
+      )}
+
       {errorMsg && (
         <Alert
           severity="error"
           sx={{
-            mb: 2.5,
-            borderRadius: 2,
-            fontSize: '0.84rem',
+            mb: 1.5,
+            borderRadius: 1.5,
+            fontSize: '0.82rem',
+            py: 0.5,
             alignItems: 'center',
           }}
           onClose={() => setErrorMsg('')}
@@ -121,10 +153,10 @@ export default function Login() {
 
       <Box component="form" onSubmit={handleSubmit} noValidate>
         {/* Email Field */}
-        <Box sx={{ mb: 2 }}>
+        <Box sx={{ mb: 1.5 }}>
           <Typography
             variant="body2"
-            sx={{ fontWeight: 600, color: '#1b1f24', mb: 0.75 }}
+            sx={{ fontWeight: 600, color: '#1b1f24', mb: 0.35, fontSize: '0.78rem' }}
           >
             Email address
           </Typography>
@@ -132,6 +164,7 @@ export default function Login() {
             id="login-email"
             name="email"
             type="email"
+            size="small"
             placeholder="name@organization.com"
             fullWidth
             value={formData.email}
@@ -143,7 +176,7 @@ export default function Login() {
               input: {
                 startAdornment: (
                   <InputAdornment position="start">
-                    <EmailOutlinedIcon sx={{ color: '#7b838c', fontSize: 20 }} />
+                    <EmailOutlinedIcon sx={{ color: '#7b838c', fontSize: 18 }} />
                   </InputAdornment>
                 ),
               },
@@ -152,24 +185,25 @@ export default function Login() {
         </Box>
 
         {/* Password Field */}
-        <Box sx={{ mb: 1.5 }}>
+        <Box sx={{ mb: 1.25 }}>
           <Box
             sx={{
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center',
-              mb: 0.75,
+              mb: 0.35,
             }}
           >
-            <Typography variant="body2" sx={{ fontWeight: 600, color: '#1b1f24' }}>
+            <Typography variant="body2" sx={{ fontWeight: 600, color: '#1b1f24', fontSize: '0.78rem' }}>
               Password
             </Typography>
-            <Tooltip title="For demo purposes, contact your workspace administrator" arrow>
+            <Tooltip title="Contact your workspace administrator to reset your password" arrow>
               <Typography
                 variant="caption"
                 sx={{
                   color: '#1e3a5f',
                   fontWeight: 500,
+                  fontSize: '0.74rem',
                   cursor: 'pointer',
                   '&:hover': { textDecoration: 'underline' },
                 }}
@@ -182,6 +216,7 @@ export default function Login() {
             id="login-password"
             name="password"
             type={showPassword ? 'text' : 'password'}
+            size="small"
             placeholder="Enter your password"
             fullWidth
             value={formData.password}
@@ -193,7 +228,7 @@ export default function Login() {
               input: {
                 startAdornment: (
                   <InputAdornment position="start">
-                    <LockOutlinedIcon sx={{ color: '#7b838c', fontSize: 20 }} />
+                    <LockOutlinedIcon sx={{ color: '#7b838c', fontSize: 18 }} />
                   </InputAdornment>
                 ),
                 endAdornment: (
@@ -203,9 +238,9 @@ export default function Login() {
                       onClick={handleTogglePassword}
                       edge="end"
                       size="small"
-                      sx={{ color: '#7b838c' }}
+                      sx={{ color: '#7b838c', p: 0.5 }}
                     >
-                      {showPassword ? <VisibilityOff fontSize="small" /> : <Visibility fontSize="small" />}
+                      {showPassword ? <VisibilityOff sx={{ fontSize: 18 }} /> : <Visibility sx={{ fontSize: 18 }} />}
                     </IconButton>
                   </InputAdornment>
                 ),
@@ -215,7 +250,7 @@ export default function Login() {
         </Box>
 
         {/* Remember me */}
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2.5 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
           <FormControlLabel
             control={
               <Checkbox
@@ -226,12 +261,12 @@ export default function Login() {
                 sx={{
                   color: '#cfcfc8',
                   '&.Mui-checked': { color: '#1e3a5f' },
-                  p: 0.5,
+                  p: 0.4,
                 }}
               />
             }
             label={
-              <Typography variant="body2" sx={{ color: '#4a5159', fontSize: '0.82rem' }}>
+              <Typography variant="body2" sx={{ color: '#4a5159', fontSize: '0.8rem' }}>
                 Keep me signed in
               </Typography>
             }
@@ -246,17 +281,17 @@ export default function Login() {
           fullWidth
           disabled={loading}
           sx={{
-            py: 1.25,
-            fontSize: '0.92rem',
+            py: 1,
+            fontSize: '0.88rem',
             fontWeight: 600,
             textTransform: 'none',
-            mb: 2,
+            mb: 1.5,
             position: 'relative',
           }}
         >
           {loading ? (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
-              <CircularProgress size={18} color="inherit" />
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <CircularProgress size={16} color="inherit" />
               <span>Authenticating...</span>
             </Box>
           ) : (
@@ -264,41 +299,11 @@ export default function Login() {
           )}
         </Button>
 
-        {/* Instant Demo Access Button */}
-        <Button
-          id="demo-login-btn"
-          variant="outlined"
-          fullWidth
-          onClick={handleFillDemo}
-          disabled={loading}
-          startIcon={<FlashOnIcon sx={{ color: '#f59e0b' }} />}
-          sx={{
-            py: 1,
-            borderColor: '#e3e3de',
-            color: '#1e3a5f',
-            bgcolor: '#f8fafc',
-            fontSize: '0.85rem',
-            fontWeight: 600,
-            textTransform: 'none',
-            mb: 3,
-            '&:hover': {
-              borderColor: '#1e3a5f',
-              bgcolor: '#edf2f7',
-            },
-          }}
-        >
-          Quick Demo Sign In (1-Click)
-        </Button>
-
-        <Divider sx={{ my: 2 }}>
-          <Typography variant="caption" sx={{ color: '#7b838c', px: 1 }}>
-            OR
-          </Typography>
-        </Divider>
+        <Divider sx={{ my: 1 }} />
 
         {/* Switch to Signup Link */}
         <Box sx={{ textAlign: 'center', mt: 1 }}>
-          <Typography variant="body2" sx={{ color: '#4a5159', fontSize: '0.86rem' }}>
+          <Typography variant="body2" sx={{ color: '#4a5159', fontSize: '0.82rem' }}>
             Don't have an account yet?{' '}
             <Link
               component={RouterLink}
