@@ -3,11 +3,13 @@
 Everything here is imported by ``core.auth_views`` and can be tested without
 spinning up a Django request cycle.
 """
+import functools
 import logging
 import secrets
 from datetime import timedelta
 
 from django.contrib.auth.hashers import check_password, make_password
+from django.http import JsonResponse
 from django.utils import timezone
 
 logger = logging.getLogger('auth')
@@ -114,3 +116,44 @@ def log_auth_event(
         logger.info(message)
     else:
         logger.warning(message)
+
+
+# ---------------------------------------------------------------------------
+# View decorator
+# ---------------------------------------------------------------------------
+
+def require_auth(view_func):
+    """Decorator: require a valid Bearer token on any view.
+
+    On success, injects ``request.user`` (User instance) and
+    ``request.user_session`` (UserSession instance) so views
+    do not need to re-validate tokens themselves.
+
+    Returns HTTP 401 when the header is absent, the token is
+    unknown, or the session has expired.
+    """
+    @functools.wraps(view_func)
+    def _wrapped(request, *args, **kwargs):
+        from core.models import UserSession  # local to avoid circular import
+
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            return JsonResponse(
+                {'detail': 'Authorization header missing or malformed.'}, status=401)
+
+        token = auth_header[len('Bearer '):].strip()
+        try:
+            session = UserSession.objects.select_related('user').get(token=token)
+        except UserSession.DoesNotExist:
+            return JsonResponse({'detail': 'Invalid or expired token.'}, status=401)
+
+        if session.expires_at <= timezone.now():
+            session.delete()
+            return JsonResponse(
+                {'detail': 'Session has expired. Please log in again.'}, status=401)
+
+        request.user = session.user
+        request.user_session = session
+        return view_func(request, *args, **kwargs)
+
+    return _wrapped
