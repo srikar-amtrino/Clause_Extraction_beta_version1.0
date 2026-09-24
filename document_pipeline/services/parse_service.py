@@ -27,17 +27,9 @@ def _elapsed_ms(started):
     return int((time.perf_counter() - started) * 1000)
 
 
-def stream_and_parse(credentials, file_id, max_file_bytes=None):
-    """Download one Drive file into RAM and parse it. -> ParseResult
-
-    Raises DriveFileError when Drive cannot serve the file, since a retry may
-    succeed. A file Drive can serve but this pipeline does not parse comes back
-    as a `rejected` result, like any other rejection."""
-    print('[parse] starting Drive file %s' % file_id, flush=True)
-    max_file_bytes = max_file_bytes or settings.PARSE_MAX_FILE_BYTES
-    client = build_drive_client(credentials)
-    drive_file = fetch_file_metadata(client, file_id)
-    source = {
+def _drive_source(drive_file):
+    """Where a result's bytes came from, as persist_parse_result reads it."""
+    return {
         "drive_file_id": drive_file.id,
         "name": drive_file.name,
         "file_name": drive_file.name,
@@ -49,14 +41,36 @@ def stream_and_parse(credentials, file_id, max_file_bytes=None):
         "content_sha256": None,
     }
 
+
+def rejected_result(drive_file, exc):
+    """The result for a Drive file refused before download. -> ParseResult
+
+    Shared by the streaming worker and the sync dispatcher, so a refusal is
+    recorded the same way whichever of them made it."""
+    result = ParseResult(status=REJECTED, document_name=drive_file.name,
+                         rejection={"reason": str(exc), "detected_format": exc.kind,
+                                    "detected_description": str(exc), "remedy": None})
+    result.source = _drive_source(drive_file)
+    return result
+
+
+def stream_and_parse(credentials, file_id, max_file_bytes=None):
+    """Download one Drive file into RAM and parse it. -> ParseResult
+
+    Raises DriveFileError when Drive cannot serve the file, since a retry may
+    succeed. A file Drive can serve but this pipeline does not parse comes back
+    as a `rejected` result, like any other rejection."""
+    print('[parse] starting Drive file %s' % file_id, flush=True)
+    max_file_bytes = max_file_bytes or settings.PARSE_MAX_FILE_BYTES
+    client = build_drive_client(credentials)
+    drive_file = fetch_file_metadata(client, file_id)
+
     try:
         validate_for_parsing(drive_file, max_file_bytes)
     except DriveFileRejected as exc:
-        result = ParseResult(status=REJECTED, document_name=drive_file.name,
-                             rejection={"reason": str(exc), "detected_format": exc.kind,
-                                        "detected_description": str(exc), "remedy": None})
-        result.source = source
-        return result
+        return rejected_result(drive_file, exc)
+
+    source = _drive_source(drive_file)
 
     started = time.perf_counter()
     buffer = download_to_buffer(client, drive_file)

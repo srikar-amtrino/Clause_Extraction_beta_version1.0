@@ -238,6 +238,9 @@ CELERY_BROKER_URL = upstash_redis_url()
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL
 CELERY_BROKER_USE_SSL = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
 CELERY_REDIS_BACKEND_USE_SSL = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
+# A task that names no queue lands on one the worker consumes. Celery's own
+# default is "celery", which scripts/run_worker does not listen on.
+CELERY_TASK_DEFAULT_QUEUE = "default"
 
 # The test suite must never reach the real broker. A view under test calls
 # .delay(), which on the shared broker leaves a live ingestion task queued

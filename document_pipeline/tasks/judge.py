@@ -13,8 +13,8 @@ from celery import shared_task
 def trigger_haiku_judge_task(self, document_id: int):
     """Run the Haiku judge for low-confidence chunks on the LLM queue.
 
-    Routes to ``llm_queue``; run workers with
-    ``celery -A accorder_backend worker -Q llm_queue -c 4``.
+    Routes to ``llm_queue``; ``scripts/run_worker.ps1`` (or ``run_worker.bat``)
+    runs a worker on it.
     """
     from document_pipeline.services.judge_service import run_haiku_judge
 
