@@ -14,6 +14,10 @@ logger = logging.getLogger(__name__)
 
 DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 GOOGLE_DOC_MIME_TYPE = "application/vnd.google-apps.document"
+GOOGLE_SHORTCUT_MIME_TYPE = "application/vnd.google-apps.shortcut"
+GOOGLE_NATIVE_PREFIX = "application/vnd.google-apps."
+PDF_MIME_TYPE = "application/pdf"
+LEGACY_DOC_MIME_TYPE = "application/msword"
 METADATA_FIELDS = "id,name,mimeType,size,md5Checksum,webViewLink,modifiedTime"
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 NUM_RETRIES = 3
@@ -84,13 +88,38 @@ def fetch_file_metadata(client, file_id):
 
 
 def validate_for_parsing(drive_file, max_bytes):
-    """Refuse, before downloading, anything that cannot or should not be parsed."""
-    if drive_file.mime_type == GOOGLE_DOC_MIME_TYPE:
+    """Refuse, before downloading, anything that cannot or should not be parsed.
+
+    The sync dispatcher applies this to the metadata it stored and the
+    streaming worker to live metadata, so both refuse by the same rule.
+    """
+    mime_type = drive_file.mime_type or ""
+    if mime_type == GOOGLE_DOC_MIME_TYPE:
         raise DriveFileRejected(
             "native Google Doc - it has no .docx bytes to download; save it as .docx in Drive",
             "google_doc",
         )
-    if drive_file.mime_type != DOCX_MIME_TYPE:
+    if mime_type == GOOGLE_SHORTCUT_MIME_TYPE:
+        raise DriveFileRejected(
+            "Drive shortcut - put the .docx itself in the folder, not a shortcut to it",
+            "shortcut",
+        )
+    if mime_type.startswith(GOOGLE_NATIVE_PREFIX):
+        raise DriveFileRejected(
+            "native Google file (%s) - only Word .docx files are parsed" % mime_type,
+            "google_native",
+        )
+    if mime_type == PDF_MIME_TYPE:
+        raise DriveFileRejected(
+            "PDF - only Word .docx files are parsed; upload the .docx version",
+            "pdf",
+        )
+    if mime_type == LEGACY_DOC_MIME_TYPE:
+        raise DriveFileRejected(
+            "legacy Word .doc - open it in Word, save it as .docx and upload that",
+            "legacy_doc",
+        )
+    if mime_type != DOCX_MIME_TYPE:
         raise DriveFileRejected(
             "Drive reports type %s, not a Word .docx" % (drive_file.mime_type or "unknown"),
             "not_docx_mime_type",

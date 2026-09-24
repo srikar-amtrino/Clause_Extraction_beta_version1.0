@@ -17,8 +17,8 @@ def finalize_document_classification_task(self, document_id: str):
     The document waits in ``needs_review`` until a human reviewer
     saves and then explicitly publishes from the workspace.
 
-    Routes to ``llm_queue``; run workers with
-    ``celery -A accorder_backend worker -Q llm_queue -c 4``.
+    Routes to ``llm_queue``; ``scripts/run_worker.ps1`` (or ``run_worker.bat``)
+    runs a worker on it.
     """
     from document_pipeline.models import Document, DocumentActivityLog
     from document_pipeline.services.finalization_service import (
