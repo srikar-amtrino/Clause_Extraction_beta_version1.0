@@ -34,9 +34,12 @@ export default function Overview({
   // Safe metrics computation
   const safeStats = {
     needsReview: stats?.needsReview ?? 0,
+    processing: stats?.processing ?? 0,
     inReview: stats?.inReview ?? 0,
-    draft: stats?.draft ?? 0,
-    reviewed: stats?.reviewed ?? 0,
+    draft: stats?.draft ?? stats?.indraft ?? 0,
+    indraft: stats?.indraft ?? stats?.draft ?? 0,
+    reviewed: stats?.reviewed ?? stats?.inreviewed ?? 0,
+    inreviewed: stats?.inreviewed ?? stats?.reviewed ?? 0,
     updatedToVector: stats?.updatedToVector ?? 0,
   };
 
@@ -67,7 +70,9 @@ export default function Overview({
           {formattedDate}
         </Typography>
         <Typography variant="body2" sx={{ color: '#7b838c' }}>
-          {isEmptyData || safeStats.needsReview === 0
+          {!driveState.isConnected
+            ? 'Connect your Google Drive account to import and review agreement clauses.'
+            : isEmptyData || safeStats.needsReview === 0
             ? '0 documents from the Drive folder are waiting on a reviewer.'
             : `${safeStats.needsReview} document${safeStats.needsReview === 1 ? '' : 's'} from the Drive folder are waiting on a reviewer.`}
         </Typography>
@@ -232,7 +237,7 @@ export default function Overview({
         sx={{
           flexShrink: 0,
           display: 'grid',
-          gridTemplateColumns: { xs: 'repeat(2, 1fr)', sm: 'repeat(3, 1fr)', md: 'repeat(5, 1fr)' },
+          gridTemplateColumns: { xs: 'repeat(2, 1fr)', sm: 'repeat(3, 1fr)', md: 'repeat(6, 1fr)' },
           bgcolor: '#ffffff',
           border: '1px solid #e3e3de',
           borderRadius: 2,
@@ -253,6 +258,21 @@ export default function Overview({
           </Typography>
           <Typography sx={{ fontSize: '11.5px', color: '#7b838c' }}>
             waiting for reviewer
+          </Typography>
+        </Box>
+
+        <Box sx={{ p: '16px 20px', borderRight: '1px solid #e3e3de', display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: '#5f6368' }} />
+            <Typography sx={{ fontSize: '12.5px', fontWeight: 500, color: '#4a5159' }}>
+              Processing
+            </Typography>
+          </Box>
+          <Typography sx={{ fontSize: '26px', fontWeight: 700, color: '#1b1f24', lineHeight: 1.2, mt: 0.25 }}>
+            {isEmptyData ? 0 : safeStats.processing}
+          </Typography>
+          <Typography sx={{ fontSize: '11.5px', color: '#7b838c' }}>
+            in progress
           </Typography>
         </Box>
 
@@ -281,7 +301,7 @@ export default function Overview({
             </Typography>
           </Box>
           <Typography sx={{ fontSize: '26px', fontWeight: 700, color: '#1b1f24', lineHeight: 1.2, mt: 0.25 }}>
-            {isEmptyData ? 0 : safeStats.draft}
+            {isEmptyData ? 0 : safeStats.indraft}
           </Typography>
           <Typography sx={{ fontSize: '11.5px', color: '#7b838c' }}>
             unsaved changes waiting
@@ -297,7 +317,7 @@ export default function Overview({
             </Typography>
           </Box>
           <Typography sx={{ fontSize: '26px', fontWeight: 700, color: '#1b1f24', lineHeight: 1.2, mt: 0.25 }}>
-            {isEmptyData ? 0 : safeStats.reviewed}
+            {isEmptyData ? 0 : safeStats.inreviewed}
           </Typography>
           <Typography sx={{ fontSize: '11.5px', color: '#7b838c' }}>
             ready to extract & export

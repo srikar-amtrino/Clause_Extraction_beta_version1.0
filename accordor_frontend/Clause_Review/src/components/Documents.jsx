@@ -22,10 +22,10 @@ import {
 import SearchIcon from '@mui/icons-material/Search';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import CloseIcon from '@mui/icons-material/Close';
-import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded';
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import SyncIcon from '@mui/icons-material/Sync';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import { useAuth } from '../context/AuthContext';
 
 export default function Documents({
   documents = [],
@@ -36,49 +36,61 @@ export default function Documents({
   onCheckDrive,
   isEmptyData = false,
 }) {
-  // Format real documents from Google Drive
+  const { currentUser } = useAuth();
+  const currentUserName = currentUser?.username || currentUser?.name || (currentUser?.email ? currentUser.email.split('@')[0] : 'Reviewer');
+
+  // Format real documents from backend pipeline API or Google Drive
   const allDocs = useMemo(() => {
     if (!documents || documents.length === 0 || isEmptyData) {
       return [];
     }
     return documents.map((d, i) => {
-      const paragraphs = d.paragraphs || 0;
-      const currentReviewed = d.reviewProgress?.current || 0;
+      const extraction = d.stages?.extraction;
+      const classification = d.stages?.classification;
+      const pages = d.pages ?? extraction?.pages ?? 0;
+      const clauses = d.clauses ?? extraction?.clauses ?? 0;
+      const paragraphs = d.paragraphs ?? extraction?.paragraphs ?? 0;
+      const extractionStatus = d.extractionStatus || d.extraction_status || extraction?.status || 'pending';
+      const needsReview = d.needsReview ?? classification?.needs_review ?? null;
+      const warnings = d.warnings || extraction?.warnings || [];
+      const size = d.size || (pages > 0 ? `${Math.max(12, Math.round(pages * 26.5))} KB` : '24 KB');
+
       return {
-        id: d.id || `doc-${i}`,
+        id: d.id || d.document_id || `doc-${i}`,
+        documentId: d.document_id || d.id || `doc-${i}`,
         name: d.name || 'Untitled Document',
         fileName: d.name || 'document.docx',
-        docType: d.agreementType || driveState.agreementType || 'General',
-        paragraphs: paragraphs,
-        pages: d.pages || (d.size ? Math.max(1, Math.round(parseInt(d.size, 10) / 35)) : 1),
-        size: d.size || '1.2 MB',
-        status: d.status || 'Needs review',
-        statusTag: d.statusTag || null,
-        reviewProgress: d.reviewProgress || { current: currentReviewed, total: paragraphs },
+        title: d.title || d.name,
+        pages,
+        clauses,
+        paragraphs,
+        size,
+        extractionStatus,
+        needsReview,
+        warnings,
+        stages: d.stages || {},
+        status: d.status || (extractionStatus === 'extracted' ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted_with_warnings' ? 'Needs review' : extractionStatus === 'rejected' ? 'Draft' : 'Needs review'),
+        statusTag: d.statusTag || (warnings.length > 0 ? `${warnings.length} warning${warnings.length > 1 ? 's' : ''}` : null),
         vectorDbStatus: d.vectorDbStatus || 'Not sent yet',
-        vectorDbDetail: d.vectorDbDetail || 'Not sent yet',
+        vectorDbDetail: d.vectorDbDetail || '',
         parties: d.parties || (d.folder || driveState.folderPath ? `Folder: ${d.folder || driveState.folderPath}` : 'Parties to Agreement'),
-        inDriveSince: d.modifiedTime || 'Recently',
-        reviewer: d.reviewer || driveState.user?.name || driveState.user?.email || 'Reviewer',
-        lastSaved: d.modifiedTime || 'Today',
+        inDriveSince: d.inDriveSince || (d.last_extracted_at ? new Date(d.last_extracted_at).toLocaleDateString() : (d.modifiedTime || 'Recently')),
+        reviewer: d.reviewer || currentUserName || driveState.user?.name || driveState.user?.email || 'Reviewer',
+        lastSaved: d.lastSaved || (d.last_extracted_at ? new Date(d.last_extracted_at).toLocaleDateString() : (d.modifiedTime || 'Today')),
+        lastExtracted: d.lastExtracted || (d.last_extracted_at ? new Date(d.last_extracted_at).toLocaleString() : null),
         folder: d.folder || driveState.folderPath || 'Google Drive',
         issues: d.issues || {
           duplicateParaId: 0,
-          canonicalTypeMissing: 0,
-          paragraphsToReview: paragraphs - currentReviewed,
+          canonicalTypeMissing: needsReview ?? 0,
+          paragraphsToReview: needsReview ?? (paragraphs - clauses > 0 ? paragraphs - clauses : 0),
+          warnings,
         },
         recentActivity: d.recentActivity || {
           user: driveState.user?.name || 'System',
-          action: 'File ready from Google Drive',
-          timestamp: d.modifiedTime || 'Today',
+          action: extractionStatus === 'extracted' ? 'Last extraction completed' : extractionStatus === 'rejected' ? 'Document rejected by parser' : 'File ready from Google Drive',
+          timestamp: d.modifiedTime || (d.last_extracted_at ? new Date(d.last_extracted_at).toLocaleDateString() : 'Today'),
         },
-        stats: d.stats || {
-          reviewed: currentReviewed,
-          edited: 0,
-          needsFix: 0,
-          untouched: paragraphs - currentReviewed,
-        },
-        webViewLink: d.webViewLink,
+        webViewLink: d.webViewLink || d.drive_web_link,
       };
     });
   }, [documents, driveState, isEmptyData]);
@@ -89,7 +101,6 @@ export default function Documents({
   const [isDrawerOpen, setIsDrawerOpen] = useState(true);
   const [typeMenuAnchor, setTypeMenuAnchor] = useState(null);
   const [reviewerMenuAnchor, setReviewerMenuAnchor] = useState(null);
-  const [checkedDocIds, setCheckedDocIds] = useState([]);
 
   // Derive selected document directly from selectedDocId or default to first document
   const selectedDoc = useMemo(() => {
@@ -103,14 +114,21 @@ export default function Documents({
 
   // Counts for tabs
   const counts = useMemo(() => {
+    const draftCount = allDocs.filter((d) => d.status === 'Draft' || d.extractionStatus === 'rejected').length;
+    const reviewedCount = allDocs.filter((d) => d.status === 'Reviewed').length;
     return {
       all: allDocs.length,
-      needsReview: allDocs.filter((d) => d.status === 'Needs review').length,
+      needsReview: allDocs.filter((d) => (d.needsReview && d.needsReview > 0) || d.status === 'Needs review').length,
       inReview: allDocs.filter((d) => d.status === 'In review').length,
-      draft: allDocs.filter((d) => d.status === 'Draft').length,
+      draft: draftCount,
+      indraft: draftCount,
       saved: allDocs.filter((d) => d.status === 'Saved').length,
-      reviewed: allDocs.filter((d) => d.status === 'Reviewed').length,
-      updated: allDocs.filter((d) => d.status === 'Updated to vector DB').length,
+      reviewed: reviewedCount,
+      inreviewed: reviewedCount,
+      extracted: allDocs.filter((d) => d.extractionStatus === 'extracted').length,
+      warnings: allDocs.filter((d) => d.extractionStatus === 'extracted_with_warnings' || (d.warnings && d.warnings.length > 0)).length,
+      rejected: allDocs.filter((d) => d.extractionStatus === 'rejected').length,
+      updated: allDocs.filter((d) => d.vectorDbStatus && d.vectorDbStatus.startsWith('Updated')).length,
     };
   }, [allDocs]);
 
@@ -118,20 +136,19 @@ export default function Documents({
   const filteredDocs = useMemo(() => {
     return allDocs.filter((d) => {
       // Tab filter
-      if (activeFilter === 'needs-review' && d.status !== 'Needs review') return false;
-      if (activeFilter === 'in-review' && d.status !== 'In review') return false;
-      if (activeFilter === 'draft' && d.status !== 'Draft') return false;
-      if (activeFilter === 'saved' && d.status !== 'Saved') return false;
-      if (activeFilter === 'reviewed' && d.status !== 'Reviewed') return false;
-      if (activeFilter === 'updated' && d.status !== 'Updated to vector DB') return false;
+      if (activeFilter === 'needs-review' && !(d.needsReview > 0 || d.status === 'Needs review')) return false;
+      if (activeFilter === 'extracted' && d.extractionStatus !== 'extracted') return false;
+      if (activeFilter === 'warnings' && !(d.extractionStatus === 'extracted_with_warnings' || (d.warnings && d.warnings.length > 0))) return false;
+      if (activeFilter === 'rejected' && d.extractionStatus !== 'rejected') return false;
+      if (activeFilter === 'updated' && !(d.vectorDbStatus && d.vectorDbStatus.startsWith('Updated'))) return false;
 
       // Search filter
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         const matchesName = d.name.toLowerCase().includes(q);
-        const matchesType = d.docType.toLowerCase().includes(q);
+        const matchesTitle = d.title ? d.title.toLowerCase().includes(q) : false;
         const matchesParties = d.parties ? d.parties.toLowerCase().includes(q) : false;
-        if (!matchesName && !matchesType && !matchesParties) return false;
+        if (!matchesName && !matchesTitle && !matchesParties) return false;
       }
       return true;
     });
@@ -143,59 +160,122 @@ export default function Documents({
     setIsDrawerOpen(true);
   };
 
-  const handleToggleCheckAll = (e) => {
-    if (e.target.checked) {
-      setCheckedDocIds(filteredDocs.map((d) => d.id));
-    } else {
-      setCheckedDocIds([]);
-    }
-  };
-
-  const handleToggleCheckRow = (id, e) => {
-    e.stopPropagation();
-    if (checkedDocIds.includes(id)) {
-      setCheckedDocIds(checkedDocIds.filter((item) => item !== id));
-    } else {
-      setCheckedDocIds([...checkedDocIds, id]);
-    }
-  };
-
-  // Status Chip helper
-  const renderStatusBadge = (status, tag) => {
-    let style = { bgcolor: '#f3f4f6', color: '#374151' };
-    if (status === 'Draft') style = { bgcolor: '#fef3c7', color: '#92400e' };
-    else if (status === 'Needs review') style = { bgcolor: '#f3f4f6', color: '#4b5563' };
-    else if (status === 'In review') style = { bgcolor: '#e0f2fe', color: '#0369a1' };
-    else if (status === 'Updated to vector DB') style = { bgcolor: '#1e3a5f', color: '#ffffff' };
-    else if (status === 'Reviewed') style = { bgcolor: '#dcfce7', color: '#166534' };
-    else if (status === 'Saved') style = { bgcolor: '#f3e8ff', color: '#6b21a8' };
-
-    return (
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+  // Extraction Status badge helper
+  const renderExtractionBadge = (status, warnings = []) => {
+    if (status === 'extracted') {
+      return (
         <Chip
-          label={`• ${status}`}
+          label="• Extracted"
           size="small"
           sx={{
             height: 22,
             fontSize: '11px',
             fontWeight: 600,
-            ...style,
+            bgcolor: '#dcfce7',
+            color: '#166534',
+            border: '1px solid #bbf7d0',
           }}
         />
-        {tag && (
+      );
+    }
+    if (status === 'extracted_with_warnings') {
+      return (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
           <Chip
-            label={tag}
+            label="• Extracted"
             size="small"
             sx={{
               height: 22,
               fontSize: '11px',
               fontWeight: 600,
-              bgcolor: '#fee2e2',
-              color: '#b91c1c',
+              bgcolor: '#fef3c7',
+              color: '#92400e',
+              border: '1px solid #fde68a',
             }}
           />
-        )}
-      </Box>
+          <Chip
+            label={`${warnings.length || 2} warnings`}
+            size="small"
+            sx={{
+              height: 20,
+              fontSize: '10.5px',
+              fontWeight: 600,
+              bgcolor: '#fee2e2',
+              color: '#991b1b',
+            }}
+          />
+        </Box>
+      );
+    }
+    if (status === 'rejected') {
+      return (
+        <Chip
+          label="• Rejected"
+          size="small"
+          sx={{
+            height: 22,
+            fontSize: '11px',
+            fontWeight: 600,
+            bgcolor: '#fee2e2',
+            color: '#991b1b',
+            border: '1px solid #fecaca',
+          }}
+        />
+      );
+    }
+    return (
+      <Chip
+        label="• Pending"
+        size="small"
+        sx={{
+          height: 22,
+          fontSize: '11px',
+          fontWeight: 500,
+          bgcolor: '#f3f4f6',
+          color: '#6b7280',
+          border: '1px solid #e5e7eb',
+        }}
+      />
+    );
+  };
+
+  // Needs Review count badge helper
+  const renderNeedsReviewBadge = (count) => {
+    if (count === null || count === undefined) {
+      return (
+        <Typography sx={{ fontSize: '12px', color: '#94a3b8' }}>
+          —
+        </Typography>
+      );
+    }
+    if (count > 0) {
+      return (
+        <Chip
+          label={`${count} to review`}
+          size="small"
+          sx={{
+            height: 22,
+            fontSize: '11px',
+            fontWeight: 700,
+            bgcolor: '#fff7ed',
+            color: '#c2410c',
+            border: '1px solid #ffedd5',
+          }}
+        />
+      );
+    }
+    return (
+      <Chip
+        label="0"
+        size="small"
+        sx={{
+          height: 22,
+          fontSize: '11px',
+          fontWeight: 600,
+          bgcolor: '#f1f5f9',
+          color: '#64748b',
+        }}
+      />
     );
   };
 
@@ -392,10 +472,11 @@ export default function Documents({
               { id: 'all', label: `All ${counts.all}` },
               { id: 'needs-review', label: `Needs review ${counts.needsReview}` },
               { id: 'in-review', label: `In review ${counts.inReview}` },
-              { id: 'draft', label: `Draft ${counts.draft}` },
+              { id: 'draft', label: `Draft ${counts.indraft}` },
               { id: 'saved', label: `Saved ${counts.saved}` },
-              { id: 'reviewed', label: `Reviewed ${counts.reviewed}` },
+              { id: 'reviewed', label: `Reviewed ${counts.inreviewed}` },
               { id: 'updated', label: `Updated ${counts.updated}` },
+              { id: 'rejected', label: `Rejected ${counts.rejected}` },
             ].map((tab) => {
               const isSelected = activeFilter === tab.id;
               return (
@@ -585,25 +666,16 @@ export default function Documents({
             <Table stickyHeader size="small">
               <TableHead>
                 <TableRow>
-                  <TableCell padding="checkbox" sx={{ bgcolor: '#f8fafc', py: 1.25, borderBottom: '1px solid #e2e8f0', width: 44 }}>
-                    <Checkbox
-                      size="small"
-                      indeterminate={checkedDocIds.length > 0 && checkedDocIds.length < filteredDocs.length}
-                      checked={filteredDocs.length > 0 && checkedDocIds.length === filteredDocs.length}
-                      onChange={handleToggleCheckAll}
-                      sx={{ p: 0.5 }}
-                    />
-                  </TableCell>
                   <TableCell sx={{ bgcolor: '#f8fafc', py: 1.25, fontSize: '12px', fontWeight: 600, color: '#64748b', borderBottom: '1px solid #e2e8f0' }}>
                     Document
                   </TableCell>
-                  <TableCell sx={{ bgcolor: '#f8fafc', py: 1.25, fontSize: '12px', fontWeight: 600, color: '#64748b', borderBottom: '1px solid #e2e8f0', width: 180 }}>
-                    Status
-                  </TableCell>
-                  <TableCell sx={{ bgcolor: '#f8fafc', py: 1.25, fontSize: '12px', fontWeight: 600, color: '#64748b', borderBottom: '1px solid #e2e8f0', width: 170 }}>
-                    Review progress
+                  <TableCell sx={{ bgcolor: '#f8fafc', py: 1.25, fontSize: '12px', fontWeight: 600, color: '#64748b', borderBottom: '1px solid #e2e8f0', width: 220 }}>
+                    Extraction status
                   </TableCell>
                   <TableCell sx={{ bgcolor: '#f8fafc', py: 1.25, fontSize: '12px', fontWeight: 600, color: '#64748b', borderBottom: '1px solid #e2e8f0', width: 160 }}>
+                    Needs review
+                  </TableCell>
+                  <TableCell sx={{ bgcolor: '#f8fafc', py: 1.25, fontSize: '12px', fontWeight: 600, color: '#64748b', borderBottom: '1px solid #e2e8f0', width: 170 }}>
                     Vector DB
                   </TableCell>
                 </TableRow>
@@ -611,10 +683,6 @@ export default function Documents({
               <TableBody>
                 {filteredDocs.map((doc) => {
                   const isSelected = selectedDoc?.id === doc.id;
-                  const isChecked = checkedDocIds.includes(doc.id);
-                  const total = doc.reviewProgress?.total || 0;
-                  const current = doc.reviewProgress?.current || 0;
-                  const progressVal = total > 0 ? Math.round((current / total) * 100) : 0;
 
                   return (
                     <TableRow
@@ -628,104 +696,57 @@ export default function Documents({
                         '&:hover': { bgcolor: isSelected ? '#f1f5f9' : '#f8fafc' },
                       }}
                     >
-                      {/* Checkbox */}
-                      <TableCell padding="checkbox" sx={{ py: 1.25 }}>
-                        <Checkbox
-                          size="small"
-                          checked={isChecked}
-                          onClick={(e) => handleToggleCheckRow(doc.id, e)}
-                          sx={{ p: 0.5 }}
-                        />
-                      </TableCell>
-
-                      {/* Document Info */}
-                      <TableCell sx={{ py: 1.25 }}>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                          {/* DOCX Icon badge */}
-                          <Box
-                            sx={{
-                              width: 28,
-                              height: 32,
-                              border: '1px solid #cbd5e1',
-                              borderRadius: 1,
-                              bgcolor: '#f8fafc',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              flexShrink: 0,
-                            }}
-                          >
-                            <Typography sx={{ fontSize: '9px', fontWeight: 700, color: '#0284c7' }}>
-                              DOCX
+                      {/* Document Info (No docx logo, no checkbox) */}
+                      <TableCell sx={{ py: 1.4 }}>
+                        <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, gap: 0.35 }}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                            <Typography
+                              sx={{
+                                fontSize: '13.5px',
+                                fontWeight: 600,
+                                color: '#0f172a',
+                                lineHeight: 1.3,
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {doc.name}
                             </Typography>
+                            {/* {doc.webViewLink && (
+                              <Tooltip title="Open in Google Drive" arrow>
+                                <IconButton
+                                  size="small"
+                                  component="a"
+                                  href={doc.webViewLink}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  sx={{ p: 0.2, color: '#94a3b8', '&:hover': { color: '#0284c7' } }}
+                                >
+                                  <OpenInNewIcon sx={{ fontSize: 13 }} />
+                                </IconButton>
+                              </Tooltip>
+                            )} */}
                           </Box>
-                          <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-                              <Typography
-                                sx={{
-                                  fontSize: '13px',
-                                  fontWeight: 600,
-                                  color: '#0f172a',
-                                  lineHeight: 1.3,
-                                  overflow: 'hidden',
-                                  textOverflow: 'ellipsis',
-                                  whiteSpace: 'nowrap',
-                                }}
-                              >
-                                {doc.name}
-                              </Typography>
-                              {doc.webViewLink && (
-                                <Tooltip title="Open in Google Drive" arrow>
-                                  <IconButton
-                                    size="small"
-                                    component="a"
-                                    href={doc.webViewLink}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    onClick={(e) => e.stopPropagation()}
-                                    sx={{ p: 0.2, color: '#94a3b8', '&:hover': { color: '#0284c7' } }}
-                                  >
-                                    <OpenInNewIcon sx={{ fontSize: 13 }} />
-                                  </IconButton>
-                                </Tooltip>
-                              )}
-                            </Box>
-                            <Typography sx={{ fontSize: '11.5px', color: '#64748b' }}>
-                              {doc.docType} · {doc.paragraphs > 0 ? `${doc.paragraphs} paragraphs · ` : ''}{doc.size}
-                            </Typography>
-                          </Box>
-                        </Box>
-                      </TableCell>
-
-                      {/* Status */}
-                      <TableCell sx={{ py: 1.25 }}>
-                        {renderStatusBadge(doc.status, doc.statusTag)}
-                      </TableCell>
-
-                      {/* Review progress */}
-                      <TableCell sx={{ py: 1.25 }}>
-                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, pr: 2 }}>
-                          <Typography sx={{ fontSize: '11.5px', fontWeight: 600, color: '#475569' }}>
-                            {current} / {total}
+                          <Typography sx={{ fontSize: '11.5px', color: '#64748b', letterSpacing: '0.01em' }}>
+                            pages: {doc.pages ?? 0} · clauses: {doc.clauses ?? 0} · paragraphs: {doc.paragraphs ?? 0} · {doc.size}
                           </Typography>
-                          <LinearProgress
-                            variant="determinate"
-                            value={progressVal}
-                            sx={{
-                              height: 4,
-                              borderRadius: 2,
-                              bgcolor: '#e2e8f0',
-                              '& .MuiLinearProgress-bar': {
-                                bgcolor: progressVal > 0 ? '#15803d' : 'transparent',
-                                borderRadius: 2,
-                              },
-                            }}
-                          />
                         </Box>
+                      </TableCell>
+
+                      {/* Extraction status */}
+                      <TableCell sx={{ py: 1.4 }}>
+                        {renderExtractionBadge(doc.extractionStatus, doc.warnings)}
+                      </TableCell>
+
+                      {/* Needs review (display count) */}
+                      <TableCell sx={{ py: 1.4 }}>
+                        {renderNeedsReviewBadge(doc.needsReview)}
                       </TableCell>
 
                       {/* Vector DB */}
-                      <TableCell sx={{ py: 1.25 }}>
+                      <TableCell sx={{ py: 1.4 }}>
                         {renderVectorDbBadge(doc.vectorDbStatus)}
                       </TableCell>
                     </TableRow>
@@ -763,43 +784,23 @@ export default function Documents({
             boxShadow: '-2px 0 8px rgba(0,0,0,0.03)',
           }}
         >
-          {/* Header with DOCX icon, Title, Meta and Close button */}
+          {/* Header (No docx logo), Title, Meta and Close button */}
           <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 1 }}>
-            <Box sx={{ display: 'flex', gap: 1.5, minWidth: 0 }}>
-              <Box
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, minWidth: 0 }}>
+              <Typography
                 sx={{
-                  width: 32,
-                  height: 38,
-                  border: '1px solid #cbd5e1',
-                  borderRadius: 1,
-                  bgcolor: '#f8fafc',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0,
-                  mt: 0.25,
+                  fontSize: '15px',
+                  fontWeight: 700,
+                  color: '#0f172a',
+                  lineHeight: 1.3,
+                  wordBreak: 'break-word',
                 }}
               >
-                <Typography sx={{ fontSize: '9px', fontWeight: 700, color: '#0284c7' }}>
-                  DOCX
-                </Typography>
-              </Box>
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25, minWidth: 0 }}>
-                <Typography
-                  sx={{
-                    fontSize: '14.5px',
-                    fontWeight: 700,
-                    color: '#0f172a',
-                    lineHeight: 1.3,
-                    wordBreak: 'break-word',
-                  }}
-                >
-                  {selectedDoc.name}
-                </Typography>
-                <Typography sx={{ fontSize: '11.5px', color: '#64748b' }}>
-                  {selectedDoc.fileName} · {selectedDoc.pages} pages · {selectedDoc.size}
-                </Typography>
-              </Box>
+                {selectedDoc.name}
+              </Typography>
+              <Typography sx={{ fontSize: '11.5px', color: '#64748b', letterSpacing: '0.01em' }}>
+                pages: {selectedDoc.pages ?? 0} · clauses: {selectedDoc.clauses ?? 0} · paragraphs: {selectedDoc.paragraphs ?? 0} · {selectedDoc.size}
+              </Typography>
             </Box>
 
             <IconButton
@@ -811,115 +812,80 @@ export default function Documents({
             </IconButton>
           </Box>
 
-          {/* Status Badges Row */}
+          {/* Status Badges Row: Extraction Status & Needs Review */}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-            <Chip
-              label={`• ${selectedDoc.status}`}
-              size="small"
-              sx={{
-                height: 22,
-                fontSize: '11px',
-                fontWeight: 600,
-                bgcolor: '#fef3c7',
-                color: '#92400e',
-              }}
-            />
-            {selectedDoc.vectorDbStatus === 'Needs re-update' && (
+            {renderExtractionBadge(selectedDoc.extractionStatus, selectedDoc.warnings)}
+            {selectedDoc.needsReview !== null && renderNeedsReviewBadge(selectedDoc.needsReview)}
+            {selectedDoc.vectorDbStatus && selectedDoc.vectorDbStatus.startsWith('Updated') && (
               <Chip
-                label="Needs re-update"
+                label={selectedDoc.vectorDbStatus}
                 size="small"
                 sx={{
                   height: 22,
                   fontSize: '11px',
                   fontWeight: 600,
-                  bgcolor: '#fef3c7',
-                  color: '#92400e',
+                  bgcolor: '#dcfce7',
+                  color: '#166534',
                 }}
               />
             )}
           </Box>
 
-          {/* Review Progress Section */}
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-            <Typography sx={{ fontSize: '12.5px', fontWeight: 600, color: '#334155' }}>
-              Review progress
-            </Typography>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              <Box sx={{ flex: 1 }}>
-                <LinearProgress
-                  variant="determinate"
-                  value={
-                    selectedDoc.reviewProgress?.total > 0
-                      ? Math.round(
-                          ((selectedDoc.reviewProgress?.current || 0) /
-                            selectedDoc.reviewProgress.total) *
-                            100
-                        )
-                      : 0
-                  }
-                  sx={{
-                    height: 5,
-                    borderRadius: 3,
-                    bgcolor: '#e2e8f0',
-                    '& .MuiLinearProgress-bar': {
-                      bgcolor: '#15803d',
-                      borderRadius: 3,
-                    },
-                  }}
-                />
-              </Box>
-              <Typography sx={{ fontSize: '14px', fontWeight: 700, color: '#0f172a' }}>
-                {selectedDoc.reviewProgress?.current || 0} / {selectedDoc.reviewProgress?.total || 0}
-              </Typography>
-            </Box>
-          </Box>
-
-          {/* Alert box: Before this can be updated */}
+          {/* Extraction Status & Needs Review Cards (Replaced Review Progress) */}
           <Box
             sx={{
-              p: 2,
-              bgcolor: '#fef2f2',
-              borderRadius: 2,
-              border: '1px solid #fecaca',
-              display: 'flex',
-              flexDirection: 'column',
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr',
               gap: 1.5,
             }}
           >
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <WarningAmberRoundedIcon sx={{ color: '#b91c1c', fontSize: 18 }} />
-              <Typography sx={{ fontSize: '12.5px', fontWeight: 700, color: '#991b1b' }}>
-                Before this can be updated
+            {/* Extraction Status card */}
+            <Box
+              sx={{
+                p: 1.5,
+                borderRadius: 2,
+                bgcolor: '#f8fafc',
+                border: '1px solid #e2e8f0',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 0.5,
+              }}
+            >
+              <Typography sx={{ fontSize: '11px', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Extraction
               </Typography>
+              <Typography sx={{ fontSize: '13px', fontWeight: 700, color: selectedDoc.extractionStatus === 'rejected' ? '#b91c1c' : '#0f172a', textTransform: 'capitalize' }}>
+                {selectedDoc.extractionStatus ? selectedDoc.extractionStatus.replace(/_/g, ' ') : 'Pending'}
+              </Typography>
+              {selectedDoc.warnings && selectedDoc.warnings.length > 0 && (
+                <Typography sx={{ fontSize: '10.5px', color: '#b45309', fontWeight: 500 }}>
+                  {selectedDoc.warnings.length} warning{selectedDoc.warnings.length > 1 ? 's' : ''} reported
+                </Typography>
+              )}
             </Box>
 
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', pb: 0.75, borderBottom: '1px solid #fee2e2' }}>
-                <Typography sx={{ fontSize: '12px', color: '#7f1d1d' }}>
-                  Duplicate paragraph ID
-                </Typography>
-                <Typography sx={{ fontSize: '12.5px', fontWeight: 700, color: '#7f1d1d' }}>
-                  {selectedDoc.issues?.duplicateParaId ?? 0}
-                </Typography>
-              </Box>
-
-              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', pb: 0.75, borderBottom: '1px solid #fee2e2' }}>
-                <Typography sx={{ fontSize: '12px', color: '#7f1d1d' }}>
-                  Canonical type missing
-                </Typography>
-                <Typography sx={{ fontSize: '12.5px', fontWeight: 700, color: '#7f1d1d' }}>
-                  {selectedDoc.issues?.canonicalTypeMissing ?? 0}
-                </Typography>
-              </Box>
-
-              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <Typography sx={{ fontSize: '12px', color: '#7f1d1d' }}>
-                  Paragraphs still to review
-                </Typography>
-                <Typography sx={{ fontSize: '12.5px', fontWeight: 700, color: '#7f1d1d' }}>
-                  {selectedDoc.issues?.paragraphsToReview ?? selectedDoc.paragraphs ?? 0}
-                </Typography>
-              </Box>
+            {/* Needs Review card (display count) */}
+            <Box
+              sx={{
+                p: 1.5,
+                borderRadius: 2,
+                bgcolor: selectedDoc.needsReview > 0 ? '#fff7ed' : '#f8fafc',
+                border: '1px solid',
+                borderColor: selectedDoc.needsReview > 0 ? '#ffedd5' : '#e2e8f0',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 0.5,
+              }}
+            >
+              <Typography sx={{ fontSize: '11px', fontWeight: 600, color: selectedDoc.needsReview > 0 ? '#c2410c' : '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Needs Review
+              </Typography>
+              <Typography sx={{ fontSize: '18px', fontWeight: 800, color: selectedDoc.needsReview > 0 ? '#ea580c' : '#334155' }}>
+                {selectedDoc.needsReview !== null ? selectedDoc.needsReview : '—'}
+              </Typography>
+              <Typography sx={{ fontSize: '10.5px', color: selectedDoc.needsReview > 0 ? '#9a3412' : '#64748b' }}>
+                {selectedDoc.needsReview > 0 ? 'items to verify' : 'All clear'}
+              </Typography>
             </Box>
           </Box>
 
@@ -931,34 +897,61 @@ export default function Documents({
 
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
-                <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 90 }}>
-                  Parties
+                <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 100 }}>
+                  Extraction status
                 </Typography>
-                <Typography sx={{ fontSize: '12px', fontWeight: 500, color: '#0f172a', textAlign: 'right' }}>
-                  {selectedDoc.parties}
-                </Typography>
-              </Box>
-
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
-                <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 90 }}>
-                  Document type
-                </Typography>
-                <Typography sx={{ fontSize: '12px', fontWeight: 500, color: '#0f172a', textAlign: 'right' }}>
-                  {selectedDoc.docType}
+                <Typography sx={{ fontSize: '12px', fontWeight: 600, color: '#0f172a', textAlign: 'right', textTransform: 'capitalize' }}>
+                  {selectedDoc.extractionStatus ? selectedDoc.extractionStatus.replace(/_/g, ' ') : 'Pending'}
                 </Typography>
               </Box>
 
               <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
-                <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 90 }}>
+                <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 100 }}>
+                  Needs review
+                </Typography>
+                <Typography sx={{ fontSize: '12px', fontWeight: 600, color: selectedDoc.needsReview > 0 ? '#c2410c' : '#0f172a', textAlign: 'right' }}>
+                  {selectedDoc.needsReview !== null ? `${selectedDoc.needsReview} items` : 'All Clear'}
+                </Typography>
+              </Box>
+
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
+                <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 100 }}>
+                  Pages
+                </Typography>
+                <Typography sx={{ fontSize: '12px', fontWeight: 500, color: '#0f172a', textAlign: 'right' }}>
+                  {selectedDoc.pages ?? 0}
+                </Typography>
+              </Box>
+
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
+                <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 100 }}>
+                  Clauses
+                </Typography>
+                <Typography sx={{ fontSize: '12px', fontWeight: 500, color: '#0f172a', textAlign: 'right' }}>
+                  {selectedDoc.clauses ?? 0}
+                </Typography>
+              </Box>
+
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
+                <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 100 }}>
                   Paragraphs
                 </Typography>
                 <Typography sx={{ fontSize: '12px', fontWeight: 500, color: '#0f172a', textAlign: 'right' }}>
-                  {selectedDoc.paragraphs}
+                  {selectedDoc.paragraphs ?? 0}
                 </Typography>
               </Box>
 
               <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
-                <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 90 }}>
+                <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 100 }}>
+                  Size
+                </Typography>
+                <Typography sx={{ fontSize: '12px', fontWeight: 500, color: '#0f172a', textAlign: 'right' }}>
+                  {selectedDoc.size}
+                </Typography>
+              </Box>
+
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
+                <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 100 }}>
                   In Drive since
                 </Typography>
                 <Typography sx={{ fontSize: '12px', fontWeight: 500, color: '#0f172a', textAlign: 'right' }}>
@@ -967,7 +960,7 @@ export default function Documents({
               </Box>
 
               <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
-                <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 90 }}>
+                <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 100 }}>
                   Reviewer
                 </Typography>
                 <Typography sx={{ fontSize: '12px', fontWeight: 500, color: '#0f172a', textAlign: 'right' }}>
@@ -976,16 +969,16 @@ export default function Documents({
               </Box>
 
               <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
-                <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 90 }}>
-                  Last saved
+                <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 100 }}>
+                  Last extracted
                 </Typography>
                 <Typography sx={{ fontSize: '12px', fontWeight: 500, color: '#0f172a', textAlign: 'right' }}>
-                  {selectedDoc.lastSaved}
+                  {selectedDoc.lastExtracted || selectedDoc.lastSaved}
                 </Typography>
               </Box>
 
               <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
-                <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 90 }}>
+                <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 100 }}>
                   Vector DB
                 </Typography>
                 <Typography sx={{ fontSize: '12px', fontWeight: 500, color: '#0f172a', textAlign: 'right' }}>

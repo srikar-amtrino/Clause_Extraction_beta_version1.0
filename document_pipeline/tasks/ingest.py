@@ -6,13 +6,28 @@ from document_pipeline.connectors.GoogleDrive.oauth import credentials_from_json
 def _ingest_document(self, credentials_json: str, document_id: str, force=False):
 	from document_pipeline.models import Document
 	from document_pipeline.services.ingestion_service import ingest_document
+	from document_pipeline.pipeline_logger import (
+		log_celery_task_started,
+		log_parsing_result,
+	)
 
+	task_id = str(getattr(self.request, "id", "local"))
+	log_celery_task_started("stream_document_task", task_id, document_id)
 	print("[celery] streaming worker starting document %s" % document_id, flush=True)
 	try:
 		credentials = credentials_from_json(credentials_json)
 		document = Document.objects.select_related("ingestion_source").get(pk=document_id)
 		outcome = ingest_document(credentials, document, force=force)
 		run = outcome.run
+		document.refresh_from_db()
+
+		log_parsing_result(
+			document,
+			run,
+			paragraphs_count=outcome.paragraph_count,
+			clauses_count=outcome.clause_count,
+		)
+
 		print(
 			"[celery] streaming worker finished document %s: status=%s skipped=%s"
 			% (document_id, run.status, outcome.skipped),

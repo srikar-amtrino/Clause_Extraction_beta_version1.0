@@ -211,6 +211,7 @@ def document_list(request):
     elif classified is False:
         documents = documents.exclude(classification_runs__is_current=True)
 
+    documents = documents.distinct()
     total = documents.count()
     page = list(documents.order_by('-created_at')[offset:offset + limit])
     extraction, classification = _current_runs_by_document([d.id for d in page])
