@@ -713,6 +713,7 @@ def _row(run, paragraph, result, expected, batch_index, type_pks, high_risk, thr
     failed = result.outcome == Classification.FAILED
     return Classification(
         run=run,
+        document_id=run.document_id,
         chunk_id=paragraph.chunk_id,
         paragraph_ids=paragraph_ids,
         outcome=result.outcome,

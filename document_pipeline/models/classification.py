@@ -46,6 +46,8 @@ class Classification(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     run = models.ForeignKey('document_pipeline.ClassificationRun', on_delete=models.CASCADE,
                             related_name='classifications')
+    document = models.ForeignKey('document_pipeline.Document', on_delete=models.CASCADE,
+                                 related_name='classifications')
     chunk = models.ForeignKey('document_pipeline.Chunk', on_delete=models.CASCADE,
                               related_name='classifications')
     # The source paragraphs this verdict covers, copied from the chunk so a
