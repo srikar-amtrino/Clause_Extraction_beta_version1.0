@@ -74,12 +74,27 @@ def alias_rows(entry):
 
 def seed_taxonomy(apps, version):
     """Load one taxonomy version into the database. For data migrations: takes
-    the historical app registry, so it runs against the schema as it was."""
+    the historical app registry, so it runs against the schema as it was.
+
+    A version already present with the same types is left alone, so a database
+    that recorded this seed under an older migration name can run it again.
+    One that holds a different set of types for the version is refused rather
+    than merged: which of the two is right is not a question to guess at.
+    """
     CanonicalType = apps.get_model('document_pipeline', 'CanonicalType')
     CanonicalTypeAlias = apps.get_model('document_pipeline', 'CanonicalTypeAlias')
     CanonicalTypeExclusion = apps.get_model('document_pipeline', 'CanonicalTypeExclusion')
 
     data = read_taxonomy_file(version)
+    seeded = set(CanonicalType.objects.filter(version=version).values_list('key', flat=True))
+    if seeded:
+        expected = {entry['key'] for entry in data['types']}
+        if seeded == expected:
+            return
+        raise ValueError('taxonomy %s is already in the database with %d types that do not '
+                         'match %s.json (%d types); resolve it by hand before migrating'
+                         % (version, len(seeded), version, len(expected)))
+
     by_key = {}
     for order, entry in enumerate(data['types'], start=1):
         by_key[entry['key']] = CanonicalType.objects.create(

@@ -25,7 +25,6 @@ class ChunkRun(models.Model):
                                        related_name='chunk_runs')
     # Denormalised from extraction_run.document_id: the review queue asks
     # "current chunk run for this document" and should not need two joins.
-    # The DB column was added in migration 0006 but never reflected in the model.
     document = models.ForeignKey('document_pipeline.Document', on_delete=models.CASCADE,
                                  related_name='chunk_runs')
     attempt = models.PositiveIntegerField(default=1)

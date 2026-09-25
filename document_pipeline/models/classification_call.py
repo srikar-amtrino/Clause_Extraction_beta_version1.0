@@ -22,6 +22,7 @@ class ClassificationCall(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     run = models.ForeignKey('document_pipeline.ClassificationRun', on_delete=models.CASCADE,
                             related_name='calls')
+    # Denormalised from run.document: a document's Bedrock spend is one filter.
     document = models.ForeignKey('document_pipeline.Document', on_delete=models.CASCADE,
                                  related_name='classification_calls')
     batch_index = models.PositiveIntegerField()

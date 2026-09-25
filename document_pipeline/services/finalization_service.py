@@ -25,12 +25,10 @@ def update_document_status(document_id, status: str = "NEEDS_REVIEW"):
 
     normalized_status = status.lower()
     updated = Document.objects.filter(pk=document_id).update(
-        extraction_status='classified',
         review_status=normalized_status,
         updated_at=timezone.now(),
     )
-    print('[REVIEW WORKSPACE] document status update committed=%s document=%s '
-          'extraction_status=classified review_status=%s rows=%d'
+    print('[REVIEW WORKSPACE] document status update committed=%s document=%s status=%s rows=%d'
           % (updated == 1, document_id, normalized_status, updated), flush=True)
 
 
