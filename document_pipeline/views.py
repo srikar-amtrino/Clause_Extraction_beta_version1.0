@@ -14,7 +14,7 @@ from .connectors.GoogleDrive.oauth import (
     get_user_details,
 )
 from .models import Document
-from .services.ingestion_service import google_drive_source, needs_extraction, sync_drive_files
+from .services.ingestion_service import google_drive_source, plan_dispatch, sync_drive_files
 from .tasks.orchestrate import trigger_full_document_pipeline
 
 
@@ -53,6 +53,12 @@ def _document_summary(document):
 
 
 def _changes_payload(outcome):
+    # Dispatch may have rejected a document after the sync loaded it, so the
+    # status is re-read rather than taken from the objects the sync returned.
+    statuses = dict(Document.objects.filter(id__in=[d.id for d in outcome.changed])
+                    .values_list('id', 'extraction_status'))
+    for document in outcome.changed:
+        document.extraction_status = statuses.get(document.id, document.extraction_status)
     return {
         'added': [_document_summary(d) for d in outcome.created],
         'updated': [_document_summary(d) for d in outcome.updated],
@@ -78,16 +84,9 @@ def _sync_and_queue(credentials, folders, folder_ids):
         source_external_id__in=current_files,
         deleted_at__isnull=True,
     )
-    # Immediately mark non-.docx files as rejected and only dispatch .docx documents to Celery
-    to_ingest = []
-    for document in current_documents:
-        if not document.name.lower().endswith('.docx'):
-            if document.extraction_status != 'rejected':
-                document.extraction_status = 'rejected'
-                document.save(update_fields=['extraction_status'])
-            continue
-        if document.id in changed_ids or needs_extraction(document):
-            to_ingest.append(document)
+    # Only a Word .docx reaches Celery. Anything else is refused here, by
+    # Drive's reported type, and recorded with its reason.
+    plan = plan_dispatch(current_documents, changed_ids)
 
     from document_pipeline.pipeline_logger import (
         log_celery_task_dispatched,
@@ -97,16 +96,29 @@ def _sync_and_queue(credentials, folders, folder_ids):
 
     task_ids = []
     refreshed_credentials_json = credentials.to_json()
-    for document in to_ingest:
+    for document in plan.to_ingest:
         # Parsing and chunking together: a parsed document nothing has chunked
         # holds no chunks to retrieve, cite or classify, so stopping after the
         # parse would leave every synced document half-ingested until someone
         # ran chunk_documents by hand.
         result = trigger_full_document_pipeline(refreshed_credentials_json, str(document.id))
         task_ids.append(result.id)
-        log_celery_task_dispatched("trigger_full_document_pipeline", str(result.id), "default -> llm_queue", str(document.id))
-    print(f'[http] queued {len(task_ids)} ingestion tasks', flush=True)
-    return outcome, to_ingest, task_ids, refreshed_credentials_json
+        log_celery_task_dispatched("trigger_full_document_pipeline", str(result.id), "streaming_io_queue -> parsing_queue -> llm_queue", str(document.id))
+    print(f'[http] queued {len(task_ids)} ingestion tasks, '
+          f'{len(plan.rejected)} files not parseable', flush=True)
+    return outcome, plan, task_ids, refreshed_credentials_json
+
+
+def _ingestion_payload(plan, task_ids):
+    return {
+        'status': 'queued',
+        'task_ids': task_ids,
+        'document_ids': [str(document.id) for document in plan.to_ingest],
+        'rejected': [
+            {**_document_summary(document), 'kind': rejection.kind, 'reason': str(rejection)}
+            for document, rejection in plan.rejected
+        ],
+    }
 
 
 @require_GET
@@ -198,7 +210,7 @@ def google_drive_files(request):
         from document_pipeline.pipeline_logger import log_folder_selected
         log_folder_selected(folder_ids, folders, len(current_files))
 
-        outcome, to_ingest, task_ids, credentials_json = _sync_and_queue(
+        outcome, plan, task_ids, credentials_json = _sync_and_queue(
             credentials, folders, folder_ids)
         request.session['google_drive_folder_ids'] = folder_ids
         request.session['google_drive_credentials'] = credentials_json
@@ -206,11 +218,7 @@ def google_drive_files(request):
             'user': request.session.get('google_drive_user'),
             'folder_ids': folder_ids,
             'changes': _changes_payload(outcome),
-            'ingestion': {
-                'status': 'queued',
-                'task_ids': task_ids,
-                'document_ids': [str(document.id) for document in to_ingest],
-            },
+            'ingestion': _ingestion_payload(plan, task_ids),
             'folders': folders,
         }, status=202)
     except (FileNotFoundError, ValueError) as error:
@@ -237,18 +245,14 @@ def google_drive_sync(request):
         from document_pipeline.pipeline_logger import log_folder_selected
         log_folder_selected(folder_ids, folders, len(current_files))
 
-        outcome, to_ingest, task_ids, credentials_json = _sync_and_queue(
+        outcome, plan, task_ids, credentials_json = _sync_and_queue(
             credentials, folders, folder_ids)
         request.session['google_drive_credentials'] = credentials_json
         return JsonResponse({
             'user': request.session.get('google_drive_user'),
             'folder_ids': folder_ids,
             'changes': _changes_payload(outcome),
-            'ingestion': {
-                'status': 'queued',
-                'task_ids': task_ids,
-                'document_ids': [str(document.id) for document in to_ingest],
-            },
+            'ingestion': _ingestion_payload(plan, task_ids),
             'folders': folders,
         }, status=202)
     except (FileNotFoundError, ValueError) as error:

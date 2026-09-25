@@ -57,6 +57,7 @@ def trigger_classification_workflow(document_id: str, *, force=False, classifier
     from django.conf import settings
 
     from document_pipeline.classification.bedrock_client import classifier_from_settings
+    from document_pipeline.classification.prompt import PROMPT_VERSION
     from document_pipeline.classification.taxonomy import load_vocabulary
     from document_pipeline.models import ChunkRun, ClassificationRun, ExtractionRun
     from document_pipeline.services.classification_service import (
@@ -73,12 +74,18 @@ def trigger_classification_workflow(document_id: str, *, force=False, classifier
                  .select_related('extraction_run')
                  .first())
     if chunk_run is None:
+        print('[celery] classification skipped document=%s '
+              'reason=no_current_usable_chunk_run' % document_id, flush=True)
         return None
 
     classifier = classifier or classifier_from_settings()
     vocab = load_vocabulary(settings.CLASSIFY_TAXONOMY_VERSION)
     current = ClassificationRun.objects.filter(chunk_run=chunk_run, is_current=True).first()
     if not force and is_up_to_date(current, vocab.version, classifier.model_id):
+        print('[celery] classification skipped document=%s '
+              'reason=already_classified taxonomy=%s prompt=%s model=%s'
+              % (document_id, vocab.version, PROMPT_VERSION, classifier.model_id),
+              flush=True)
         return None
 
     run = start_run(chunk_run, classifier=classifier, vocab=vocab)

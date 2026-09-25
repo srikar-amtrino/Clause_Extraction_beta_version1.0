@@ -1,0 +1,26 @@
+# Runs on every push and pull request to develop and main. Needs no secrets:
+# with no DATABASE_URL the development settings fall back to SQLite.
+name: checks
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    branches: [develop, main]
+
+jobs:
+  django:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Django system checks
+        run: python manage.py check
+      # A model change merged without its migration leaves every database built
+      # from the migrations one column short -- fails here instead.
+      - name: Every model change has a migration
+        run: python manage.py makemigrations --check --dry-run

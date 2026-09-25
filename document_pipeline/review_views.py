@@ -34,7 +34,7 @@ POST /api/documents/{id}/note/           -- write note
 Document library with review_status filter
 ------------------------------------------
 GET  /api/documents/stats/               -- status counts
-GET  /api/documents/queue/               -- in-flight + review-ready
+GET  /api/documents/queue/               -- in-flight + review-ready + unprocessable
 """
 import json
 import logging
@@ -775,15 +775,35 @@ def document_stats(request):
 @require_auth
 @require_http_methods(['GET'])
 def document_queue(request):
-    """In-flight pipeline documents + documents awaiting review."""
-    from document_pipeline.models import Document, PipelineStageLog
+    """In-flight pipeline documents, documents awaiting review, and documents
+    extraction refused or failed on."""
+    from django.db.models import OuterRef, Subquery
+    from django.db.models.fields.json import KT
+    from document_pipeline.models import Document, ExtractionRun, PipelineStageLog
+
+    # Rejected or failed at extraction: nothing moves these on until the file
+    # changes, so they are not in flight. They are listed apart, with the reason.
+    stopped = ('rejected', 'failed')
 
     # In-flight: docs whose latest pipeline stage is not yet complete.
     in_flight = list(
         Document.objects
         .filter(review_status='pending_classification')
+        .exclude(extraction_status__in=stopped)
         .order_by('-created_at')[:50]
         .values('id', 'name', 'review_status', 'created_at')
+    )
+
+    current_run = ExtractionRun.objects.filter(document=OuterRef('pk'), is_current=True)
+    unprocessable = list(
+        Document.objects
+        .filter(extraction_status__in=stopped, deleted_at__isnull=True)
+        .annotate(
+            kind=Subquery(current_run.annotate(v=KT('rejection__detected_format')).values('v')[:1]),
+            reason=Subquery(current_run.annotate(v=KT('rejection__reason')).values('v')[:1]),
+        )
+        .order_by('-created_at')[:50]
+        .values('id', 'name', 'mime_type', 'extraction_status', 'kind', 'reason', 'created_at')
     )
 
     # Review-ready: classified, awaiting first reviewer.
@@ -801,4 +821,5 @@ def document_queue(request):
     return _json({
         'in_flight': in_flight,
         'needs_review': needs_review,
+        'unprocessable': unprocessable,
     })

@@ -44,6 +44,8 @@ class ClassificationReview(models.Model):
     # document's progress without joining through every classification row.
     run = models.ForeignKey('document_pipeline.ClassificationRun', on_delete=models.CASCADE,
                             related_name='reviews')
+    document = models.ForeignKey('document_pipeline.Document', on_delete=models.CASCADE,
+                                 related_name='classification_reviews')
 
     decision = models.CharField(max_length=16, choices=DECISION_CHOICES)
     label = models.CharField(max_length=16, choices=LABEL_CHOICES, null=True, blank=True)

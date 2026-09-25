@@ -18,7 +18,8 @@ def chunk_document_task(self, document_id: str, force=False):
 	already in the database -- no Drive, no Bedrock -- so it shares the parsing
 	queue rather than needing one of its own.
 
-	Run workers with ``celery -A accorder_backend worker -Q parsing_queue``.
+	Run a worker on every pipeline queue with ``scripts/run_worker.ps1``
+	(or ``run_worker.bat``).
 	"""
 	from document_pipeline.models import ExtractionRun
 	from document_pipeline.services.chunking_service import chunk_extraction_run

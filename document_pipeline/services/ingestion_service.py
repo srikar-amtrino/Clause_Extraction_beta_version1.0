@@ -22,7 +22,12 @@ from django.utils.dateparse import parse_datetime
 from core.models import IngestionSource
 from document_pipeline.models import Document
 from document_pipeline.parsing.result import SCHEMA_VERSION
-from document_pipeline.services.parse_service import stream_and_parse
+from document_pipeline.services.drive_service import (
+    DriveFile,
+    DriveFileRejected,
+    validate_for_parsing,
+)
+from document_pipeline.services.parse_service import rejected_result, stream_and_parse
 from document_pipeline.services.persistence_service import persist_parse_result
 
 logger = logging.getLogger(__name__)
@@ -267,6 +272,92 @@ def pending_documents(ingestion_source, *, include_unparseable=False):
         # the file has to change before the answer could differ.
         queryset = queryset.exclude(extraction_status='rejected')
     return [d for d in queryset if needs_extraction(d)]
+
+
+def _drive_file(document):
+    """The Drive metadata the last sync stored, in the worker's shape."""
+    modified = document.source_modified_time
+    return DriveFile(
+        id=document.source_external_id,
+        name=document.name,
+        mime_type=document.mime_type,
+        size_bytes=document.file_size_bytes,
+        md5_checksum=None,
+        web_view_link=document.drive_web_link or None,
+        modified_time=modified.isoformat() if modified else None,
+    )
+
+
+def dispatch_rejection(document):
+    """Why this document must not be queued, or None. -> DriveFileRejected | None
+
+    Judged from the synced metadata by the rule the streaming worker applies to
+    live metadata, so the dispatcher never queues a file the worker would
+    refuse, and never holds back one it would accept.
+    """
+    if not document.mime_type:
+        # Nothing but the name to go on. The worker re-checks against Drive
+        # before downloading, so giving a .docx name the benefit is safe.
+        if document.name.lower().endswith('.docx'):
+            return None
+        return DriveFileRejected('Drive reported no type and the name is not .docx',
+                                 'not_docx_mime_type')
+    try:
+        validate_for_parsing(_drive_file(document), settings.PARSE_MAX_FILE_BYTES)
+    except DriveFileRejected as exc:
+        return exc
+    return None
+
+
+def record_rejection(document, rejection):
+    """Persist a dispatcher refusal exactly as a worker refusal is persisted:
+    a rejected ExtractionRun holding the reason, a stage log, and
+    extraction_status 'rejected'. -> PersistOutcome"""
+    return persist_parse_result(rejected_result(_drive_file(document), rejection),
+                                ingestion_source=document.ingestion_source)
+
+
+@dataclass
+class DispatchPlan:
+    """What a sync hands to Celery, and what it refused. `rejected` holds
+    (Document, DriveFileRejected) pairs."""
+    to_ingest: list = field(default_factory=list)
+    rejected: list = field(default_factory=list)
+
+
+def _due(document):
+    """True when an accepted, unchanged document still needs a parse."""
+    if document.extraction_status == 'rejected':
+        # Sticky, as in pending_documents: refused bytes are refused again until
+        # the file changes. A document with no run at all was refused by its
+        # name alone, before any worker looked at it, so it gets that look now.
+        return not document.extraction_runs.exists()
+    return needs_extraction(document)
+
+
+def plan_dispatch(documents, changed_ids):
+    """Split synced documents into those to queue and those refused, recording
+    each refusal. -> DispatchPlan
+
+    A refusal is recorded once per version of the file. persist_parse_result
+    never treats a rejected run as unchanged, so recording it on every sync
+    would append a new rejected run each time.
+    """
+    plan = DispatchPlan()
+    for document in documents:
+        changed = document.id in changed_ids
+        rejection = dispatch_rejection(document)
+        if rejection is None:
+            if changed or _due(document):
+                plan.to_ingest.append(document)
+            continue
+        if (changed or document.extraction_status != 'rejected'
+                or not document.extraction_runs.exists()):
+            print('[ingestion] not queued %s (%s): %s'
+                  % (document.name, rejection.kind, rejection), flush=True)
+            record_rejection(document, rejection)
+        plan.rejected.append((document, rejection))
+    return plan
 
 
 def ingest_document(credentials, document, *, force=False):

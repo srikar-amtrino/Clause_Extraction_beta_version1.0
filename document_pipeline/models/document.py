@@ -20,6 +20,7 @@ class Document(models.Model):
         ('pending', 'pending'),
         ('extracted', 'extracted'),
         ('extracted_with_warnings', 'extracted_with_warnings'),
+        ('classified', 'classified'),
         ('rejected', 'rejected'),
         ('failed', 'failed'),
     ]
