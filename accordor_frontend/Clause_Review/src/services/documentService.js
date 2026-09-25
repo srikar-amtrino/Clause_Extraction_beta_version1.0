@@ -7,25 +7,15 @@
  *
  * - GET /api/documents/                             the document list + stage results
  * - GET /api/documents/<id>/                        one document and the runs it has
- * - GET /api/documents/<id>/extraction/             clauses + paragraphs as stored
- * - GET /api/documents/<id>/classification-input/   micro chunks as the classifier reads them
- * - GET /api/documents/<id>/classification/         the verdict on each micro chunk
- * - GET /api/taxonomy/                              the clause types a verdict can use
- *
- * One group writes: a reviewer's decision about a verdict. These never touch
- * the classification itself -- the run stays an audit record -- and both
- * return items in exactly the shape `classification()` returns, so a decided
- * row can be swapped straight into state without refetching.
- *
- * - POST /api/classifications/<id>/review/          decide one verdict
- * - GET  /api/classifications/<id>/review/history/  every decision ever made on it
- * - POST /api/documents/<id>/reviews/               decide many at once, all or nothing
+ * - GET /api/documents/<id>/classification/         the verdict and micro chunks for each clause
  *
  * Errors come back as { detail: "..." } with a real status code and are thrown
  * as an Error carrying that detail, so a catch block can show it directly.
  */
 
-const BACKEND_BASE = 'http://127.0.0.1:8000';
+const BACKEND_BASE = typeof window !== 'undefined' && window.location.hostname === 'localhost'
+  ? 'http://localhost:8000'
+  : 'http://127.0.0.1:8000';
 
 /**
  * One fetch for every call below.
@@ -122,22 +112,6 @@ export const documentService = {
     return get(`/api/documents/${documentId}/`);
   },
 
-  /**
-   * The current extraction run: clauses in reading order, then paragraphs.
-   * `extraction` is null when the document has not been parsed.
-   */
-  extraction(documentId) {
-    return get(`/api/documents/${documentId}/extraction/`);
-  },
-
-  /**
-   * The micro chunks grouped by section, exactly as the classifier batches
-   * them. Use this to show what the model was shown when explaining a verdict.
-   * `chunk_run` is null when the document has not been chunked.
-   */
-  classificationInput(documentId) {
-    return get(`/api/documents/${documentId}/classification-input/`);
-  },
 
   /**
    * The current classification run: `summary` plus one `items` entry per micro
@@ -150,85 +124,5 @@ export const documentService = {
   classification(documentId, { needsReview } = {}) {
     return get(`/api/documents/${documentId}/classification/`,
       toQuery({ needs_review: needsReview }));
-  },
-
-  /**
-   * The workspace endpoint for the document: returns clauses, micro chunks,
-   * heading trails, labels, type names, and sub types.
-   */
-  workspace(documentId, { needsReview } = {}) {
-    return get(`/api/documents/${documentId}/workspace/`,
-      toQuery({ needs_review: needsReview }));
-  },
-
-  /**
-   * The clause types a verdict can carry, for filter menus and legends.
-   * -> { version, clause_types: [...], non_clause_types: [...] }
-   *
-   * An item's `type` in a classification response matches a type's `key` here;
-   * show `name`. Fetch once and cache — it changes only with a new taxonomy.
-   */
-  taxonomy({ version, includeInactive } = {}) {
-    return get('/api/taxonomy/', toQuery({
-      version,
-      include_inactive: includeInactive,
-    }));
-  },
-
-  /**
-   * Record a reviewer's decision about one verdict.
-   *
-   *   decision  'accepted' | 'corrected' | 'rejected'
-   *   type      taxonomy key -- required for 'corrected', omit otherwise
-   *   label     'Clause' | 'Non-clause' -- optional, defaults to the verdict's
-   *   subType   optional, and never on a Non-clause
-   *   note      optional; required for 'rejected'
-   *
-   * -> the updated item, in the same shape `classification()` returns in
-   * `items`. Swap it into state; there is no need to refetch the document.
-   *
-   * The reviewer is taken from the Drive session on the backend, so there is
-   * nothing to send about who is deciding. Deciding again supersedes the
-   * previous decision and keeps it in the history.
-   */
-  review(classificationId, { decision, type, label, subType, note } = {}) {
-    return post(`/api/classifications/${classificationId}/review/`, {
-      decision,
-      type,
-      label,
-      sub_type: subType,
-      note,
-    });
-  },
-
-  /**
-   * Every decision ever made about one verdict, newest first.
-   * -> { classification_id, reviews: [{ revision, decision, is_current, ... }] }
-   */
-  reviewHistory(classificationId) {
-    return get(`/api/classifications/${classificationId}/review/history/`);
-  },
-
-  /**
-   * Decide several verdicts for one document at once -- the "accept everything
-   * visible" button. Each entry takes the same fields as `review`, plus the
-   * `classificationId` it applies to.
-   *
-   * All or nothing: if one entry is bad, nothing is written and the thrown
-   * Error says which. -> { updated, items, summary }, where `items` holds only
-   * the rows that changed and `summary` covers the whole run, so a header can
-   * be re-rendered from the one response.
-   */
-  reviewMany(documentId, decisions = []) {
-    return post(`/api/documents/${documentId}/reviews/`, {
-      decisions: decisions.map(({ classificationId, decision, type, label, subType, note }) => ({
-        classification_id: classificationId,
-        decision,
-        type,
-        label,
-        sub_type: subType,
-        note,
-      })),
-    });
   },
 };

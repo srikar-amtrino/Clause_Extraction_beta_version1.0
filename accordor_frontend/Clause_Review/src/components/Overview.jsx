@@ -5,11 +5,15 @@ import {
   Typography,
   Button,
   Chip,
+  CircularProgress,
 } from '@mui/material';
 import AssignmentOutlinedIcon from '@mui/icons-material/AssignmentOutlined';
 import HistoryToggleOffOutlinedIcon from '@mui/icons-material/HistoryToggleOffOutlined';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
+import CloseIcon from '@mui/icons-material/Close';
+import SyncIcon from '@mui/icons-material/Sync';
+import { useAuth } from '../context/AuthContext';
 
 export default function Overview({
   driveState = {},
@@ -17,12 +21,16 @@ export default function Overview({
   queueItems = [],
   onOpenPicker,
   onConnectDrive,
-  _onCheckDrive,
+  onCheckDrive,
   onNavigateToDocuments,
   onNavigateToActivityLog,
   isEmptyData = false,
   _documents = [],
+  searchQuery = '',
 }) {
+  const { currentUser } = useAuth();
+  const currentUserName = currentUser?.username || currentUser?.name || (currentUser?.email ? currentUser.email.split('@')[0] : 'Reviewer');
+
   // Format current date
   const formattedDate = new Intl.DateTimeFormat('en-GB', {
     weekday: 'long',
@@ -43,7 +51,30 @@ export default function Overview({
     updatedToVector: stats?.updatedToVector ?? 0,
   };
 
-  const queueCount = queueItems?.length || 0;
+  // Deduplicate and filter queue items
+  const displayedQueue = React.useMemo(() => {
+    if (!queueItems || queueItems.length === 0) return [];
+    const map = new Map();
+    queueItems.forEach((item, idx) => {
+      const nameKey = (item.name || item.fileName || '').trim().toLowerCase();
+      if (!nameKey) {
+        map.set(String(item.id || item.documentId || idx), item);
+        return;
+      }
+      if (!map.has(nameKey)) {
+        map.set(nameKey, item);
+      }
+    });
+    const deduped = Array.from(map.values());
+    if (!searchQuery || !searchQuery.trim()) return deduped;
+    const q = searchQuery.trim().toLowerCase();
+    return deduped.filter((i) =>
+      (i.name || '').toLowerCase().includes(q) ||
+      (i.reviewer || '').toLowerCase().includes(q)
+    );
+  }, [queueItems, searchQuery]);
+
+  const queueCount = displayedQueue.length;
 
   return (
     <Box
@@ -142,7 +173,7 @@ export default function Overview({
                     >
                       📁 {driveState.folderPath}
                     </Box>
-                    {driveState.agreementType && (
+                    {/* {driveState.agreementType && (
                       <Chip
                         label={driveState.agreementType}
                         size="small"
@@ -155,7 +186,7 @@ export default function Overview({
                         size="small"
                         sx={{ height: 20, fontSize: '11px', bgcolor: '#f5f5f2', color: '#4a5159' }}
                       />
-                    )}
+                    )} */}
                     <span>— new files appear here automatically.</span>
                     {driveState.lastChecked && <span>Last checked {driveState.lastChecked}.</span>}
                   </>
@@ -237,7 +268,7 @@ export default function Overview({
         sx={{
           flexShrink: 0,
           display: 'grid',
-          gridTemplateColumns: { xs: 'repeat(2, 1fr)', sm: 'repeat(3, 1fr)', md: 'repeat(6, 1fr)' },
+          gridTemplateColumns: { xs: 'repeat(2, 1fr)', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' },
           bgcolor: '#ffffff',
           border: '1px solid #e3e3de',
           borderRadius: 2,
@@ -277,7 +308,7 @@ export default function Overview({
         </Box>
 
         {/* In review */}
-        <Box sx={{ p: '16px 20px', borderRight: '1px solid #e3e3de', display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+        {/* <Box sx={{ p: '16px 20px', borderRight: '1px solid #e3e3de', display: 'flex', flexDirection: 'column', gap: 0.5 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: '#1a73e8' }} />
             <Typography sx={{ fontSize: '12.5px', fontWeight: 500, color: '#4a5159' }}>
@@ -290,10 +321,10 @@ export default function Overview({
           <Typography sx={{ fontSize: '11.5px', color: '#7b838c' }}>
             actively being reviewed
           </Typography>
-        </Box>
+        </Box> */}
 
         {/* Draft */}
-        <Box sx={{ p: '16px 20px', borderRight: '1px solid #e3e3de', display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+        {/* <Box sx={{ p: '16px 20px', borderRight: '1px solid #e3e3de', display: 'flex', flexDirection: 'column', gap: 0.5 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: '#e37400' }} />
             <Typography sx={{ fontSize: '12.5px', fontWeight: 500, color: '#4a5159' }}>
@@ -306,7 +337,7 @@ export default function Overview({
           <Typography sx={{ fontSize: '11.5px', color: '#7b838c' }}>
             unsaved changes waiting
           </Typography>
-        </Box>
+        </Box> */}
 
         {/* Reviewed */}
         <Box sx={{ p: '16px 20px', borderRight: '1px solid #e3e3de', display: 'flex', flexDirection: 'column', gap: 0.5 }}>
@@ -405,62 +436,277 @@ export default function Overview({
             )}
           </Box>
 
-          <Box
-            sx={{
-              flex: 1,
-              minHeight: 280,
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
-              textAlign: 'center',
-              p: { xs: 3, sm: 4 },
-              bgcolor: '#fafaf8',
-              border: '1.5px dashed #cfcfc8',
-              borderRadius: 2,
-              gap: 1.5,
-            }}
-          >
+          {displayedQueue && displayedQueue.length > 0 ? (
             <Box
               sx={{
-                width: 52,
-                height: 52,
-                borderRadius: '50%',
-                bgcolor: '#f5f5f2',
+                flex: 1,
                 display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: '#7b838c',
+                flexDirection: 'column',
+                gap: 1.25,
+                maxHeight: 460,
+                minHeight: 260,
+                overflowY: 'auto',
+                pr: 0.5,
               }}
             >
-              <AssignmentOutlinedIcon sx={{ fontSize: 26 }} />
-            </Box>
-            <Typography variant="subtitle2" sx={{ fontWeight: 600, color: '#1b1f24', fontSize: '15px' }}>
-              Your queue is empty
-            </Typography>
-            <Typography variant="body2" sx={{ color: '#7b838c', maxWidth: 320, lineHeight: 1.5 }}>
-              No contracts are currently assigned to your review queue. Head over to <strong>Documents</strong> to inspect Google Drive files and claim them for review.
-            </Typography>
-            {onNavigateToDocuments && (
-              <Button
-                variant="contained"
-                size="small"
-                onClick={onNavigateToDocuments}
-                startIcon={<DescriptionOutlinedIcon sx={{ fontSize: 16 }} />}
+              {/* Queue status banner */}
+              <Box
                 sx={{
-                  mt: 0.5,
-                  bgcolor: '#1e3a5f',
-                  textTransform: 'none',
-                  fontSize: '12.5px',
-                  fontWeight: 600,
-                  px: 2,
-                  py: 0.8,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  px: 1.5,
+                  py: 0.9,
+                  bgcolor: '#f8fafc',
+                  borderRadius: 1.5,
+                  border: '1px solid #e2e8f0',
+                  fontSize: '12px',
+                  color: '#475569',
+                  flexWrap: 'wrap',
+                  gap: 1,
                 }}
               >
-                Browse Documents
-              </Button>
-            )}
-          </Box>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+                  {displayedQueue.filter((i) => (i.extraction_status || i.extractionStatus) === 'pending' || !(i.extraction_status || i.extractionStatus)).length > 0 && (
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                      <CircularProgress size={12} thickness={5} sx={{ color: '#0284c7' }} />
+                      <Typography sx={{ fontSize: '12px', color: '#0369a1', fontWeight: 600 }}>
+                        {displayedQueue.filter((i) => (i.extraction_status || i.extractionStatus) === 'pending' || !(i.extraction_status || i.extractionStatus)).length} pending extraction
+                      </Typography>
+                    </Box>
+                  )}
+                  {displayedQueue.filter((i) => (i.extraction_status || i.extractionStatus) === 'rejected').length > 0 && (
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      <CloseIcon sx={{ fontSize: 13, color: '#dc2626' }} />
+                      <Typography sx={{ fontSize: '12px', color: '#b91c1c', fontWeight: 600 }}>
+                        {displayedQueue.filter((i) => (i.extraction_status || i.extractionStatus) === 'rejected').length} rejected
+                      </Typography>
+                    </Box>
+                  )}
+                </Box>
+                {onCheckDrive && (
+                  <Button
+                    size="small"
+                    onClick={onCheckDrive}
+                    disabled={driveState.isSyncing}
+                    startIcon={<SyncIcon sx={{ fontSize: 13, animation: driveState.isSyncing ? 'spin 1s linear infinite' : 'none' }} />}
+                    sx={{
+                      fontSize: '11.5px',
+                      textTransform: 'none',
+                      color: '#1e3a5f',
+                      p: 0,
+                      minWidth: 0,
+                      fontWeight: 600,
+                      '&:hover': { bgcolor: 'transparent', textDecoration: 'underline' },
+                      '@keyframes spin': {
+                        '0%': { transform: 'rotate(0deg)' },
+                        '100%': { transform: 'rotate(360deg)' },
+                      },
+                    }}
+                  >
+                    {driveState.isSyncing ? 'Syncing...' : 'Sync status'}
+                  </Button>
+                )}
+              </Box>
+
+              {/* Queue Items List */}
+              {displayedQueue.map((item, index) => {
+                const isRejected = (item.extraction_status || item.extractionStatus) === 'rejected';
+                const isPending = !isRejected;
+                // const reviewerName = item.reviewer || currentUserName;
+
+                return (
+                  <Box
+                    key={item.id || item.documentId || item.name}
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      p: '11px 14px',
+                      bgcolor: isRejected ? '#fff8f8' : '#fafaf8',
+                      border: '1px solid',
+                      borderColor: isRejected ? '#fecaca' : '#e3e3de',
+                      borderRadius: 1.5,
+                      gap: 1.5,
+                      transition: 'all 0.15s ease',
+                      '&:hover': {
+                        bgcolor: isRejected ? '#fee2e2' : '#f1f5f9',
+                        borderColor: isRejected ? '#f87171' : '#cbd5e1',
+                      },
+                    }}
+                  >
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 0, flex: 1 }}>
+                      {/* Serial number */}
+                      <Box
+                        sx={{
+                          minWidth: 26,
+                          height: 26,
+                          borderRadius: '50%',
+                          bgcolor: isRejected ? '#fee2e2' : '#edf2f7',
+                          color: isRejected ? '#b91c1c' : '#1e3a5f',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          flexShrink: 0,
+                        }}
+                      >
+                        {index + 1}
+                      </Box>
+
+                      <Box sx={{ minWidth: 0, flex: 1 }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                          <Typography
+                            sx={{
+                              fontSize: '13px',
+                              fontWeight: 600,
+                              color: '#1b1f24',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                            title={item.name}
+                          >
+                            {item.name}
+                          </Typography>
+                          {/* {reviewerName && (
+                            <Chip
+                              size="small"
+                              label={`Reviewer: ${reviewerName}`}
+                              sx={{
+                                height: 20,
+                                fontSize: '11px',
+                                bgcolor: '#f1f5f9',
+                                color: '#475569',
+                                fontWeight: 500,
+                                flexShrink: 0,
+                              }}
+                            />
+                          )} */}
+                        </Box>
+                        <Typography
+                          sx={{
+                            fontSize: '11px',
+                            color: '#7b838c',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                            mt: 0.25,
+                          }}
+                        >
+                          {item.size || 'DOCX'}
+                        </Typography>
+                      </Box>
+                    </Box>
+
+                    {/* Status Badge: loading icon animation on pending, X icon on rejected */}
+                    <Box sx={{ flexShrink: 0 }}>
+                      {isPending ? (
+                        <Chip
+                          icon={
+                            <CircularProgress
+                              size={12}
+                              thickness={5}
+                              sx={{
+                                color: '#0284c7',
+                                animationDuration: '1s',
+                              }}
+                            />
+                          }
+                          label="Pending"
+                          size="small"
+                          sx={{
+                            height: 24,
+                            fontSize: '11.5px',
+                            fontWeight: 600,
+                            bgcolor: '#f0f9ff',
+                            color: '#0369a1',
+                            border: '1px solid #bae6fd',
+                            '& .MuiChip-icon': { ml: '7px', mr: '-2px' },
+                          }}
+                        />
+                      ) : (
+                        <Chip
+                          icon={<CloseIcon sx={{ fontSize: '13px !important', color: '#b91c1c' }} />}
+                          label="Rejected"
+                          size="small"
+                          sx={{
+                            height: 24,
+                            fontSize: '11.5px',
+                            fontWeight: 600,
+                            bgcolor: '#fee2e2',
+                            color: '#b91c1c',
+                            border: '1px solid #fecaca',
+                            '& .MuiChip-icon': { ml: '7px', mr: '-2px' },
+                          }}
+                        />
+                      )}
+                    </Box>
+                  </Box>
+                );
+              })}
+            </Box>
+          ) : (
+            <Box
+              sx={{
+                flex: 1,
+                minHeight: 280,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                textAlign: 'center',
+                p: { xs: 3, sm: 4 },
+                bgcolor: '#fafaf8',
+                border: '1.5px dashed #cfcfc8',
+                borderRadius: 2,
+                gap: 1.5,
+              }}
+            >
+              <Box
+                sx={{
+                  width: 52,
+                  height: 52,
+                  borderRadius: '50%',
+                  bgcolor: '#f5f5f2',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#7b838c',
+                }}
+              >
+                <AssignmentOutlinedIcon sx={{ fontSize: 26 }} />
+              </Box>
+              <Typography variant="subtitle2" sx={{ fontWeight: 600, color: '#1b1f24', fontSize: '15px' }}>
+                Your queue is empty
+              </Typography>
+              <Typography variant="body2" sx={{ color: '#7b838c', maxWidth: 320, lineHeight: 1.5 }}>
+                {driveState.isConnected
+                  ? 'All files from your connected Google Drive have been extracted, or no pending files are in queue. Extracted files appear in Documents.'
+                  : 'Connect your Google Drive account to fetch files. Pending and rejected files will appear here.'}
+              </Typography>
+              {onNavigateToDocuments && (
+                <Button
+                  variant="contained"
+                  size="small"
+                  onClick={onNavigateToDocuments}
+                  startIcon={<DescriptionOutlinedIcon sx={{ fontSize: 16 }} />}
+                  sx={{
+                    mt: 0.5,
+                    bgcolor: '#1e3a5f',
+                    textTransform: 'none',
+                    fontSize: '12.5px',
+                    fontWeight: 600,
+                    px: 2,
+                    py: 0.8,
+                  }}
+                >
+                  Browse Documents
+                </Button>
+              )}
+            </Box>
+          )}
         </Paper>
 
         {/* Right Side: Activity Template (Empty state matching Activity Log) */}

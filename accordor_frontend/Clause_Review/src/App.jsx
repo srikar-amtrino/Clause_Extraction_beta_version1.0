@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
-import { Box, Snackbar, Alert } from '@mui/material';
+import { Box, Snackbar, Alert, IconButton, Tooltip } from '@mui/material';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import Sidebar from './components/Sidebar';
 import TopNav from './components/TopNav';
 import Overview from './components/Overview';
@@ -16,6 +17,91 @@ import { useAuth } from './context/AuthContext';
 import { googleDriveService } from './services/googleDriveService';
 import { documentService } from './services/documentService';
 
+const CACHED_DOCS_KEY = 'clausewright_cached_documents';
+const CACHED_DRIVE_STATE_KEY = 'clausewright_cached_drivestate';
+
+function getCachedDocs() {
+  try {
+    const raw = localStorage.getItem(CACHED_DOCS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return deduplicateDocs(parsed);
+  } catch {
+    return [];
+  }
+}
+function saveCachedDocs(docs) {
+  try {
+    const deduped = deduplicateDocs(docs);
+    localStorage.setItem(CACHED_DOCS_KEY, JSON.stringify(deduped));
+  } catch {
+    /* ignore */
+  }
+}
+
+function getCachedDriveState() {
+  try {
+    const raw = localStorage.getItem(CACHED_DRIVE_STATE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveCachedDriveState(state) {
+  try {
+    const toSave = {
+      isConnected: state.isConnected,
+      folderPath: state.folderPath,
+      folderIds: state.folderIds,
+      agreementType: state.agreementType,
+      sectorial: state.sectorial,
+      lastChecked: state.lastChecked,
+      user: state.user,
+    };
+    localStorage.setItem(CACHED_DRIVE_STATE_KEY, JSON.stringify(toSave));
+  } catch {
+    /* ignore */
+  }
+}
+
+// Deduplicate documents strictly by normalized name so a document NEVER appears twice
+function deduplicateDocs(docs) {
+  const map = new Map();
+  docs.forEach((doc) => {
+    const key = (doc.name || doc.fileName || '').trim().toLowerCase();
+    if (!key) {
+      const fallbackKey = String(doc.documentId || doc.id);
+      map.set(fallbackKey, doc);
+      return;
+    }
+    if (!map.has(key)) {
+      map.set(key, doc);
+    } else {
+      const existing = map.get(key);
+      const existingClassified = Boolean(existing.stages?.classification || existing.classified || (existing.stages?.classification?.micro_chunks > 0));
+      const newClassified = Boolean(doc.stages?.classification || doc.classified || (doc.stages?.classification?.micro_chunks > 0));
+      if (!existingClassified && newClassified) {
+        map.set(key, doc);
+      } else if (existingClassified && !newClassified) {
+        // Keep existing classified document
+      } else {
+        const isExistingExtracted = existing.extractionStatus === 'extracted' || existing.extraction_status === 'extracted';
+        const isNewExtracted = doc.extractionStatus === 'extracted' || doc.extraction_status === 'extracted';
+        if (!isExistingExtracted && isNewExtracted) {
+          map.set(key, doc);
+        } else if (isExistingExtracted === isNewExtracted) {
+          const existingPages = existing.pages || 0;
+          const newPages = doc.pages || 0;
+          if (newPages > existingPages) {
+            map.set(key, doc);
+          }
+        }
+      }
+    }
+  });
+  return Array.from(map.values());
+}
+
 // Normalize document model from backend pipeline API or Google Drive
 function normalizeDoc(d, currentUser = null) {
   const extraction = d.stages?.extraction;
@@ -23,7 +109,13 @@ function normalizeDoc(d, currentUser = null) {
   const pages = d.pages ?? extraction?.pages ?? 0;
   const clauses = d.clauses ?? extraction?.clauses ?? 0;
   const paragraphs = d.paragraphs ?? extraction?.paragraphs ?? 0;
-  const extractionStatus = d.extractionStatus || d.extraction_status || extraction?.status || 'pending';
+  // Read extraction_status directly from the database API (/api/documents/)
+  const extractionStatus = (
+    d.extraction_status ||
+    d.extractionStatus ||
+    extraction?.status ||
+    'pending'
+  ).toLowerCase();
   const needsReview = d.needsReview ?? classification?.needs_review ?? null;
   const warnings = d.warnings || extraction?.warnings || [];
   const size = d.size || (pages > 0 ? `${Math.max(12, Math.round(pages * 26.5))} KB` : (d.mime_type?.includes('pdf') ? '1.4 MB' : '24 KB'));
@@ -38,6 +130,7 @@ function normalizeDoc(d, currentUser = null) {
     clauses,
     paragraphs,
     size,
+    extraction_status: extractionStatus,
     extractionStatus,
     needsReview,
     warnings,
@@ -87,85 +180,163 @@ function AppWorkspace() {
   const [selectedReviewDoc, setSelectedReviewDoc] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Google Drive connection and sync state
-  const [driveState, setDriveState] = useState({
-    isConnected: false,
-    isSyncing: false,
-    folderPath: '',
-    folderIds: [],
-    agreementType: '',
-    sectorial: '',
-    lastChecked: null,
-    user: null,
+  // Google Drive connection and sync state initialized from cache so there is no 2s delay on page refresh
+  const [driveState, setDriveState] = useState(() => {
+    const cached = getCachedDriveState();
+    return cached || {
+      isConnected: false,
+      isSyncing: false,
+      folderPath: '',
+      folderIds: [],
+      agreementType: '',
+      sectorial: '',
+      lastChecked: null,
+      user: null,
+    };
   });
 
-  // Real Documents fetched from backend pipeline API and Google Drive
-  const [fetchedDocuments, setFetchedDocuments] = useState([]);
-  const [isLoadingDocs, setIsLoadingDocs] = useState(false);
+  // Real Documents initialized from cache so there is 0s delay on refresh and no data loss
+  const [fetchedDocuments, setFetchedDocuments] = useState(() => getCachedDocs());
+  const [_isLoadingDocs, setIsLoadingDocs] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
-  // Load real documents only when Google Drive is connected
+  // Load real documents immediately from /api/documents/ and merge with Google Drive if connected
   useEffect(() => {
     let isMounted = true;
     const loadInitialDocuments = async () => {
-      if (!driveState.isConnected) {
-        if (isMounted) setFetchedDocuments([]);
-        return;
-      }
-
-      setIsLoadingDocs(true);
       try {
-        const res = await documentService.list({ limit: 100 }).catch(() => null);
-        let docs = [];
-        if (res && res.documents && res.documents.length > 0) {
-          docs = [...res.documents];
-        }
+        const pipelineRes = await documentService.list({ limit: 100 }).catch(() => null);
+        const pipelineDocs = pipelineRes?.documents || [];
 
-        // If backend pipeline documents endpoint returned nothing, check if there are files in Google Drive sync
-        if (docs.length === 0) {
+        let driveFolders = [];
+        if (driveState.isConnected) {
           const syncResult = await googleDriveService.sync().catch(() => null);
           if (syncResult && syncResult.folders) {
-            syncResult.folders.forEach((f) => {
-              (f.files || []).forEach((file) => {
-                docs.push({
-                  id: file.id,
-                  document_id: file.id,
-                  name: file.name,
-                  folder: f.name || 'Google Drive',
-                  size: file.size ? `${Math.round(file.size / 1024)} KB` : '1.2 MB',
-                  modifiedTime: file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : 'Today',
-                  webViewLink: file.webViewLink,
-                  stages: file.stages || {},
-                });
-              });
-            });
+            driveFolders = syncResult.folders;
+          } else if (driveState.folderIds && driveState.folderIds.length > 0) {
+            const fetchRes = await googleDriveService.fetchFiles(driveState.folderIds).catch(() => null);
+            if (fetchRes && fetchRes.folders) driveFolders = fetchRes.folders;
           }
         }
 
-        if (isMounted) {
-          setFetchedDocuments(docs.map((doc) => normalizeDoc(doc, currentUser)));
+        const mergedDocs = [];
+        const seenNames = new Set();
+
+        // 1. Database pipeline documents (source of truth)
+        pipelineDocs.forEach((p) => {
+          const norm = normalizeDoc(p, currentUser);
+          const key = (norm.name || norm.fileName || '').trim().toLowerCase();
+          if (key) seenNames.add(key);
+          mergedDocs.push(norm);
+        });
+
+        // 2. Google Drive files that are not already in the database pipeline
+        driveFolders.forEach((f) => {
+          (f.files || []).forEach((file) => {
+            const nameKey = (file.name || '').trim().toLowerCase();
+            if (!seenNames.has(nameKey)) {
+              seenNames.add(nameKey);
+              mergedDocs.push(normalizeDoc({
+                id: file.id,
+                document_id: file.id,
+                name: file.name,
+                folder: f.name || driveState.folderPath || 'Google Drive',
+                extraction_status: 'pending',
+                extractionStatus: 'pending',
+                size: file.size ? `${Math.round(file.size / 1024)} KB` : '24 KB',
+                modifiedTime: file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : 'Today',
+                webViewLink: file.webViewLink,
+              }, currentUser));
+            }
+          });
+        });
+
+        const deduped = deduplicateDocs(mergedDocs);
+        if (isMounted && deduped.length > 0) {
+          setFetchedDocuments(deduped);
+          saveCachedDocs(deduped);
         }
       } catch (err) {
-        console.warn('Loading documents via backend API failed:', err);
-        if (isMounted) {
-          setFetchedDocuments([]);
-        }
+        console.warn('Initial document fetch notice:', err);
       } finally {
-        if (isMounted) {
-          setIsLoadingDocs(false);
-        }
+        if (isMounted) setIsLoadingDocs(false);
       }
     };
     loadInitialDocuments();
     return () => {
       isMounted = false;
     };
-  }, [driveState.isConnected, currentUser]);
+  }, [driveState.isConnected, driveState.folderPath, currentUser]);
+
+  // Separate queue files (pending or rejected) from extracted documents based on extraction_status from database
+  const queueDocuments = React.useMemo(() => {
+    return fetchedDocuments.filter((d) => {
+      const status = (d.extraction_status || d.extractionStatus || 'pending').toLowerCase();
+      return status === 'pending' || status === 'rejected' || status === 'failed';
+    });
+  }, [fetchedDocuments]);
+
+  const extractedDocuments = React.useMemo(() => {
+    return fetchedDocuments.filter((d) => {
+      const status = (d.extraction_status || d.extractionStatus || '').toLowerCase();
+      return status === 'extracted' || status === 'extracted_with_warnings';
+    });
+  }, [fetchedDocuments]);
+
+  // Polling: When pending files exist in queue, check /api/documents/ every 5 seconds.
+  // Once backend extraction finishes, the status updates to 'extracted' and the file moves to Documents!
+  useEffect(() => {
+    if (!driveState.isConnected) return;
+    const hasPending = queueDocuments.some((d) => {
+      const s = (d.extraction_status || d.extractionStatus || 'pending').toLowerCase();
+      return s === 'pending';
+    });
+    if (!hasPending) return;
+
+    const timer = setInterval(async () => {
+      try {
+        const res = await documentService.list({ limit: 100 }).catch(() => null);
+        if (!res || !res.documents || res.documents.length === 0) return;
+
+        setFetchedDocuments((prev) => {
+          let hasChange = false;
+          const updated = prev.map((doc) => {
+            const match = res.documents.find(
+              (p) => (p.document_id || p.id) === (doc.documentId || doc.id) || (p.name || '').toLowerCase() === (doc.name || '').toLowerCase()
+            );
+            if (match) {
+              const newStatus = (match.extraction_status || match.extractionStatus || match.stages?.extraction?.status || '').toLowerCase();
+              const oldStatus = (doc.extraction_status || doc.extractionStatus || '').toLowerCase();
+              if (newStatus && newStatus !== oldStatus) {
+                hasChange = true;
+                return normalizeDoc({ ...doc, ...match }, currentUser);
+              }
+            }
+            return doc;
+          });
+          if (hasChange) {
+            const deduped = deduplicateDocs(updated);
+            saveCachedDocs(deduped);
+            return deduped;
+          }
+          return prev;
+        });
+      } catch {
+        /* ignore polling errors */
+      }
+    }, 5000);
+
+    return () => clearInterval(timer);
+  }, [driveState.isConnected, queueDocuments, currentUser]);
 
   // Derive review document directly from route docId or selected state
   const currentReviewDoc = React.useMemo(() => {
     if (location.pathname.startsWith('/review/')) {
       const docId = location.pathname.split('/review/')[1];
       if (docId) {
+        if (selectedReviewDoc && (selectedReviewDoc.id === docId || selectedReviewDoc.documentId === docId)) {
+          return selectedReviewDoc;
+        }
         const found = fetchedDocuments.find((d) => d.id === docId || d.documentId === docId);
         if (found) return found;
         return { id: docId, documentId: docId, name: 'Loading Document...' };
@@ -235,8 +406,7 @@ function AppWorkspace() {
       try {
         const res = await googleDriveService.checkConnectionStatus();
         if (res && res.isConnected && res.config) {
-          setDriveState((prev) => ({
-            ...prev,
+          const updated = {
             isConnected: true,
             folderPath: res.config?.folderPath || res.config?.folder_path || '',
             folderIds: res.config?.folderIds || res.config?.folder_ids || [],
@@ -244,10 +414,12 @@ function AppWorkspace() {
             sectorial: res.config?.sectorial || '',
             lastChecked: res.config?.lastChecked || 'just now',
             user: res.config?.user || { email: currentUser?.email || 'Google Account' },
-          }));
-        } else {
-          setDriveState((prev) => ({
-            ...prev,
+          };
+          saveCachedDriveState(updated);
+          setDriveState((prev) => ({ ...prev, ...updated }));
+        } else if (res && res.isConnected === false && !res.isOffline) {
+          // Explicitly disconnected
+          const disconnected = {
             isConnected: false,
             folderPath: '',
             folderIds: [],
@@ -255,7 +427,9 @@ function AppWorkspace() {
             sectorial: '',
             lastChecked: null,
             user: null,
-          }));
+          };
+          saveCachedDriveState(disconnected);
+          setDriveState((prev) => ({ ...prev, ...disconnected }));
         }
       } catch (err) {
         console.warn('Initial session check:', err);
@@ -266,11 +440,12 @@ function AppWorkspace() {
 
   // Stats derived from fetched documents
   const stats = {
-    needsReview: fetchedDocuments.filter((d) => (d.needsReview > 0) || d.status === 'Needs review').length,
-    inReview: fetchedDocuments.filter((d) => d.status === 'In review').length,
-    draft: fetchedDocuments.filter((d) => d.status === 'Draft' || d.extractionStatus === 'rejected').length,
-    reviewed: fetchedDocuments.filter((d) => d.status === 'Reviewed' || (d.extractionStatus === 'extracted' && d.needsReview === 0)).length,
-    updatedToVector: fetchedDocuments.filter((d) => d.vectorDbStatus && d.vectorDbStatus.startsWith('Updated')).length,
+    needsReview: extractedDocuments.filter((d) => (d.needsReview > 0) || d.status === 'Needs review').length,
+    processing: queueDocuments.filter((d) => d.extractionStatus === 'pending' || !d.extractionStatus).length,
+    inReview: extractedDocuments.filter((d) => d.status === 'In review').length,
+    draft: queueDocuments.filter((d) => d.extractionStatus === 'rejected').length + extractedDocuments.filter((d) => d.status === 'Draft').length,
+    reviewed: extractedDocuments.filter((d) => d.status === 'Reviewed' || (d.extractionStatus === 'extracted' && d.needsReview === 0)).length,
+    updatedToVector: extractedDocuments.filter((d) => d.vectorDbStatus && d.vectorDbStatus.startsWith('Updated')).length,
   };
 
   // Manual Google Drive OAuth connect
@@ -320,43 +495,68 @@ function AppWorkspace() {
     showToast(`Configuring "${folder.name}" (${agreementType} / ${sectorial})...`);
 
     try {
-      setDriveState((prev) => ({
-        ...prev,
-        isConnected: true,
-        folderPath: folder.name,
-        folderIds: [folder.id],
-        agreementType: agreementType,
-        sectorial: sectorial,
-        isSyncing: true,
-        lastChecked: 'just now',
-      }));
+      setDriveState((prev) => {
+        const next = {
+          ...prev,
+          isConnected: true,
+          folderPath: folder.name,
+          folderIds: [folder.id],
+          agreementType: agreementType,
+          sectorial: sectorial,
+          isSyncing: true,
+          lastChecked: 'just now',
+        };
+        saveCachedDriveState(next);
+        return next;
+      });
 
       // Fetch files from Google Drive
       const data = await googleDriveService.fetchFiles([folder.id]);
 
-      const docs = [];
+      // Check backend pipeline documents
+      const pipelineRes = await documentService.list({ limit: 100 }).catch(() => null);
+      const pipelineDocs = pipelineRes?.documents || [];
+
+      const mergedDocs = [];
+      const seenNames = new Set();
+
+      pipelineDocs.forEach((p) => {
+        const norm = normalizeDoc(p, currentUser);
+        const key = (norm.name || norm.fileName || '').trim().toLowerCase();
+        if (key) seenNames.add(key);
+        mergedDocs.push(norm);
+      });
+
       if (data && data.folders) {
         data.folders.forEach((f) => {
           (f.files || []).forEach((file) => {
-            docs.push({
-              id: file.id,
-              name: file.name,
-              folder: f.name || folder.name,
-              agreementType: agreementType,
-              sectorial: sectorial,
-              status: 'Needs review',
-              size: file.size ? `${Math.round(file.size / 1024)} KB` : '1.2 MB',
-              modifiedTime: file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : 'Today',
-              webViewLink: file.webViewLink,
-            });
+            const nameKey = (file.name || '').trim().toLowerCase();
+            if (!seenNames.has(nameKey)) {
+              seenNames.add(nameKey);
+              mergedDocs.push(normalizeDoc({
+                id: file.id,
+                document_id: file.id,
+                name: file.name,
+                folder: f.name || folder.name,
+                agreementType,
+                sectorial,
+                extraction_status: 'pending',
+                extractionStatus: 'pending',
+                size: file.size ? `${Math.round(file.size / 1024)} KB` : '24 KB',
+                modifiedTime: file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : 'Today',
+                webViewLink: file.webViewLink,
+              }, currentUser));
+            }
           });
         });
       }
 
-      setFetchedDocuments(docs);
+      const deduped = deduplicateDocs(mergedDocs);
+      setFetchedDocuments(deduped);
+      saveCachedDocs(deduped);
       setIsConfigModalOpen(false);
       setSelectedFolderForConfig(null);
-      showToast(`Saved folder "${folder.name}". Retrieved ${docs.length} files.`);
+      showToast(`Saved folder "${folder.name}". Retrieved ${deduped.length} files.`);
     } catch (err) {
       console.error('Save & Fetch error:', err);
       showToast(`Fetch error: ${err.message}`);
@@ -379,42 +579,67 @@ function AppWorkspace() {
     try {
       // First try fetching latest pipeline results from backend documents endpoint
       const pipelineRes = await documentService.list({ limit: 100 }).catch(() => null);
-      let docs = [];
-      if (pipelineRes && pipelineRes.documents && pipelineRes.documents.length > 0) {
-        docs = [...pipelineRes.documents];
-      }
+      const pipelineDocs = pipelineRes?.documents || [];
 
       // Also attempt Google Drive sync if connected
       const syncResult = await googleDriveService.sync().catch(() => null);
-      if (syncResult && syncResult.folders) {
-        const folderName = syncResult?.folders?.[0]?.name || driveState.folderPath;
-        setDriveState((prev) => ({
-          ...prev,
-          isConnected: true,
-          folderPath: folderName,
-          lastChecked: 'just now',
-        }));
+      let driveFolders = syncResult?.folders || [];
 
-        if (docs.length === 0) {
-          syncResult.folders.forEach((f) => {
-            (f.files || []).forEach((file) => {
-              docs.push({
-                id: file.id,
-                document_id: file.id,
-                name: file.name,
-                folder: f.name || folderName,
-                size: file.size ? `${Math.round(file.size / 1024)} KB` : '1.2 MB',
-                modifiedTime: file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : 'Today',
-                webViewLink: file.webViewLink,
-                stages: file.stages || {},
-              });
-            });
-          });
+      if (driveFolders.length === 0 && driveState.folderIds && driveState.folderIds.length > 0) {
+        const fetchRes = await googleDriveService.fetchFiles(driveState.folderIds).catch(() => null);
+        if (fetchRes && fetchRes.folders) {
+          driveFolders = fetchRes.folders;
         }
       }
 
-      setFetchedDocuments(docs.map((doc) => normalizeDoc(doc, currentUser)));
-      showToast(`Synced ${docs.length} documents.`);
+      const folderName = driveFolders?.[0]?.name || driveState.folderPath;
+      if (folderName) {
+        setDriveState((prev) => {
+          const next = {
+            ...prev,
+            isConnected: true,
+            folderPath: folderName,
+            lastChecked: 'just now',
+          };
+          saveCachedDriveState(next);
+          return next;
+        });
+      }
+
+      const mergedDocs = [];
+      const seenNames = new Set();
+
+      pipelineDocs.forEach((p) => {
+        const norm = normalizeDoc(p, currentUser);
+        const key = (norm.name || norm.fileName || '').trim().toLowerCase();
+        if (key) seenNames.add(key);
+        mergedDocs.push(norm);
+      });
+
+      driveFolders.forEach((f) => {
+        (f.files || []).forEach((file) => {
+          const nameKey = (file.name || '').trim().toLowerCase();
+          if (!seenNames.has(nameKey)) {
+            seenNames.add(nameKey);
+            mergedDocs.push(normalizeDoc({
+              id: file.id,
+              document_id: file.id,
+              name: file.name,
+              folder: f.name || folderName,
+              extraction_status: 'pending',
+              extractionStatus: 'pending',
+              size: file.size ? `${Math.round(file.size / 1024)} KB` : '24 KB',
+              modifiedTime: file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : 'Today',
+              webViewLink: file.webViewLink,
+            }, currentUser));
+          }
+        });
+      });
+
+      const deduped = deduplicateDocs(mergedDocs);
+      setFetchedDocuments(deduped);
+      saveCachedDocs(deduped);
+      showToast(`Synced ${deduped.length} documents.`);
     } catch (err) {
       console.warn('Sync notice:', err.message);
       showToast(`Sync error: ${err.message}`);
@@ -431,8 +656,8 @@ function AppWorkspace() {
     showToast(`Opening "${doc.name}" for clause review...`);
   };
 
-  // Filter documents by search term if typed
-  const filteredDocs = fetchedDocuments.filter((d) =>
+  // Filter extracted documents by search term for the Documents section
+  const filteredDocs = extractedDocuments.filter((d) =>
     d.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     (d.folder && d.folder.toLowerCase().includes(searchQuery.toLowerCase()))
   );
@@ -451,9 +676,48 @@ function AppWorkspace() {
       <Sidebar
         activeNav={activeNav}
         onNavSelect={handleNavSelect}
-        documentCount={fetchedDocuments.length}
+        documentCount={extractedDocuments.length}
         user={currentUser || driveState.user}
+        isCollapsed={isSidebarCollapsed}
+        onToggleCollapse={() => setIsSidebarCollapsed((prev) => !prev)}
       />
+
+      {/* Floating Expand Sidebar Arrow Button when Collapsed */}
+      {isSidebarCollapsed && (
+        <Tooltip title="Expand sidebar" arrow placement="right">
+          <IconButton
+            onClick={() => setIsSidebarCollapsed(false)}
+            sx={{
+              position: 'fixed',
+              left: 0,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              zIndex: 1300,
+              width: 22,
+              height: 52,
+              bgcolor: '#ffffff',
+              border: '1px solid #cbd5e1',
+              borderLeft: 'none',
+              borderRadius: '0 8px 8px 0',
+              boxShadow: '2px 0 8px rgba(0,0,0,0.08)',
+              color: '#475569',
+              p: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              '&:hover': {
+                bgcolor: '#f8fafc',
+                color: '#1e3a5f',
+                width: 26,
+              },
+              transition: 'all 0.15s ease',
+            }}
+          >
+            <ChevronRightIcon sx={{ fontSize: 18 }} />
+          </IconButton>
+        </Tooltip>
+      )}
 
       {/* Main Content Area */}
       <Box
@@ -463,6 +727,7 @@ function AppWorkspace() {
           flexDirection: 'column',
           height: '100%',
           overflow: 'hidden',
+          minWidth: 0,
         }}
       >
         {isReviewRoute ? (
@@ -470,6 +735,8 @@ function AppWorkspace() {
             document={currentReviewDoc}
             onBackToDocuments={handleBackToDocuments}
             showToast={showToast}
+            isSidebarCollapsed={isSidebarCollapsed}
+            onToggleSidebar={() => setIsSidebarCollapsed((prev) => !prev)}
           />
         ) : (
           <>
@@ -479,13 +746,16 @@ function AppWorkspace() {
               onSearchChange={setSearchQuery}
               onCheckDrive={handleCheckDrive}
               isCheckingDrive={driveState.isSyncing}
+              isSidebarCollapsed={isSidebarCollapsed}
+              onToggleSidebar={() => setIsSidebarCollapsed((prev) => !prev)}
             />
 
             {activeNav === 'overview' ? (
               <Overview
                 driveState={driveState}
                 stats={stats}
-                queueItems={[]}
+                queueItems={queueDocuments}
+                searchQuery={searchQuery}
                 onOpenPicker={handleOpenPicker}
                 onConnectDrive={handleConnectDrive}
                 onCheckDrive={handleCheckDrive}
@@ -496,13 +766,17 @@ function AppWorkspace() {
             ) : activeNav === 'documents' ? (
               <Documents
                 driveState={driveState}
-                documents={filteredDocs}
+                documents={extractedDocuments}
+                searchQuery={searchQuery}
+                onSearchChange={setSearchQuery}
                 onOpenWorkspace={handleOpenReviewWorkspace}
                 onOpenPicker={handleOpenPicker}
                 onConnectDrive={handleConnectDrive}
                 onCheckDrive={handleCheckDrive}
                 onViewDocument={handleViewDocument}
-                isEmptyData={fetchedDocuments.length === 0}
+                isEmptyData={extractedDocuments.length === 0}
+                queueCount={queueDocuments.length}
+                onNavigateToOverview={() => handleNavSelect('overview')}
               />
             ) : activeNav === 'activity-log' ? (
               <ActivityLog />
@@ -510,7 +784,8 @@ function AppWorkspace() {
               <Overview
                 driveState={driveState}
                 stats={stats}
-                queueItems={[]}
+                queueItems={queueDocuments}
+                searchQuery={searchQuery}
                 onOpenPicker={handleOpenPicker}
                 onConnectDrive={handleConnectDrive}
                 onCheckDrive={handleCheckDrive}
