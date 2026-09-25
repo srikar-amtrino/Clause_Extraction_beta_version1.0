@@ -22,6 +22,8 @@ import DashboardOutlinedIcon from '@mui/icons-material/DashboardOutlined';
 import HistoryOutlinedIcon from '@mui/icons-material/HistoryOutlined';
 import LogoutIcon from '@mui/icons-material/Logout';
 import ArticleIcon from '@mui/icons-material/Article';
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { useAuth } from '../context/AuthContext';
 
 export default function Sidebar({
@@ -30,6 +32,8 @@ export default function Sidebar({
   _documentCount = 0,
   documentCount = _documentCount,
   user,
+  isCollapsed = false,
+  onToggleCollapse,
 }) {
   const { currentUser, logout } = useAuth();
   const navigate = useNavigate();
@@ -64,57 +68,87 @@ export default function Sidebar({
     <Box
       component="aside"
       sx={{
-        width: 230,
-        minWidth: 230,
+        width: isCollapsed ? 0 : 230,
+        minWidth: isCollapsed ? 0 : 230,
+        maxWidth: isCollapsed ? 0 : 230,
         height: '100%',
         bgcolor: '#ffffff',
-        borderRight: '1px solid #e3e3de',
+        borderRight: isCollapsed ? 'none' : '1px solid #e3e3de',
         display: 'flex',
         flexDirection: 'column',
         userSelect: 'none',
+        overflow: 'hidden',
+        transition: 'width 0.22s cubic-bezier(0.4, 0, 0.2, 1), min-width 0.22s cubic-bezier(0.4, 0, 0.2, 1), max-width 0.22s cubic-bezier(0.4, 0, 0.2, 1)',
+        visibility: isCollapsed ? 'hidden' : 'visible',
       }}
     >
       {/* Brand Header */}
       <Box
         sx={{
-          p: '16px 18px',
+          p: '16px 12px 16px 18px',
           display: 'flex',
           alignItems: 'center',
-          gap: 1.5,
+          justifyContent: 'space-between',
           borderBottom: '1px solid transparent',
         }}
       >
-        <Box
-          sx={{
-            width: 32,
-            height: 32,
-            bgcolor: '#1e3a5f',
-            borderRadius: '6px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: '#ffffff',
-            boxShadow: '0 1px 2px rgba(0,0,0,0.08)',
-          }}
-        >
-          <ArticleIcon sx={{ fontSize: 18 }} />
-        </Box>
-        <Box sx={{ display: 'flex', flexDirection: 'column' }}>
-          <Typography
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 0 }}>
+          <Box
             sx={{
-              fontSize: '15px',
-              fontWeight: 700,
-              color: '#1b1f24',
-              letterSpacing: '-0.2px',
-              lineHeight: 1.2,
+              width: 32,
+              height: 32,
+              bgcolor: '#1e3a5f',
+              borderRadius: '6px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#ffffff',
+              boxShadow: '0 1px 2px rgba(0,0,0,0.08)',
+              flexShrink: 0,
             }}
           >
-            clausereview
-          </Typography>
-          <Typography sx={{ fontSize: '11px', color: '#7b838c', mt: '1px' }}>
-            Review & update
-          </Typography>
+            <ArticleIcon sx={{ fontSize: 18 }} />
+          </Box>
+          <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+            <Typography
+              sx={{
+                fontSize: '15px',
+                fontWeight: 700,
+                color: '#1b1f24',
+                letterSpacing: '-0.2px',
+                lineHeight: 1.2,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              clausereview
+            </Typography>
+            <Typography sx={{ fontSize: '11px', color: '#7b838c', mt: '1px', whiteSpace: 'nowrap' }}>
+              Review & update
+            </Typography>
+          </Box>
         </Box>
+
+        {/* Collapse to left arrow button */}
+        {onToggleCollapse && (
+          <Tooltip title="Collapse sidebar to left" arrow placement="right">
+            <IconButton
+              size="small"
+              onClick={onToggleCollapse}
+              sx={{
+                color: '#7b838c',
+                p: 0.5,
+                borderRadius: 1,
+                flexShrink: 0,
+                '&:hover': {
+                  bgcolor: '#f1f5f9',
+                  color: '#1e3a5f',
+                },
+              }}
+            >
+              <ChevronLeftIcon sx={{ fontSize: 20 }} />
+            </IconButton>
+          </Tooltip>
+        )}
       </Box>
 
       {/* Navigation Sections */}
