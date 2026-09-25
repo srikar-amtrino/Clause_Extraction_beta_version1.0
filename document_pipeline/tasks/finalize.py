@@ -34,11 +34,9 @@ def finalize_document_classification_task(self, document_id: str):
 
     try:
         print('[REVIEW WORKSPACE] finalization started document=%s' % document_id, flush=True)
-        # 1. Optionally run the haiku judge for low-confidence chunks.
-        needs_judge = check_low_confidence_chunks(document_id)
-        if needs_judge:
-            from document_pipeline.tasks.judge import trigger_haiku_judge_task
-            trigger_haiku_judge_task.delay(document_id)
+        # 1. Low-confidence chunks (< 0.7) are automatically flagged for
+        # human review in the Review Workspace during materialise_paragraph_records below.
+        # Haiku judge service is not yet implemented.
 
         # 2. Materialise canonical Postgres records for the review workspace.
         stats = materialise_paragraph_records(document_id)
