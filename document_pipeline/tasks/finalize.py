@@ -33,14 +33,18 @@ def finalize_document_classification_task(self, document_id: str):
     from document_pipeline.pipeline_logger import log_finalization_complete
 
     try:
-        # 1. Optionally run the haiku judge for low-confidence chunks.
-        needs_judge = check_low_confidence_chunks(document_id)
-        if needs_judge:
-            from document_pipeline.tasks.judge import trigger_haiku_judge_task
-            trigger_haiku_judge_task.delay(document_id)
+        print('[REVIEW WORKSPACE] finalization started document=%s' % document_id, flush=True)
+        # 1. Low-confidence chunks (< 0.7) are automatically flagged for
+        # human review in the Review Workspace during materialise_paragraph_records below.
+        # Haiku judge service is not yet implemented.
 
         # 2. Materialise canonical Postgres records for the review workspace.
         stats = materialise_paragraph_records(document_id)
+        print(
+            '[REVIEW WORKSPACE] paragraph records result document=%s stats=%s'
+            % (document_id, stats),
+            flush=True,
+        )
 
         # 3. Transition document status -- pipeline pauses here.
         update_document_status(document_id, status="NEEDS_REVIEW")
@@ -75,6 +79,12 @@ def finalize_document_classification_task(self, document_id: str):
         # 6. Notify the frontend that the document is ready for review.
         notify_frontend_via_websocket(document_id, event="DOCUMENT_CLASSIFIED")
 
+        print(
+            '[REVIEW WORKSPACE] finalization completed document=%s status=needs_review'
+            % document_id,
+            flush=True,
+        )
+
         return {
             "status": "FINALIZED",
             "document_id": document_id,
@@ -82,4 +92,6 @@ def finalize_document_classification_task(self, document_id: str):
             "paragraph_records": stats,
         }
     except Exception as exc:
+        print('[REVIEW WORKSPACE] finalization failed document=%s error=%s: %s'
+              % (document_id, type(exc).__name__, exc), flush=True)
         raise self.retry(exc=exc, countdown=2 ** self.request.retries)

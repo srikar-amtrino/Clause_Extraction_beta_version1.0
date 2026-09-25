@@ -1,5 +1,6 @@
 """Local development settings."""
 import os
+import sys
 from urllib.parse import parse_qsl, urlparse
 
 from .base import *  # noqa: F401,F403
@@ -17,7 +18,11 @@ ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
 # environment and never committed. See DATABASE_URL in .env.example.
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
-if DATABASE_URL:
+# When running the Django test runner, use a local SQLite DB so we never need
+# CREATE DATABASE permission on Neon (not granted on free-tier branches).
+_running_tests = "test" in sys.argv
+
+if DATABASE_URL and not _running_tests:
     _db = urlparse(DATABASE_URL)
     DATABASES = {
         "default": {
@@ -31,8 +36,8 @@ if DATABASE_URL:
         }
     }
 else:
-    # No DATABASE_URL configured: fall back to SQLite so the Drive connector's
-    # sessions and the parsing tests still run without Neon access.
+    # No DATABASE_URL, or running tests: use SQLite so tests run offline
+    # without touching Neon.
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.sqlite3",

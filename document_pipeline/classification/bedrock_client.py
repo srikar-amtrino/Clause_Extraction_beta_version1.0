@@ -93,6 +93,9 @@ class BedrockClassifier:
             # as x-amzn-requestid, which the parsed message does not carry.
             raw = self._client.messages.with_raw_response.create(**kwargs)
             response = raw.parse()
+            response_text = next((block.text for block in response.content
+                                  if block.type == 'text'), None)
+            print('[BEDROCK RAW RESPONSE] %s' % (response_text or ''), flush=True)
         except anthropic.APIStatusError as exc:
             detail = 'HTTP %s from Bedrock: %s' % (exc.status_code, _message(exc))
             if exc.status_code in (408, 409, 429) or exc.status_code >= 500:
@@ -110,7 +113,7 @@ class BedrockClassifier:
 
         usage = response.usage
         return CallResult(
-            text=next((b.text for b in response.content if b.type == 'text'), None),
+            text=response_text,
             stop_reason=response.stop_reason,
             request_id=(raw.headers.get('x-amzn-requestid') or raw.headers.get('request-id')
                         or getattr(response, '_request_id', None) or ''),

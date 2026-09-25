@@ -17,6 +17,10 @@ from django.utils import timezone
 logger = logging.getLogger(__name__)
 
 
+def _trace(message):
+    print('[REVIEW WORKSPACE] %s' % message, flush=True)
+
+
 def materialise_paragraph_records(document_id) -> dict:
     """Create or refresh DocumentParagraphRecord rows for *document_id*.
 
@@ -85,6 +89,10 @@ def materialise_paragraph_records(document_id) -> dict:
 
             if was_created:
                 created += 1
+                _trace('paragraph created document=%s paragraph=%s classification=%s '
+                       'needs_review=%s reasons=%s'
+                       % (document_id, para_id, clf.id, clf.needs_review,
+                          clf.review_reasons))
             else:
                 # Refresh LLM-owned fields but preserve reviewer edits.
                 record.llm_issues = clf.review_reasons or []
@@ -101,6 +109,10 @@ def materialise_paragraph_records(document_id) -> dict:
                     'canonical_type', 'sub_type',
                 ])
                 updated += 1
+                _trace('paragraph updated document=%s paragraph=%s record=%s '
+                       'needs_review=%s reasons=%s'
+                       % (document_id, para_id, record.id, clf.needs_review,
+                          clf.review_reasons))
 
             if clf.needs_review:
                 flagged += 1
@@ -110,4 +122,6 @@ def materialise_paragraph_records(document_id) -> dict:
         'materialise_paragraph_records: doc=%s total=%d created=%d updated=%d flagged=%d',
         document_id, total, created, updated, flagged,
     )
+    _trace('paragraph upsert committed document=%s total=%d created=%d updated=%d flagged=%d'
+           % (document_id, total, created, updated, flagged))
     return {'total': total, 'created': created, 'updated': updated, 'flagged': flagged}

@@ -24,10 +24,12 @@ def update_document_status(document_id, status: str = "NEEDS_REVIEW"):
     from document_pipeline.models import Document
 
     normalized_status = status.lower()
-    Document.objects.filter(pk=document_id).update(
+    updated = Document.objects.filter(pk=document_id).update(
         review_status=normalized_status,
         updated_at=timezone.now(),
     )
+    print('[REVIEW WORKSPACE] document status update committed=%s document=%s status=%s rows=%d'
+          % (updated == 1, document_id, normalized_status, updated), flush=True)
 
 
 def notify_frontend_via_websocket(document_id, event: str = "DOCUMENT_CLASSIFIED"):
