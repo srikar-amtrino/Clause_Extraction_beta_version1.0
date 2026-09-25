@@ -53,6 +53,10 @@ from document_pipeline.models import (
 
 logger = logging.getLogger(__name__)
 
+
+def _trace(message):
+    print('[CLASSIFICATION] %s' % message, flush=True)
+
 MICRO_FIELDS = ('id', 'local_id', 'order_index', 'clause_identifier', 'title', 'breadcrumb',
                 'lead_in_text', 'region', 'text', 'parent_local_id')
 
@@ -362,6 +366,12 @@ def finalize_run(run):
         run.save()
         PipelineStageLog.objects.create(**_stage_log(run))
 
+    _trace('run finalized run=%s document=%s status=%s micro=%d classified=%d '
+           'unclassified=%d failed=%d review=%d calls=%d'
+           % (run.id, run.document_id, run.status, run.micro_count,
+              run.classified_count, run.unclassified_count, run.failed_count,
+              run.review_count, run.call_count))
+
     from document_pipeline.pipeline_logger import log_classification_saved
     log_classification_saved(
         str(run.id),
@@ -398,6 +408,8 @@ def fail_run(run, exc):
             run.refresh_from_db()
             PipelineStageLog.objects.create(**_stage_log(run, error_code=type(exc).__name__))
     logger.error('classification run %s failed: %s: %s', run.id, type(exc).__name__, exc)
+    _trace('run failed run=%s document=%s error=%s: %s'
+           % (run.id, run.document_id, type(exc).__name__, exc))
 
 
 # ------------------------------------------------------------------ inputs
@@ -494,6 +506,10 @@ def resolve_batch(batch, *, classifier, context):
         text = prompts.render_user_message(sub, document_title=context.document_title,
                                            contract_type=context.contract_type)
         call = classifier.complete(context.system, text, output_format)
+        _trace('LLM output batch=%d attempt=%d chunks=%s request_id=%s: %s'
+               % (batch.index, max(attempts[p.chunk_id] for p in sub.paragraphs),
+              ','.join(p.chunk_id for p in sub.paragraphs), call.request_id,
+              call.text or ''))
         record = CallRecord(
             batch_index=batch.index, attempt=max(attempts[p.chunk_id] for p in sub.paragraphs),
             chunk_ids=[p.chunk_id for p in sub.paragraphs], status=ClassificationCall.SUCCEEDED,
@@ -675,19 +691,32 @@ def write_resolution(run, resolution, *, vocab):
             result = resolution.results.get(paragraph.chunk_id) or ItemResult(
                 outcome=Classification.FAILED, error='no result was produced')
             expected = vocab.expected_keys(group.section, paragraph.title or '')
+            _trace('clause chunk=%s outcome=%s label=%s type=%s confidence=%s'
+                   % (paragraph.chunk_id, result.outcome, result.label or '',
+                      result.type_key or '', result.confidence))
             rows.append(_row(run, paragraph, result, expected, batch.index, type_pks,
                              high_risk, threshold, para_ids.get(paragraph.chunk_id) or []))
     calls = [ClassificationCall(
-        run=run, batch_index=c.batch_index, attempt=c.attempt, chunk_ids=c.chunk_ids,
+        run=run, document_id=run.document_id, batch_index=c.batch_index, attempt=c.attempt, chunk_ids=c.chunk_ids,
         item_count=len(c.chunk_ids), status=c.status, stop_reason=c.stop_reason,
         request_id=c.request_id, input_tokens=c.input_tokens, output_tokens=c.output_tokens,
         cache_read_tokens=c.cache_read_tokens, cache_write_tokens=c.cache_write_tokens,
         latency_ms=c.latency_ms, raw_output=c.raw_output, error=c.error)
         for c in resolution.calls]
 
-    with transaction.atomic():
-        Classification.objects.bulk_create(rows, batch_size=settings.CLASSIFY_BULK_BATCH_SIZE)
-        ClassificationCall.objects.bulk_create(calls)
+    _trace('DB upsert prepared run=%s document=%s classifications=%d calls=%d'
+           % (run.id, run.document_id, len(rows), len(calls)))
+
+    try:
+        with transaction.atomic():
+            Classification.objects.bulk_create(rows, batch_size=settings.CLASSIFY_BULK_BATCH_SIZE)
+            ClassificationCall.objects.bulk_create(calls)
+    except Exception as exc:
+        _trace('DB upsert FAILED and rolled back run=%s document=%s error=%s: %s'
+               % (run.id, run.document_id, type(exc).__name__, exc))
+        raise
+    _trace('DB upsert committed run=%s document=%s classifications=%d calls=%d'
+           % (run.id, run.document_id, len(rows), len(calls)))
     return rows
 
 

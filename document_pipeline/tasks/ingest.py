@@ -58,8 +58,8 @@ def _ingest_document(self, credentials_json: str, document_id: str, force=False)
 def stream_document_task(self, credentials_json: str, document_id: str, force=False):
 	"""Stream a Drive file and ingest it on a dedicated I/O worker.
 
-	Run workers with ``celery -A accorder_backend worker
-	-Q streaming_io_queue --pool=solo --loglevel=INFO``.
+	Run a worker on every pipeline queue with ``scripts/run_worker.ps1``
+	(or ``run_worker.bat``).
 	"""
 	return _ingest_document(self, credentials_json, document_id, force)
 

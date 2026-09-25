@@ -13,17 +13,23 @@ from celery import shared_task
 def trigger_haiku_judge_task(self, document_id: int):
     """Run the Haiku judge for low-confidence chunks on the LLM queue.
 
-    Routes to ``llm_queue``; run workers with
-    ``celery -A accorder_backend worker -Q llm_queue -c 4``.
+    Routes to ``llm_queue``; ``scripts/run_worker.ps1`` (or ``run_worker.bat``)
+    runs a worker on it.
     """
-    from document_pipeline.services.judge_service import run_haiku_judge
-
     try:
+        from document_pipeline.services.judge_service import run_haiku_judge
         results = run_haiku_judge(document_id)
         return {
             "status": "JUDGE_COMPLETE",
             "document_id": document_id,
             "chunks_reclassified": len(results),
+        }
+    except ModuleNotFoundError:
+        # Service not implemented; review workspace handles low-confidence items
+        return {
+            "status": "JUDGE_SKIPPED",
+            "document_id": document_id,
+            "reason": "judge_service not implemented; low-confidence chunks routed to Review Workspace",
         }
     except Exception as exc:
         raise self.retry(exc=exc, countdown=2 ** self.request.retries)
