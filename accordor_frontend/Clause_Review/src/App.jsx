@@ -78,15 +78,17 @@ function deduplicateDocs(docs) {
       map.set(key, doc);
     } else {
       const existing = map.get(key);
-      const existingClassified = Boolean(existing.stages?.classification || existing.classified || (existing.stages?.classification?.micro_chunks > 0));
-      const newClassified = Boolean(doc.stages?.classification || doc.classified || (doc.stages?.classification?.micro_chunks > 0));
+      const existingStatus = (existing.extraction_status || existing.extractionStatus || '').toLowerCase();
+      const newStatus = (doc.extraction_status || doc.extractionStatus || '').toLowerCase();
+      const existingClassified = existingStatus === 'classified' || Boolean(existing.stages?.classification || existing.classified || (existing.stages?.classification?.micro_chunks > 0));
+      const newClassified = newStatus === 'classified' || Boolean(doc.stages?.classification || doc.classified || (doc.stages?.classification?.micro_chunks > 0));
       if (!existingClassified && newClassified) {
         map.set(key, doc);
       } else if (existingClassified && !newClassified) {
         // Keep existing classified document
       } else {
-        const isExistingExtracted = existing.extractionStatus === 'extracted' || existing.extraction_status === 'extracted';
-        const isNewExtracted = doc.extractionStatus === 'extracted' || doc.extraction_status === 'extracted';
+        const isExistingExtracted = existingStatus === 'extracted' || existingStatus === 'extracted_with_warnings';
+        const isNewExtracted = newStatus === 'extracted' || newStatus === 'extracted_with_warnings';
         if (!isExistingExtracted && isNewExtracted) {
           map.set(key, doc);
         } else if (isExistingExtracted === isNewExtracted) {
@@ -109,13 +111,38 @@ function normalizeDoc(d, currentUser = null) {
   const pages = d.pages ?? extraction?.pages ?? 0;
   const clauses = d.clauses ?? extraction?.clauses ?? 0;
   const paragraphs = d.paragraphs ?? extraction?.paragraphs ?? 0;
-  // Read extraction_status directly from the database API (/api/documents/)
-  const extractionStatus = (
+
+  // Determine if document has reached classified status in API database
+  const rawStatus = (
     d.extraction_status ||
     d.extractionStatus ||
     extraction?.status ||
     'pending'
   ).toLowerCase();
+
+  const isClassified =
+    rawStatus === 'classified' ||
+    (d.status && String(d.status).toLowerCase() === 'classified') ||
+    d.classified === true ||
+    Boolean(classification && (classification.status === 'succeeded' || (classification.micro_chunks && classification.micro_chunks > 0) || classification.id));
+
+  const isExtracted =
+    rawStatus === 'extracted' ||
+    rawStatus === 'extracted_with_warnings' ||
+    Boolean(extraction && extraction.status === 'succeeded');
+
+  const isRejected =
+    rawStatus === 'rejected' ||
+    rawStatus === 'failed';
+
+  const extractionStatus = isClassified
+    ? 'classified'
+    : isExtracted
+    ? (rawStatus === 'extracted_with_warnings' ? 'extracted_with_warnings' : 'extracted')
+    : isRejected
+    ? rawStatus
+    : 'pending';
+
   const needsReview = d.needsReview ?? classification?.needs_review ?? null;
   const warnings = d.warnings || extraction?.warnings || [];
   const size = d.size || (pages > 0 ? `${Math.max(12, Math.round(pages * 26.5))} KB` : (d.mime_type?.includes('pdf') ? '1.4 MB' : '24 KB'));
@@ -132,10 +159,11 @@ function normalizeDoc(d, currentUser = null) {
     size,
     extraction_status: extractionStatus,
     extractionStatus,
+    isClassified,
     needsReview,
     warnings,
     stages: d.stages || {},
-    status: d.status || (extractionStatus === 'extracted' ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted_with_warnings' ? 'Needs review' : extractionStatus === 'rejected' ? 'Draft' : 'Needs review'),
+    status: d.status || (isClassified ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted' ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'rejected' ? 'Draft' : 'Needs review'),
     statusTag: d.statusTag || (warnings.length > 0 ? `${warnings.length} warning${warnings.length > 1 ? 's' : ''}` : null),
     vectorDbStatus: d.vectorDbStatus || 'Not sent yet',
     vectorDbDetail: d.vectorDbDetail || '',
@@ -152,7 +180,7 @@ function normalizeDoc(d, currentUser = null) {
     },
     recentActivity: {
       user: 'System',
-      action: extractionStatus === 'extracted' ? 'Pipeline extraction completed' : extractionStatus === 'rejected' ? 'Document rejected by parser' : 'File ready from Google Drive',
+      action: isClassified ? 'Pipeline classification completed' : extractionStatus === 'extracted' ? 'Pipeline extraction completed' : extractionStatus === 'rejected' ? 'Document rejected by parser' : 'File ready from Google Drive',
       timestamp: d.last_extracted_at ? new Date(d.last_extracted_at).toLocaleDateString() : 'Today',
     },
     webViewLink: d.drive_web_link || d.webViewLink,
@@ -268,30 +296,33 @@ function AppWorkspace() {
     };
   }, [driveState.isConnected, driveState.folderPath, currentUser]);
 
-  // Separate queue files (pending or rejected) from extracted documents based on extraction_status from database
+  // Separate queue files (pending, extracted, or rejected) from classified documents based on extraction_status from database
+  // Per requirement:
+  // - extraction status is pending or extracted -> show in Your Queue section
+  // - when extraction status changes to classified (in API database) -> show in Documents section with extraction status: classified
   const queueDocuments = React.useMemo(() => {
     return fetchedDocuments.filter((d) => {
       const status = (d.extraction_status || d.extractionStatus || 'pending').toLowerCase();
-      return status === 'pending' || status === 'rejected' || status === 'failed';
+      return status !== 'classified';
     });
   }, [fetchedDocuments]);
 
   const extractedDocuments = React.useMemo(() => {
     return fetchedDocuments.filter((d) => {
       const status = (d.extraction_status || d.extractionStatus || '').toLowerCase();
-      return status === 'extracted' || status === 'extracted_with_warnings';
+      return status === 'classified';
     });
   }, [fetchedDocuments]);
 
-  // Polling: When pending files exist in queue, check /api/documents/ every 5 seconds.
-  // Once backend extraction finishes, the status updates to 'extracted' and the file moves to Documents!
+  // Polling: When unclassified files exist in queue, check /api/documents/ every 5 seconds.
+  // Once backend classification finishes, the status updates to 'classified' and the file moves to Documents!
   useEffect(() => {
     if (!driveState.isConnected) return;
-    const hasPending = queueDocuments.some((d) => {
+    const hasUnclassified = queueDocuments.some((d) => {
       const s = (d.extraction_status || d.extractionStatus || 'pending').toLowerCase();
-      return s === 'pending';
+      return s === 'pending' || s === 'extracted' || s === 'extracted_with_warnings';
     });
-    if (!hasPending) return;
+    if (!hasUnclassified) return;
 
     const timer = setInterval(async () => {
       try {
@@ -305,11 +336,16 @@ function AppWorkspace() {
               (p) => (p.document_id || p.id) === (doc.documentId || doc.id) || (p.name || '').toLowerCase() === (doc.name || '').toLowerCase()
             );
             if (match) {
-              const newStatus = (match.extraction_status || match.extractionStatus || match.stages?.extraction?.status || '').toLowerCase();
-              const oldStatus = (doc.extraction_status || doc.extractionStatus || '').toLowerCase();
-              if (newStatus && newStatus !== oldStatus) {
+              const prevNorm = doc;
+              const newNorm = normalizeDoc({ ...doc, ...match }, currentUser);
+              if (
+                newNorm.extractionStatus !== prevNorm.extractionStatus ||
+                newNorm.pages !== prevNorm.pages ||
+                newNorm.clauses !== prevNorm.clauses ||
+                newNorm.needsReview !== prevNorm.needsReview
+              ) {
                 hasChange = true;
-                return normalizeDoc({ ...doc, ...match }, currentUser);
+                return newNorm;
               }
             }
             return doc;
@@ -441,10 +477,13 @@ function AppWorkspace() {
   // Stats derived from fetched documents
   const stats = {
     needsReview: extractedDocuments.filter((d) => (d.needsReview > 0) || d.status === 'Needs review').length,
-    processing: queueDocuments.filter((d) => d.extractionStatus === 'pending' || !d.extractionStatus).length,
+    processing: queueDocuments.filter((d) => {
+      const s = (d.extractionStatus || d.extraction_status || 'pending').toLowerCase();
+      return s === 'pending' || s === 'extracted' || s === 'extracted_with_warnings';
+    }).length,
     inReview: extractedDocuments.filter((d) => d.status === 'In review').length,
     draft: queueDocuments.filter((d) => d.extractionStatus === 'rejected').length + extractedDocuments.filter((d) => d.status === 'Draft').length,
-    reviewed: extractedDocuments.filter((d) => d.status === 'Reviewed' || (d.extractionStatus === 'extracted' && d.needsReview === 0)).length,
+    reviewed: extractedDocuments.filter((d) => d.status === 'Reviewed' || (d.extractionStatus === 'classified' && d.needsReview === 0)).length,
     updatedToVector: extractedDocuments.filter((d) => d.vectorDbStatus && d.vectorDbStatus.startsWith('Updated')).length,
   };
 
