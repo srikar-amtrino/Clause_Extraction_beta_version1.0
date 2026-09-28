@@ -1,6 +1,10 @@
+import logging
+
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from django.db import transaction
+
+logger = logging.getLogger(__name__)
 
 
 @database_sync_to_async
@@ -65,7 +69,16 @@ class DocumentConsumer(AsyncJsonWebsocketConsumer):
 			return
 
 		self.group_name = f'document_{self.document_id}'
-		await self.channel_layer.group_add(self.group_name, self.channel_name)
+		try:
+			await self.channel_layer.group_add(self.group_name, self.channel_name)
+		except Exception:
+			logger.warning(
+				'Unable to join document websocket group %s',
+				self.group_name,
+				exc_info=True,
+			)
+			await self.close(code=1013)
+			return
 		await self.accept(subprotocol='bearer')
 		await self.send_json({
 			'event': 'lock_state',

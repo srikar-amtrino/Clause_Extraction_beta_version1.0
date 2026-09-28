@@ -50,25 +50,39 @@ export default function ReviewWorkspace({
   const currentUserName = currentUser?.username || currentUser?.name || (currentUser?.email ? currentUser.email.split('@')[0] : 'Reviewer');
   const docId = doc?.documentId || doc?.id || '';
   const currentUserIdRef = useRef(currentUserId);
+  const lockEffectDocumentIdRef = useRef(docId);
   const [workspaceLock, setWorkspaceLock] = useState({ status: 'connecting', documentId: docId });
   const lockOwnedRef = useRef(false);
   const heartbeatRef = useRef(null);
+  const lockEffectGenerationRef = useRef(0);
+
+  const handleHeartbeatFailure = React.useCallback((error) => {
+    if (error.status !== 403) return;
+    lockOwnedRef.current = false;
+    if (heartbeatRef.current) window.clearInterval(heartbeatRef.current);
+    heartbeatRef.current = null;
+    setWorkspaceLock({ status: 'error', documentId: docId });
+  }, [docId]);
 
   useEffect(() => {
     currentUserIdRef.current = currentUserId;
-  }, [currentUserId]);
+    lockEffectDocumentIdRef.current = docId;
+  }, [currentUserId, docId]);
 
   useEffect(() => {
     if (!docId) return undefined;
 
+    const effectGeneration = ++lockEffectGenerationRef.current;
     let active = true;
     let socket;
     let reconnectTimer;
+    let reconnectAttempts = 0;
+    let releasedDuringCleanup = false;
     const token = getStoredToken();
     const setHeartbeat = () => {
       if (heartbeatRef.current) window.clearInterval(heartbeatRef.current);
       heartbeatRef.current = window.setInterval(() => {
-        documentService.heartbeatWorkspaceLock(docId).catch(() => {});
+        documentService.heartbeatWorkspaceLock(docId).catch(handleHeartbeatFailure);
       }, 60000);
     };
 
@@ -78,6 +92,9 @@ export default function ReviewWorkspace({
         documentService.websocketUrl(docId),
         ['bearer', token],
       );
+      socket.onopen = () => {
+        reconnectAttempts = 0;
+      };
       socket.onmessage = (message) => {
         let update;
         try {
@@ -111,14 +128,23 @@ export default function ReviewWorkspace({
         }
       };
       socket.onclose = () => {
-        if (active) reconnectTimer = window.setTimeout(connectSocket, 2000);
+        if (active) {
+          const delay = Math.min(2000 * (2 ** reconnectAttempts), 30000);
+          reconnectAttempts += 1;
+          reconnectTimer = window.setTimeout(connectSocket, delay);
+        }
       };
     };
 
     connectSocket();
     documentService.acquireWorkspaceLock(docId).then((result) => {
       if (!active) {
-        if (result.acquired) documentService.releaseWorkspaceLock(docId).catch(() => {});
+        const replayedForSameDocument =
+          lockEffectGenerationRef.current !== effectGeneration
+          && lockEffectDocumentIdRef.current === docId;
+        if (result.acquired && !releasedDuringCleanup && !replayedForSameDocument) {
+          documentService.releaseWorkspaceLock(docId).catch(() => {});
+        }
         return;
       }
       lockOwnedRef.current = result.acquired;
@@ -137,6 +163,7 @@ export default function ReviewWorkspace({
     const releaseOnPageHide = () => {
       if (lockOwnedRef.current) {
         lockOwnedRef.current = false;
+        releasedDuringCleanup = true;
         if (socket?.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify({ event: 'close_document' }));
         } else {
@@ -162,7 +189,7 @@ export default function ReviewWorkspace({
       }
       if (socket) socket.close();
     };
-  }, [docId]);
+  }, [docId, handleHeartbeatFailure]);
 
   const canEdit = workspaceLock.status === 'editing' && workspaceLock.documentId === docId;
 
@@ -174,7 +201,7 @@ export default function ReviewWorkspace({
         lockOwnedRef.current = true;
         setWorkspaceLock({ status: 'editing', documentId: docId });
         heartbeatRef.current = window.setInterval(() => {
-          documentService.heartbeatWorkspaceLock(docId).catch(() => {});
+          documentService.heartbeatWorkspaceLock(docId).catch(handleHeartbeatFailure);
         }, 60000);
       } else {
         setWorkspaceLock({ status: 'read-only', lockedBy: result.locked_by, documentId: docId });

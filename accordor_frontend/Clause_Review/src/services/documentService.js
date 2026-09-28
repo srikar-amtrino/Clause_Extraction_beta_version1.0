@@ -58,7 +58,10 @@ async function request(path, { params, method = 'GET', body, keepalive = false }
   }
   if (!response.ok) {
     const problem = await response.json().catch(() => ({}));
-    throw new Error(problem.detail || `Request failed with status ${response.status}`);
+    const error = new Error(problem.detail || `Request failed with status ${response.status}`);
+    error.status = response.status;
+    error.data = problem;
+    throw error;
   }
   return response.json();
 }
