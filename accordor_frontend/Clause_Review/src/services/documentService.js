@@ -15,9 +15,11 @@
 
 import { getStoredToken } from './authService';
 
-const BACKEND_BASE = typeof window !== 'undefined' && window.location.hostname === 'localhost'
-  ? 'http://localhost:8000'
-  : 'http://127.0.0.1:8000';
+const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '');
+const LOCAL_BACKEND_BASE = typeof window !== 'undefined'
+  && ['localhost', '127.0.0.1'].includes(window.location.hostname)
+  ? `http://${window.location.hostname}:8000`
+  : '';
 
 /**
  * One fetch for every call below.
@@ -42,12 +44,13 @@ async function request(path, { params, method = 'GET', body, keepalive = false }
     options.body = JSON.stringify(body);
   }
 
-  let response = await fetch(`${path}${query}`, options).catch(() => null);
-  if (!response || response.status === 404) {
+  const requestUrl = `${API_BASE}${path}${query}`;
+  let response = await fetch(requestUrl, options).catch(() => null);
+  if ((!response || response.status === 404) && !API_BASE && LOCAL_BACKEND_BASE) {
     // 404 here can mean "the proxy is not running", not "no such document";
     // the direct call below tells the two apart. Safe to repeat even for a
     // POST: a 404 means the request reached nothing, so nothing was written.
-    const direct = await fetch(`${BACKEND_BASE}${path}${query}`, options).catch(() => null);
+    const direct = await fetch(`${LOCAL_BACKEND_BASE}${path}${query}`, options).catch(() => null);
     if (direct) response = direct;
   }
   if (!response) {
@@ -84,6 +87,13 @@ function toQuery(filters = {}) {
 }
 
 export const documentService = {
+  websocketUrl(documentId) {
+    const backendOrigin = API_BASE || window.location.origin;
+    const url = new URL(`/ws/documents/${documentId}/`, backendOrigin);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    return url.toString();
+  },
+
   /**
    * The document list, newest first.
    *

@@ -74,9 +74,8 @@ export default function ReviewWorkspace({
 
     const connectSocket = () => {
       if (!active || !token) return;
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       socket = new WebSocket(
-        `${protocol}//${window.location.host}/ws/documents/${docId}/`,
+        documentService.websocketUrl(docId),
         ['bearer', token],
       );
       socket.onmessage = (message) => {
