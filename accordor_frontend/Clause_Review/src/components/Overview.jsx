@@ -467,19 +467,42 @@ export default function Overview({
                 }}
               >
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-                  {displayedQueue.filter((i) => (i.extraction_status || i.extractionStatus) === 'pending' || !(i.extraction_status || i.extractionStatus)).length > 0 && (
+                  {displayedQueue.filter((i) => {
+                    const s = (i.extraction_status || i.extractionStatus || 'pending').toLowerCase();
+                    return s === 'pending';
+                  }).length > 0 && (
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
                       <CircularProgress size={12} thickness={5} sx={{ color: '#0284c7' }} />
                       <Typography sx={{ fontSize: '12px', color: '#0369a1', fontWeight: 600 }}>
-                        {displayedQueue.filter((i) => (i.extraction_status || i.extractionStatus) === 'pending' || !(i.extraction_status || i.extractionStatus)).length} pending extraction
+                        {displayedQueue.filter((i) => (i.extraction_status || i.extractionStatus || 'pending').toLowerCase() === 'pending').length} pending extraction
                       </Typography>
                     </Box>
                   )}
-                  {displayedQueue.filter((i) => (i.extraction_status || i.extractionStatus) === 'rejected').length > 0 && (
+                  {displayedQueue.filter((i) => {
+                    const s = (i.extraction_status || i.extractionStatus || '').toLowerCase();
+                    return s === 'extracted' || s === 'extracted_with_warnings';
+                  }).length > 0 && (
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                      <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: '#059669' }} />
+                      <Typography sx={{ fontSize: '12px', color: '#047857', fontWeight: 600 }}>
+                        {displayedQueue.filter((i) => {
+                          const s = (i.extraction_status || i.extractionStatus || '').toLowerCase();
+                          return s === 'extracted' || s === 'extracted_with_warnings';
+                        }).length} extracted (awaiting classification)
+                      </Typography>
+                    </Box>
+                  )}
+                  {displayedQueue.filter((i) => {
+                    const s = (i.extraction_status || i.extractionStatus || '').toLowerCase();
+                    return s === 'rejected' || s === 'failed';
+                  }).length > 0 && (
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                       <CloseIcon sx={{ fontSize: 13, color: '#dc2626' }} />
                       <Typography sx={{ fontSize: '12px', color: '#b91c1c', fontWeight: 600 }}>
-                        {displayedQueue.filter((i) => (i.extraction_status || i.extractionStatus) === 'rejected').length} rejected
+                        {displayedQueue.filter((i) => {
+                          const s = (i.extraction_status || i.extractionStatus || '').toLowerCase();
+                          return s === 'rejected' || s === 'failed';
+                        }).length} rejected
                       </Typography>
                     </Box>
                   )}
@@ -511,9 +534,10 @@ export default function Overview({
 
               {/* Queue Items List */}
               {displayedQueue.map((item, index) => {
-                const isRejected = (item.extraction_status || item.extractionStatus) === 'rejected';
-                const isPending = !isRejected;
-                // const reviewerName = item.reviewer || currentUserName;
+                const itemStatus = (item.extraction_status || item.extractionStatus || 'pending').toLowerCase();
+                const isRejected = itemStatus === 'rejected' || itemStatus === 'failed';
+                const isExtracted = itemStatus === 'extracted' || itemStatus === 'extracted_with_warnings';
+                const isPending = !isRejected && !isExtracted;
 
                 return (
                   <Box
@@ -523,15 +547,15 @@ export default function Overview({
                       alignItems: 'center',
                       justifyContent: 'space-between',
                       p: '11px 14px',
-                      bgcolor: isRejected ? '#fff8f8' : '#fafaf8',
+                      bgcolor: isRejected ? '#fff8f8' : isExtracted ? '#f0fdf4' : '#fafaf8',
                       border: '1px solid',
-                      borderColor: isRejected ? '#fecaca' : '#e3e3de',
+                      borderColor: isRejected ? '#fecaca' : isExtracted ? '#bbf7d0' : '#e3e3de',
                       borderRadius: 1.5,
                       gap: 1.5,
                       transition: 'all 0.15s ease',
                       '&:hover': {
-                        bgcolor: isRejected ? '#fee2e2' : '#f1f5f9',
-                        borderColor: isRejected ? '#f87171' : '#cbd5e1',
+                        bgcolor: isRejected ? '#fee2e2' : isExtracted ? '#dcfce7' : '#f1f5f9',
+                        borderColor: isRejected ? '#f87171' : isExtracted ? '#86efac' : '#cbd5e1',
                       },
                     }}
                   >
@@ -542,8 +566,8 @@ export default function Overview({
                           minWidth: 26,
                           height: 26,
                           borderRadius: '50%',
-                          bgcolor: isRejected ? '#fee2e2' : '#edf2f7',
-                          color: isRejected ? '#b91c1c' : '#1e3a5f',
+                          bgcolor: isRejected ? '#fee2e2' : isExtracted ? '#dcfce7' : '#edf2f7',
+                          color: isRejected ? '#b91c1c' : isExtracted ? '#166534' : '#1e3a5f',
                           fontSize: '12px',
                           fontWeight: 700,
                           display: 'flex',
@@ -570,20 +594,6 @@ export default function Overview({
                           >
                             {item.name}
                           </Typography>
-                          {/* {reviewerName && (
-                            <Chip
-                              size="small"
-                              label={`Reviewer: ${reviewerName}`}
-                              sx={{
-                                height: 20,
-                                fontSize: '11px',
-                                bgcolor: '#f1f5f9',
-                                color: '#475569',
-                                fontWeight: 500,
-                                flexShrink: 0,
-                              }}
-                            />
-                          )} */}
                         </Box>
                         <Typography
                           sx={{
@@ -596,13 +606,43 @@ export default function Overview({
                           }}
                         >
                           {item.size || 'DOCX'}
+                          {item.pages ? ` · ${item.pages} pages` : ''}
+                          {item.clauses ? ` · ${item.clauses} clauses` : ''}
                         </Typography>
                       </Box>
                     </Box>
 
-                    {/* Status Badge: loading icon animation on pending, X icon on rejected */}
+                    {/* Status Badge */}
                     <Box sx={{ flexShrink: 0 }}>
-                      {isPending ? (
+                      {isExtracted ? (
+                        <Chip
+                          label="Extracted"
+                          size="small"
+                          sx={{
+                            height: 24,
+                            fontSize: '11.5px',
+                            fontWeight: 600,
+                            bgcolor: '#dcfce7',
+                            color: '#166534',
+                            border: '1px solid #bbf7d0',
+                          }}
+                        />
+                      ) : isRejected ? (
+                        <Chip
+                          icon={<CloseIcon sx={{ fontSize: '13px !important', color: '#b91c1c' }} />}
+                          label="Rejected"
+                          size="small"
+                          sx={{
+                            height: 24,
+                            fontSize: '11.5px',
+                            fontWeight: 600,
+                            bgcolor: '#fee2e2',
+                            color: '#b91c1c',
+                            border: '1px solid #fecaca',
+                            '& .MuiChip-icon': { ml: '7px', mr: '-2px' },
+                          }}
+                        />
+                      ) : (
                         <Chip
                           icon={
                             <CircularProgress
@@ -626,21 +666,6 @@ export default function Overview({
                             '& .MuiChip-icon': { ml: '7px', mr: '-2px' },
                           }}
                         />
-                      ) : (
-                        <Chip
-                          icon={<CloseIcon sx={{ fontSize: '13px !important', color: '#b91c1c' }} />}
-                          label="Rejected"
-                          size="small"
-                          sx={{
-                            height: 24,
-                            fontSize: '11.5px',
-                            fontWeight: 600,
-                            bgcolor: '#fee2e2',
-                            color: '#b91c1c',
-                            border: '1px solid #fecaca',
-                            '& .MuiChip-icon': { ml: '7px', mr: '-2px' },
-                          }}
-                        />
                       )}
                     </Box>
                   </Box>
@@ -660,7 +685,7 @@ export default function Overview({
                 p: { xs: 3, sm: 4 },
                 bgcolor: '#fafaf8',
                 border: '1.5px dashed #cfcfc8',
-                borderRadius: 2,
+                borderRadius: 1.5,
                 gap: 1.5,
               }}
             >
@@ -683,8 +708,8 @@ export default function Overview({
               </Typography>
               <Typography variant="body2" sx={{ color: '#7b838c', maxWidth: 320, lineHeight: 1.5 }}>
                 {driveState.isConnected
-                  ? 'All files from your connected Google Drive have been extracted, or no pending files are in queue. Extracted files appear in Documents.'
-                  : 'Connect your Google Drive account to fetch files. Pending and rejected files will appear here.'}
+                  ? 'All files from your connected Google Drive have been classified. Classified files appear in Documents.'
+                  : 'Connect your Google Drive account to fetch files. Pending, extracted, and rejected files will appear here.'}
               </Typography>
               {onNavigateToDocuments && (
                 <Button
