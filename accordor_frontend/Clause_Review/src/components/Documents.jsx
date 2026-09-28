@@ -62,8 +62,10 @@ export default function Documents({
         uniqueMap.set(nameKey, d);
       } else {
         const existing = uniqueMap.get(nameKey);
-        const existingClassified = Boolean(existing.stages?.classification || existing.classified);
-        const newClassified = Boolean(d.stages?.classification || d.classified);
+        const existingStatus = (existing.extraction_status || existing.extractionStatus || '').toLowerCase();
+        const newStatus = (d.extraction_status || d.extractionStatus || '').toLowerCase();
+        const existingClassified = existingStatus === 'classified' || Boolean(existing.stages?.classification || existing.classified);
+        const newClassified = newStatus === 'classified' || Boolean(d.stages?.classification || d.classified);
         if (!existingClassified && newClassified) {
           uniqueMap.set(nameKey, d);
         } else if (existingClassified && !newClassified) {
@@ -71,8 +73,8 @@ export default function Documents({
         } else {
           const existingPages = existing.pages ?? existing.stages?.extraction?.pages ?? 0;
           const newPages = d.pages ?? d.stages?.extraction?.pages ?? 0;
-          const isExistingExtracted = (existing.extraction_status || existing.extractionStatus) === 'extracted';
-          const isNewExtracted = (d.extraction_status || d.extractionStatus) === 'extracted';
+          const isExistingExtracted = existingStatus === 'extracted' || existingStatus === 'extracted_with_warnings';
+          const isNewExtracted = newStatus === 'extracted' || newStatus === 'extracted_with_warnings';
           if (!isExistingExtracted && isNewExtracted) {
             uniqueMap.set(nameKey, d);
           } else if (newPages > existingPages) {
@@ -90,7 +92,18 @@ export default function Documents({
       const pages = d.pages ?? extraction?.pages ?? 0;
       const clauses = d.clauses ?? extraction?.clauses ?? 0;
       const paragraphs = d.paragraphs ?? extraction?.paragraphs ?? 0;
-      const extractionStatus = d.extractionStatus || d.extraction_status || extraction?.status || 'pending';
+      const rawExtractionStatus = (
+        d.extraction_status ||
+        d.extractionStatus ||
+        extraction?.status ||
+        'pending'
+      ).toLowerCase();
+      const isClassified =
+        rawExtractionStatus === 'classified' ||
+        (d.status && String(d.status).toLowerCase() === 'classified') ||
+        d.classified === true ||
+        Boolean(classification && (classification.status === 'succeeded' || (classification.micro_chunks && classification.micro_chunks > 0) || classification.id));
+      const extractionStatus = isClassified ? 'classified' : rawExtractionStatus;
       const needsReview = d.needsReview ?? classification?.needs_review ?? null;
       const warnings = d.warnings || extraction?.warnings || [];
       const size = d.size || (pages > 0 ? `${Math.max(12, Math.round(pages * 26.5))} KB` : '24 KB');
@@ -109,7 +122,7 @@ export default function Documents({
         needsReview,
         warnings,
         stages: d.stages || {},
-        status: d.status || (extractionStatus === 'extracted' ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted_with_warnings' ? 'Needs review' : extractionStatus === 'rejected' ? 'Draft' : 'Needs review'),
+        status: d.status || (isClassified ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted' ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted_with_warnings' ? 'Needs review' : extractionStatus === 'rejected' ? 'Draft' : 'Needs review'),
         statusTag: d.statusTag || (warnings.length > 0 ? `${warnings.length} warning${warnings.length > 1 ? 's' : ''}` : null),
         vectorDbStatus: d.vectorDbStatus || 'Not sent yet',
         vectorDbDetail: d.vectorDbDetail || '',
@@ -127,7 +140,7 @@ export default function Documents({
         },
         recentActivity: d.recentActivity || {
           user: driveState.user?.name || 'System',
-          action: extractionStatus === 'extracted' ? 'Last extraction completed' : extractionStatus === 'rejected' ? 'Document rejected by parser' : 'File ready from Google Drive',
+          action: isClassified ? 'Pipeline classification completed' : extractionStatus === 'extracted' ? 'Last extraction completed' : extractionStatus === 'rejected' ? 'Document rejected by parser' : 'File ready from Google Drive',
           timestamp: d.modifiedTime || (d.last_extracted_at ? new Date(d.last_extracted_at).toLocaleDateString() : 'Today'),
         },
         webViewLink: d.webViewLink || d.drive_web_link,
@@ -213,6 +226,22 @@ export default function Documents({
 
   // Extraction Status badge helper
   const renderExtractionBadge = (status, warnings = []) => {
+    if (status === 'classified') {
+      return (
+        <Chip
+          label="• Classified"
+          size="small"
+          sx={{
+            height: 22,
+            fontSize: '11px',
+            fontWeight: 600,
+            bgcolor: '#dcfce7',
+            color: '#166534',
+            border: '1px solid #bbf7d0',
+          }}
+        />
+      );
+    }
     if (status === 'extracted') {
       return (
         <Chip
@@ -222,9 +251,9 @@ export default function Documents({
             height: 22,
             fontSize: '11px',
             fontWeight: 600,
-            bgcolor: '#dcfce7',
-            color: '#166534',
-            border: '1px solid #bbf7d0',
+            bgcolor: '#e0f2fe',
+            color: '#0369a1',
+            border: '1px solid #bae6fd',
           }}
         />
       );
@@ -671,11 +700,11 @@ export default function Documents({
               <DescriptionOutlinedIcon sx={{ fontSize: 28 }} />
             </Box>
             <Typography variant="subtitle1" sx={{ fontWeight: 600, color: '#1b1f24', fontSize: '15px' }}>
-              {queueCount > 0 ? 'Files are extracting in Your Queue' : 'No documents found in Drive'}
+              {queueCount > 0 ? 'Files are in Your Queue' : 'No documents found in Drive'}
             </Typography>
             <Typography variant="body2" sx={{ color: '#7b838c', maxWidth: 440, lineHeight: 1.5 }}>
               {queueCount > 0
-                ? `You have ${queueCount} file${queueCount === 1 ? '' : 's'} currently in Your Queue waiting for extraction or rejected. Once extracted, they will automatically appear here.`
+                ? `You have ${queueCount} file${queueCount === 1 ? '' : 's'} currently in Your Queue waiting for extraction or classification. Once classified in the database, they will automatically appear here.`
                 : driveState.isConnected
                 ? driveState.folderPath
                   ? `No files found in folder "${driveState.folderPath}". Please upload DOCX or PDF files into this folder or click Sync files.`
