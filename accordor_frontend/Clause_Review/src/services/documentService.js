@@ -13,6 +13,8 @@
  * as an Error carrying that detail, so a catch block can show it directly.
  */
 
+import { getStoredToken } from './authService';
+
 const BACKEND_BASE = typeof window !== 'undefined' && window.location.hostname === 'localhost'
   ? 'http://localhost:8000'
   : 'http://127.0.0.1:8000';
@@ -25,13 +27,16 @@ const BACKEND_BASE = typeof window !== 'undefined' && window.location.hostname =
  * configure), and falls back to the backend directly if the proxy is not there
  * — the same two-step googleDriveService.js uses.
  */
-async function request(path, { params, method = 'GET', body } = {}) {
+async function request(path, { params, method = 'GET', body, keepalive = false } = {}) {
   const query = params ? `?${params}` : '';
   const options = {
     method,
     credentials: 'include',
+    keepalive,
     headers: { Accept: 'application/json' },
   };
+  const token = getStoredToken();
+  if (token) options.headers.Authorization = `Bearer ${token}`;
   if (body !== undefined) {
     options.headers['Content-Type'] = 'application/json';
     options.body = JSON.stringify(body);
@@ -60,8 +65,8 @@ function get(path, params) {
   return request(path, { params });
 }
 
-function post(path, body) {
-  return request(path, { method: 'POST', body });
+function post(path, body, options = {}) {
+  return request(path, { ...options, method: 'POST', body });
 }
 
 /** Turn a filter object into a query string, repeating array values. */
@@ -110,6 +115,18 @@ export const documentService = {
   /** One document and the state of its stages — the same row `list` returns. */
   get(documentId) {
     return get(`/api/documents/${documentId}/`);
+  },
+
+  acquireWorkspaceLock(documentId) {
+    return post(`/api/documents/${documentId}/workspace/lock/`, {});
+  },
+
+  heartbeatWorkspaceLock(documentId) {
+    return post(`/api/documents/${documentId}/workspace/lock/heartbeat/`, {});
+  },
+
+  releaseWorkspaceLock(documentId, options = {}) {
+    return post(`/api/documents/${documentId}/workspace/lock/release/`, {}, options);
   },
 
 
