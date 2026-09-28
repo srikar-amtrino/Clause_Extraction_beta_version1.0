@@ -138,7 +138,11 @@ export default function ReviewWorkspace({
     const releaseOnPageHide = () => {
       if (lockOwnedRef.current) {
         lockOwnedRef.current = false;
-        documentService.releaseWorkspaceLock(docId, { keepalive: true }).catch(() => {});
+        if (socket?.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ event: 'close_document' }));
+        } else {
+          documentService.releaseWorkspaceLock(docId, { keepalive: true }).catch(() => {});
+        }
       }
     };
     window.addEventListener('pagehide', releaseOnPageHide);
@@ -149,11 +153,15 @@ export default function ReviewWorkspace({
       if (heartbeatRef.current) window.clearInterval(heartbeatRef.current);
       heartbeatRef.current = null;
       window.removeEventListener('pagehide', releaseOnPageHide);
-      if (socket) socket.close();
       if (lockOwnedRef.current) {
         lockOwnedRef.current = false;
-        documentService.releaseWorkspaceLock(docId).catch(() => {});
+        if (socket?.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ event: 'close_document' }));
+        } else {
+          documentService.releaseWorkspaceLock(docId).catch(() => {});
+        }
       }
+      if (socket) socket.close();
     };
   }, [docId]);
 

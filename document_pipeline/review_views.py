@@ -130,8 +130,7 @@ def workspace_detail(request, document_id):
 
     user = request.user
     lock = _get_lock(document_id)
-    is_locked_by_other = lock and lock.user_id != user.id
-    is_read_only = is_locked_by_other
+    is_read_only = not lock or lock.user_id != user.id
 
     paragraphs = list(
         DocumentParagraphRecord.objects

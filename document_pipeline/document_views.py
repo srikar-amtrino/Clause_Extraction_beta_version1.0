@@ -3,6 +3,7 @@ import json
 from django.http import JsonResponse
 from django.views.decorators.http import require_GET, require_POST
 
+from core.auth_helpers import require_auth
 from .models import (
     CanonicalType,
     Classification,
@@ -266,6 +267,7 @@ def document_classification_input(request, document_id):
 
 
 @require_GET
+@require_auth
 def document_classification(request, document_id):
     """The current classification run: a summary, then one item per micro chunk
     with its label, type, sub-type, breadcrumb, source paragraphs and confidence.
@@ -278,6 +280,20 @@ def document_classification(request, document_id):
     if error:
         return error
     payload = export_service.classification_json(document)
+    from .models import WorkspaceLock
+    lock = (WorkspaceLock.objects.select_related('user')
+            .filter(document_id=document_id).first())
+    if lock and not lock.is_active:
+        lock = None
+    payload['access'] = {
+        'user': {
+            'id': str(request.user.pk),
+            'username': request.user.username,
+        },
+        'is_read_only': not lock or lock.user_id != request.user.id,
+        'locked_by': lock.user.username if lock else None,
+        'locked_by_id': str(lock.user_id) if lock else None,
+    }
     if _bool_param(request, 'needs_review') is True:
         payload['items'] = [item for item in payload['items'] if item['needs_review']]
         payload['filtered'] = {'needs_review': True, 'returned': len(payload['items'])}
@@ -309,6 +325,7 @@ def _item_for(classification):
 
 
 @require_POST
+@require_auth
 def classification_review(request, classification_id):
     """Record a reviewer's decision about one classification.
 
@@ -330,12 +347,18 @@ def classification_review(request, classification_id):
     if classification is None:
         return JsonResponse({'detail': 'No classification with that id.'}, status=404)
 
+    from .review_views import _check_editable
+    editable, response = _check_editable(classification.document_id, request.user)
+    if not editable:
+        return response
+
     payload, error = _json_body(request)
     if error:
         return error
     try:
-        review_service.record_decision(classification, payload,
-                                       review_service.reviewer_from_session(request))
+        review_service.record_decision(
+            classification, payload,
+            (request.user.email, request.user.username))
     except ReviewError as problem:
         return JsonResponse({'detail': str(problem)}, status=400)
     return JsonResponse(_item_for(classification), json_dumps_params=PRETTY)
@@ -361,6 +384,7 @@ def classification_review_history(request, classification_id):
 
 
 @require_POST
+@require_auth
 def document_reviews(request, document_id):
     """Record several decisions for one document at once.
 
@@ -377,13 +401,18 @@ def document_reviews(request, document_id):
     document, error = _get_document(document_id)
     if error:
         return error
+    from .review_views import _check_editable
+    editable, response = _check_editable(document.id, request.user)
+    if not editable:
+        return response
+
     payload, error = _json_body(request)
     if error:
         return error
     try:
         reviews = review_service.record_decisions(
             document, payload.get('decisions'),
-            review_service.reviewer_from_session(request))
+            (request.user.email, request.user.username))
     except ReviewError as problem:
         return JsonResponse({'detail': str(problem)}, status=400)
 
