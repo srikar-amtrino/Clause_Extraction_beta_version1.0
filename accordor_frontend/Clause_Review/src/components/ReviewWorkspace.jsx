@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Box,
   Typography,
@@ -35,6 +35,7 @@ import NoteAltOutlinedIcon from '@mui/icons-material/NoteAltOutlined';
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { documentService } from '../services/documentService';
+import { getStoredToken } from '../services/authService';
 import { useAuth } from '../context/AuthContext';
 
 export default function ReviewWorkspace({
@@ -45,7 +46,171 @@ export default function ReviewWorkspace({
   onToggleSidebar,
 }) {
   const { currentUser } = useAuth();
+  const currentUserId = currentUser?.id;
   const currentUserName = currentUser?.username || currentUser?.name || (currentUser?.email ? currentUser.email.split('@')[0] : 'Reviewer');
+  const docId = doc?.documentId || doc?.id || '';
+  const currentUserIdRef = useRef(currentUserId);
+  const lockEffectDocumentIdRef = useRef(docId);
+  const [workspaceLock, setWorkspaceLock] = useState({ status: 'connecting', documentId: docId });
+  const lockOwnedRef = useRef(false);
+  const heartbeatRef = useRef(null);
+  const lockEffectGenerationRef = useRef(0);
+
+  const handleHeartbeatFailure = React.useCallback((error) => {
+    if (error.status !== 403) return;
+    lockOwnedRef.current = false;
+    if (heartbeatRef.current) window.clearInterval(heartbeatRef.current);
+    heartbeatRef.current = null;
+    setWorkspaceLock({ status: 'error', documentId: docId });
+  }, [docId]);
+
+  useEffect(() => {
+    currentUserIdRef.current = currentUserId;
+    lockEffectDocumentIdRef.current = docId;
+  }, [currentUserId, docId]);
+
+  useEffect(() => {
+    if (!docId) return undefined;
+
+    const effectGeneration = ++lockEffectGenerationRef.current;
+    let active = true;
+    let socket;
+    let reconnectTimer;
+    let reconnectAttempts = 0;
+    let releasedDuringCleanup = false;
+    const token = getStoredToken();
+    const setHeartbeat = () => {
+      if (heartbeatRef.current) window.clearInterval(heartbeatRef.current);
+      heartbeatRef.current = window.setInterval(() => {
+        documentService.heartbeatWorkspaceLock(docId).catch(handleHeartbeatFailure);
+      }, 60000);
+    };
+
+    const connectSocket = () => {
+      if (!active || !token) return;
+      socket = new WebSocket(
+        documentService.websocketUrl(docId),
+        ['bearer', token],
+      );
+      socket.onopen = () => {
+        reconnectAttempts = 0;
+      };
+      socket.onmessage = (message) => {
+        let update;
+        try {
+          update = JSON.parse(message.data);
+        } catch {
+          return;
+        }
+
+        if (!['lock_state', 'document_opened', 'document_closed'].includes(update.event)) return;
+
+        if (update.event === 'document_closed') {
+          lockOwnedRef.current = false;
+          if (heartbeatRef.current) window.clearInterval(heartbeatRef.current);
+          heartbeatRef.current = null;
+          setWorkspaceLock({ status: 'available', closedBy: update.closed_by, documentId: docId });
+          return;
+        }
+
+        if (update.locked) {
+          const isMine = String(update.locked_by_id) === String(currentUserIdRef.current);
+          lockOwnedRef.current = isMine;
+          if (isMine) setHeartbeat();
+          setWorkspaceLock({
+            status: isMine ? 'editing' : 'read-only',
+            lockedBy: update.locked_by,
+            documentId: docId,
+          });
+        } else {
+          lockOwnedRef.current = false;
+          setWorkspaceLock({ status: 'available', closedBy: update.closed_by, documentId: docId });
+        }
+      };
+      socket.onclose = () => {
+        if (active) {
+          const delay = Math.min(2000 * (2 ** reconnectAttempts), 30000);
+          reconnectAttempts += 1;
+          reconnectTimer = window.setTimeout(connectSocket, delay);
+        }
+      };
+    };
+
+    connectSocket();
+    documentService.acquireWorkspaceLock(docId).then((result) => {
+      if (!active) {
+        const replayedForSameDocument =
+          lockEffectGenerationRef.current !== effectGeneration
+          && lockEffectDocumentIdRef.current === docId;
+        if (result.acquired && !releasedDuringCleanup && !replayedForSameDocument) {
+          documentService.releaseWorkspaceLock(docId).catch(() => {});
+        }
+        return;
+      }
+      lockOwnedRef.current = result.acquired;
+      setWorkspaceLock({
+        status: result.acquired ? 'editing' : 'read-only',
+        lockedBy: result.locked_by,
+        documentId: docId,
+      });
+      if (result.acquired) setHeartbeat();
+    }).catch(() => {
+      if (active) {
+        setWorkspaceLock({ status: 'error', documentId: docId });
+      }
+    });
+
+    const releaseOnPageHide = () => {
+      if (lockOwnedRef.current) {
+        lockOwnedRef.current = false;
+        releasedDuringCleanup = true;
+        if (socket?.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ event: 'close_document' }));
+        } else {
+          documentService.releaseWorkspaceLock(docId, { keepalive: true }).catch(() => {});
+        }
+      }
+    };
+    window.addEventListener('pagehide', releaseOnPageHide);
+
+    return () => {
+      active = false;
+      window.clearTimeout(reconnectTimer);
+      if (heartbeatRef.current) window.clearInterval(heartbeatRef.current);
+      heartbeatRef.current = null;
+      window.removeEventListener('pagehide', releaseOnPageHide);
+      if (lockOwnedRef.current) {
+        lockOwnedRef.current = false;
+        if (socket?.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ event: 'close_document' }));
+        } else {
+          documentService.releaseWorkspaceLock(docId).catch(() => {});
+        }
+      }
+      if (socket) socket.close();
+    };
+  }, [docId, handleHeartbeatFailure]);
+
+  const canEdit = workspaceLock.status === 'editing' && workspaceLock.documentId === docId;
+
+  const handleTakeEditingAccess = async () => {
+    setWorkspaceLock({ status: 'acquiring', documentId: docId });
+    try {
+      const result = await documentService.acquireWorkspaceLock(docId);
+      if (result.acquired) {
+        lockOwnedRef.current = true;
+        setWorkspaceLock({ status: 'editing', documentId: docId });
+        heartbeatRef.current = window.setInterval(() => {
+          documentService.heartbeatWorkspaceLock(docId).catch(handleHeartbeatFailure);
+        }, 60000);
+      } else {
+        setWorkspaceLock({ status: 'read-only', lockedBy: result.locked_by, documentId: docId });
+      }
+    } catch (error) {
+      setWorkspaceLock({ status: 'available', documentId: docId });
+      showToast?.(error.message || 'Could not acquire document access.');
+    }
+  };
 
   const [activeTab, setActiveTab] = useState('review');
   const [activeFilter, setActiveFilter] = useState('all');
@@ -146,6 +311,7 @@ export default function ReviewWorkspace({
   };
 
   const handleUpdateRow = (rowId, updates) => {
+    if (!canEdit) return;
     setExtractedClauses((prev) =>
       prev.map((row) => {
         if (row.id === rowId || row.paraId === rowId || row.classification_id === rowId) {
@@ -261,27 +427,11 @@ export default function ReviewWorkspace({
     };
   }, [doc]);
 
-  if (!doc) {
-    return (
-      <Box sx={{ p: 4, textAlign: 'center', bgcolor: '#ffffff', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-        <DescriptionOutlinedIcon sx={{ fontSize: 48, color: '#94a3b8', mb: 1.5 }} />
-        <Typography variant="h6" sx={{ color: '#1b1f24', fontWeight: 600 }}>No document selected</Typography>
-        <Typography variant="body2" sx={{ color: '#64748b', mt: 0.5, mb: 2.5 }}>
-          Select a document from your Google Drive files to view its review workspace template.
-        </Typography>
-        <Button onClick={onBackToDocuments} variant="contained" sx={{ bgcolor: '#1e3a5f', textTransform: 'none' }}>
-          Back to Documents
-        </Button>
-      </Box>
-    );
-  }
-
-  const docName = documentMeta?.name || doc.name || 'Document';
-  const docTitle = documentMeta?.title || doc.title || docName;
-  const webViewLink = documentMeta?.drive_web_link || doc.webViewLink;
+  const docName = documentMeta?.name || doc?.name || 'Document';
+  const docTitle = documentMeta?.title || doc?.title || docName;
+  const webViewLink = documentMeta?.drive_web_link || doc?.webViewLink;
 
   // Document-level note state for the entire file
-  const docId = doc?.documentId || doc?.id || '';
   const [documentNote, setDocumentNote] = useState(() => {
     if (!docId) return '';
     try {
@@ -391,6 +541,21 @@ export default function ReviewWorkspace({
       setSelectedRows([...selectedRows, index]);
     }
   };
+
+  if (!doc) {
+    return (
+      <Box sx={{ p: 4, textAlign: 'center', bgcolor: '#ffffff', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+        <DescriptionOutlinedIcon sx={{ fontSize: 48, color: '#94a3b8', mb: 1.5 }} />
+        <Typography variant="h6" sx={{ color: '#1b1f24', fontWeight: 600 }}>No document selected</Typography>
+        <Typography variant="body2" sx={{ color: '#64748b', mt: 0.5, mb: 2.5 }}>
+          Select a document from your Google Drive files to view its review workspace template.
+        </Typography>
+        <Button onClick={onBackToDocuments} variant="contained" sx={{ bgcolor: '#1e3a5f', textTransform: 'none' }}>
+          Back to Documents
+        </Button>
+      </Box>
+    );
+  }
 
   return (
     <Box
@@ -531,6 +696,7 @@ export default function ReviewWorkspace({
             <Button
               variant="outlined"
               size="small"
+              disabled={!canEdit}
               startIcon={<SaveOutlinedIcon sx={{ fontSize: 15 }} />}
               onClick={() => showToast?.(`Saved changes for ${docName}`)}
               sx={{
@@ -551,6 +717,7 @@ export default function ReviewWorkspace({
             <Button
               variant="contained"
               size="small"
+              disabled={!canEdit}
               startIcon={<CloudUploadOutlinedIcon sx={{ fontSize: 16 }} />}
               onClick={() => showToast?.(`Updating "${docName}" to vector database...`)}
               sx={{
@@ -570,6 +737,43 @@ export default function ReviewWorkspace({
             </Button>
           </Box>
         </Box>
+
+        {!canEdit && (
+          <Box
+            role="status"
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: 1,
+              px: 1.5,
+              py: 1,
+              bgcolor: workspaceLock.status === 'available' ? '#f0fdf4' : '#fff7ed',
+              border: `1px solid ${workspaceLock.status === 'available' ? '#bbf7d0' : '#fed7aa'}`,
+              borderRadius: 1,
+              color: '#374151',
+              fontSize: '13px',
+            }}
+          >
+            <span>
+              {workspaceLock.status === 'available'
+                ? `${workspaceLock.closedBy || 'The previous reviewer'} closed this document. It is available now.`
+                : workspaceLock.status === 'connecting'
+                ? 'Checking document access…'
+                : workspaceLock.status === 'acquiring'
+                ? 'Requesting editing access…'
+                : workspaceLock.status === 'error'
+                ? 'Document access could not be confirmed. Editing is disabled.'
+                : `Read-only while ${workspaceLock.lockedBy || 'another reviewer'} has the document open.`}
+            </span>
+            {workspaceLock.status === 'available' && (
+              <Button size="small" variant="outlined" onClick={handleTakeEditingAccess}>
+                Take editing access
+              </Button>
+            )}
+          </Box>
+        )}
 
         {/* Subheader info & counts row */}
         <Box
@@ -1095,6 +1299,7 @@ export default function ReviewWorkspace({
                       <TableCell sx={{ py: 1, verticalAlign: 'top' }}>
                         <TextField
                           size="small"
+                          disabled={!canEdit}
                           placeholder="Sub-type"
                           value={row.sub_type || ''}
                           onChange={(e) =>
@@ -1333,6 +1538,7 @@ export default function ReviewWorkspace({
             >
               <TextField
                 multiline
+                disabled={!canEdit}
                 minRows={10}
                 maxRows={24}
                 fullWidth
@@ -1366,6 +1572,7 @@ export default function ReviewWorkspace({
                     <Button
                       variant="outlined"
                       size="small"
+                      disabled={!canEdit}
                       onClick={() => {
                         setDocumentNote('');
                         if (docId) {
@@ -1388,6 +1595,7 @@ export default function ReviewWorkspace({
                   <Button
                     variant="contained"
                     size="small"
+                    disabled={!canEdit}
                     startIcon={<SaveOutlinedIcon sx={{ fontSize: 16 }} />}
                     onClick={handleSaveDocumentNote}
                     sx={{

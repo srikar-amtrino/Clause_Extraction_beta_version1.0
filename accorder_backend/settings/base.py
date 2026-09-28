@@ -54,6 +54,8 @@ DEBUG = env_bool("DJANGO_DEBUG", False)
 ALLOWED_HOSTS = [h.strip() for h in os.environ.get("DJANGO_ALLOWED_HOSTS", "").split(",") if h.strip()]
 
 INSTALLED_APPS = [
+    "daphne",
+    "channels",
     # Sessions hold the signed-in user's Drive credentials for the ingestion
     # connector; auth depends on contenttypes.
     "django.contrib.sessions",
@@ -79,7 +81,7 @@ MIDDLEWARE = [
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-]
+] + env_list("FRONTEND_ALLOWED_ORIGINS", [])
 CORS_ALLOW_HEADERS = [
     "accept",
     "authorization",
@@ -89,6 +91,7 @@ CORS_ALLOW_HEADERS = [
 CORS_ALLOW_CREDENTIALS = True
 
 ROOT_URLCONF = "accorder_backend.urls"
+ASGI_APPLICATION = "accorder_backend.asgi.application"
 
 # APP_DIRS finds document_pipeline/templates/google_drive/picker.html.
 TEMPLATES = [
@@ -238,6 +241,19 @@ CELERY_BROKER_URL = upstash_redis_url()
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL
 CELERY_BROKER_USE_SSL = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
 CELERY_REDIS_BACKEND_USE_SSL = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
+
+# Use Redis across workers when configured; local development can run with the
+# in-memory layer when no Redis connection is available.
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": (
+            "channels_redis.core.RedisChannelLayer"
+            if CELERY_BROKER_URL
+            else "channels.layers.InMemoryChannelLayer"
+        ),
+        "CONFIG": {"hosts": [CELERY_BROKER_URL]} if CELERY_BROKER_URL else {},
+    }
+}
 # A task that names no queue lands on one the worker consumes. Celery's own
 # default is "celery", which scripts/run_worker does not listen on.
 CELERY_TASK_DEFAULT_QUEUE = "default"
