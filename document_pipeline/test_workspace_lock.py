@@ -3,11 +3,43 @@ from unittest.mock import Mock, patch
 
 from django.test import SimpleTestCase
 
+from document_pipeline.document_views import _document_row
 from document_pipeline.review_views import _check_editable
 from realtime.events import publish_document_lock
 
 
 class WorkspaceLockTests(SimpleTestCase):
+    def test_document_row_includes_persisted_reviewer_details(self):
+        reviewer = Mock(
+            pk='reviewer-id',
+            username='reviewer-a',
+            email='reviewer-a@example.test',
+            role='Legal Product Analyst',
+        )
+        document = Mock(
+            id='document-id',
+            name='Contract',
+            document_title=None,
+            source_external_id='drive-id',
+            source_parent_id='',
+            drive_web_link='',
+            mime_type='application/pdf',
+            extraction_status='classified',
+            review_status='in_review',
+            current_reviewer=reviewer,
+            last_extracted_at=None,
+        )
+
+        row = _document_row(document, None, None)
+
+        self.assertEqual(row['current_reviewer'], 'reviewer-a')
+        self.assertEqual(row['current_reviewer_data'], {
+            'id': 'reviewer-id',
+            'username': 'reviewer-a',
+            'email': 'reviewer-a@example.test',
+            'role': 'Legal Product Analyst',
+        })
+
     def test_only_lock_owner_may_edit(self):
         owner = Mock(id='owner-id')
         lock = Mock(user_id='owner-id', user=Mock(username='reviewer-a'))

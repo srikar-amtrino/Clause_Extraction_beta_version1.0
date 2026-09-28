@@ -126,6 +126,7 @@ def _document_links(document):
 
 
 def _document_row(document, extraction_run, classification_run, review_counts=None):
+    current_reviewer = getattr(document, 'current_reviewer', None)
     return {
         'document_id': str(document.id),
         'name': document.name,
@@ -136,8 +137,13 @@ def _document_row(document, extraction_run, classification_run, review_counts=No
         'mime_type': document.mime_type,
         'extraction_status': document.extraction_status,
         'review_status': getattr(document, 'review_status', 'needs_review'),
-        'current_reviewer': (document.current_reviewer.username
-                             if getattr(document, 'current_reviewer', None) else None),
+        'current_reviewer': current_reviewer.username if current_reviewer else None,
+        'current_reviewer_data': ({
+            'id': str(current_reviewer.pk),
+            'username': current_reviewer.username,
+            'email': current_reviewer.email,
+            'role': current_reviewer.role,
+        } if current_reviewer else None),
         'last_extracted_at': (document.last_extracted_at.isoformat()
                               if document.last_extracted_at else None),
         'stages': _stage_summary(extraction_run, classification_run, review_counts),

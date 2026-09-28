@@ -55,7 +55,8 @@ post a review decision against `classification_id`, never `clause_id`.
 ## `GET /api/documents/`
 
 The document list, newest first. This is the one call a list screen needs — each
-row already carries the outcome of every stage, so no per-row follow-up.
+row already carries the outcome of every stage, so no per-row follow-up. Both
+`/api/documents/` and `/api/documents` are accepted.
 
 | parameter | repeatable | notes |
 |---|---|---|
@@ -78,6 +79,14 @@ row already carries the outcome of every stage, so no per-row follow-up.
       "drive_web_link": "https://docs.google.com/document/d/.../edit",
       "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       "extraction_status": "extracted",
+      "review_status": "in_review",
+      "current_reviewer": "reviewer-a",
+      "current_reviewer_data": {
+        "id": "3ca09190-...",
+        "username": "reviewer-a",
+        "email": "reviewer-a@example.com",
+        "role": "Legal Product Analyst"
+      },
       "last_extracted_at": "2026-09-18T12:18:12+00:00",
       "stages": {
         "extraction": {
@@ -117,6 +126,8 @@ run yet → `pending`).
 `stages.classification.review` is how far the human pass has got on that
 document — enough for a progress column without opening it. Present whenever a
 classification run is, zeroed rather than null when nobody has decided anything.
+`current_reviewer` remains the username for existing clients; `current_reviewer_data`
+is the complete persisted user identity, or `null` when no reviewer holds the lock.
 
 ## `GET /api/documents/<id>/`
 

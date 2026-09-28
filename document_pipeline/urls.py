@@ -49,6 +49,7 @@ urlpatterns = [
 	path('google-drive/sync/', google_drive_sync, name='google-drive-sync'),
 
 	# Results: what the pipeline produced. Reads only.
+	path('documents', document_list, name='document-list-no-trailing-slash'),
 	path('documents/', document_list, name='document-list'),
 	path('documents/<uuid:document_id>/', document_detail, name='document-detail'),
 	path('documents/<uuid:document_id>/extraction/', document_extraction,
