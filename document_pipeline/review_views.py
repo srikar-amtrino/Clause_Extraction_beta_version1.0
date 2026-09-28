@@ -39,6 +39,7 @@ GET  /api/documents/queue/               -- in-flight + review-ready + unprocess
 import json
 import logging
 
+from django.db import transaction
 from django.http import JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
@@ -129,8 +130,7 @@ def workspace_detail(request, document_id):
 
     user = request.user
     lock = _get_lock(document_id)
-    is_locked_by_other = lock and lock.user_id != user.id
-    is_read_only = is_locked_by_other
+    is_read_only = not lock or lock.user_id != user.id
 
     paragraphs = list(
         DocumentParagraphRecord.objects
@@ -208,42 +208,44 @@ def lock_acquire(request, document_id):
     from document_pipeline.models import Document, DocumentActivityLog, WorkspaceLock
     from document_pipeline.activity import log_activity
 
+    user = request.user
+    newly_acquired = False
+
     try:
-        doc = Document.objects.get(pk=document_id)
+        with transaction.atomic():
+            doc = Document.objects.select_for_update().get(pk=document_id)
+            existing = _get_lock(document_id)
+
+            if existing and existing.user_id != user.id:
+                return _json({
+                    'acquired': False,
+                    'is_read_only': True,
+                    'locked_by': existing.user.username,
+                    'locked_by_id': existing.user_id,
+                    'expires_at': existing.expires_at.isoformat(),
+                })
+
+            if existing and existing.user_id == user.id:
+                existing.renew()
+                lock = existing
+            else:
+                # Remove any stale (expired) lock first.
+                WorkspaceLock.objects.filter(document_id=document_id).delete()
+                lock = WorkspaceLock.objects.create(
+                    document_id=document_id, user=user)
+                newly_acquired = True
+
+            if doc.review_status == 'needs_review':
+                new_status = 'in_review'
+            elif doc.review_status == 'published':
+                new_status = 'reopened_in_review'
+            else:
+                new_status = doc.review_status
+
+            Document.objects.filter(pk=document_id).update(
+                review_status=new_status, current_reviewer=user)
     except Document.DoesNotExist:
         return _err('Document not found.', 404)
-
-    user = request.user
-    existing = _get_lock(document_id)
-
-    if existing and existing.user_id != user.id:
-        return _json({
-            'acquired': False,
-            'is_read_only': True,
-            'locked_by': existing.user.username,
-            'locked_by_id': existing.user_id,
-            'expires_at': existing.expires_at.isoformat(),
-        })
-
-    if existing and existing.user_id == user.id:
-        existing.renew()
-        lock = existing
-    else:
-        # Remove any stale (expired) lock first.
-        WorkspaceLock.objects.filter(document_id=document_id).delete()
-        lock = WorkspaceLock.objects.create(
-            document_id=document_id, user=user)
-
-    # Transition review status to in_review / reopened_in_review.
-    if doc.review_status == 'needs_review':
-        new_status = 'in_review'
-    elif doc.review_status == 'published':
-        new_status = 'reopened_in_review'
-    else:
-        new_status = doc.review_status
-
-    Document.objects.filter(pk=document_id).update(
-        review_status=new_status, current_reviewer=user)
 
     log_activity(
         document_id=document_id,
@@ -252,6 +254,15 @@ def lock_acquire(request, document_id):
         summary='%s opened the workspace.' % user.username,
         actor_user=user,
     )
+
+    if newly_acquired:
+        from realtime.events import publish_document_lock
+        publish_document_lock(
+            document_id,
+            event='document_opened',
+            user=user,
+            expires_at=lock.expires_at,
+        )
 
     return _json({
         'acquired': True,
@@ -283,12 +294,17 @@ def lock_release(request, document_id):
     from document_pipeline.activity import log_activity
 
     user = request.user
-    lock = _get_lock(document_id)
-    if not lock or lock.user_id != user.id:
-        return _err('No active lock held by you.', 403)
+    try:
+        with transaction.atomic():
+            Document.objects.select_for_update().get(pk=document_id)
+            lock = _get_lock(document_id)
+            if not lock or lock.user_id != user.id:
+                return _err('No active lock held by you.', 403)
 
-    lock.delete()
-    Document.objects.filter(pk=document_id).update(current_reviewer=None)
+            lock.delete()
+            Document.objects.filter(pk=document_id).update(current_reviewer=None)
+    except Document.DoesNotExist:
+        return _err('Document not found.', 404)
 
     log_activity(
         document_id=document_id,
@@ -297,6 +313,8 @@ def lock_release(request, document_id):
         summary='%s closed the workspace.' % user.username,
         actor_user=user,
     )
+    from realtime.events import publish_document_lock
+    publish_document_lock(document_id, event='document_closed', user=user)
     return _json({'released': True})
 
 
