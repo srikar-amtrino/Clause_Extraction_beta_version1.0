@@ -268,7 +268,7 @@ export default function Overview({
         sx={{
           flexShrink: 0,
           display: 'grid',
-          gridTemplateColumns: { xs: 'repeat(2, 1fr)', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' },
+          gridTemplateColumns: { xs: 'repeat(2, 1fr)', sm: 'repeat(2, 1fr)', md: 'repeat(5, 1fr)' },
           bgcolor: '#ffffff',
           border: '1px solid #e3e3de',
           borderRadius: 2,
@@ -308,7 +308,7 @@ export default function Overview({
         </Box>
 
         {/* In review */}
-        {/* <Box sx={{ p: '16px 20px', borderRight: '1px solid #e3e3de', display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+        <Box sx={{ p: '16px 20px', borderRight: '1px solid #e3e3de', display: 'flex', flexDirection: 'column', gap: 0.5 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: '#1a73e8' }} />
             <Typography sx={{ fontSize: '12.5px', fontWeight: 500, color: '#4a5159' }}>
@@ -321,7 +321,7 @@ export default function Overview({
           <Typography sx={{ fontSize: '11.5px', color: '#7b838c' }}>
             actively being reviewed
           </Typography>
-        </Box> */}
+        </Box>
 
         {/* Draft */}
         {/* <Box sx={{ p: '16px 20px', borderRight: '1px solid #e3e3de', display: 'flex', flexDirection: 'column', gap: 0.5 }}>
