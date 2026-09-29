@@ -107,6 +107,9 @@ export default function Documents({
       const needsReview = d.needsReview ?? classification?.needs_review ?? null;
       const warnings = d.warnings || extraction?.warnings || [];
       const size = d.size || (pages > 0 ? `${Math.max(12, Math.round(pages * 26.5))} KB` : '24 KB');
+      const currentReviewer = d.current_reviewer !== undefined
+        ? d.current_reviewer
+        : (d.rawDoc?.current_reviewer !== undefined ? d.rawDoc.current_reviewer : null);
 
       return {
         id: d.id || d.document_id || `doc-${i}`,
@@ -122,13 +125,15 @@ export default function Documents({
         needsReview,
         warnings,
         stages: d.stages || {},
-        status: d.status || (isClassified ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted' ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted_with_warnings' ? 'Needs review' : extractionStatus === 'rejected' ? 'Draft' : 'Needs review'),
+        current_reviewer: currentReviewer,
+        currentReviewer: currentReviewer,
+        status: d.status || (currentReviewer ? 'In review' : (isClassified ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted' ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted_with_warnings' ? 'Needs review' : extractionStatus === 'rejected' ? 'Draft' : 'Needs review')),
         statusTag: d.statusTag || (warnings.length > 0 ? `${warnings.length} warning${warnings.length > 1 ? 's' : ''}` : null),
         vectorDbStatus: d.vectorDbStatus || 'Not sent yet',
         vectorDbDetail: d.vectorDbDetail || '',
         parties: d.parties || (d.folder || driveState.folderPath ? `Folder: ${d.folder || driveState.folderPath}` : 'Parties to Agreement'),
         inDriveSince: d.inDriveSince || (d.last_extracted_at ? new Date(d.last_extracted_at).toLocaleDateString() : (d.modifiedTime || 'Recently')),
-        reviewer: d.reviewer || currentUserName || driveState.user?.name || driveState.user?.email || 'Reviewer',
+        reviewer: currentReviewer || d.reviewer || currentUserName || driveState.user?.name || driveState.user?.email || 'Reviewer',
         lastSaved: d.lastSaved || (d.last_extracted_at ? new Date(d.last_extracted_at).toLocaleDateString() : (d.modifiedTime || 'Today')),
         lastExtracted: d.lastExtracted || (d.last_extracted_at ? new Date(d.last_extracted_at).toLocaleString() : null),
         folder: d.folder || driveState.folderPath || 'Google Drive',
@@ -181,7 +186,7 @@ export default function Documents({
     return {
       all: allDocs.length,
       needsReview: allDocs.filter((d) => (d.needsReview && d.needsReview > 0) || d.status === 'Needs review').length,
-      inReview: allDocs.filter((d) => d.status === 'In review').length,
+      inReview: allDocs.filter((d) => d.status === 'In review' || Boolean(d.current_reviewer)).length,
       draft: draftCount,
       indraft: draftCount,
       saved: allDocs.filter((d) => d.status === 'Saved').length,
@@ -199,6 +204,10 @@ export default function Documents({
     return allDocs.filter((d) => {
       // Tab filter
       if (activeFilter === 'needs-review' && !(d.needsReview > 0 || d.status === 'Needs review')) return false;
+      if (activeFilter === 'in-review' && !(d.status === 'In review' || Boolean(d.current_reviewer))) return false;
+      if (activeFilter === 'draft' && !(d.status === 'Draft' || d.extractionStatus === 'rejected')) return false;
+      if (activeFilter === 'saved' && d.status !== 'Saved') return false;
+      if (activeFilter === 'reviewed' && d.status !== 'Reviewed') return false;
       if (activeFilter === 'extracted' && d.extractionStatus !== 'extracted') return false;
       if (activeFilter === 'warnings' && !(d.extractionStatus === 'extracted_with_warnings' || (d.warnings && d.warnings.length > 0))) return false;
       if (activeFilter === 'rejected' && d.extractionStatus !== 'rejected') return false;
@@ -799,6 +808,9 @@ export default function Documents({
                     Needs review
                   </TableCell>
                   <TableCell sx={{ bgcolor: '#f8fafc', py: 1.25, fontSize: '12px', fontWeight: 600, color: '#64748b', borderBottom: '1px solid #e2e8f0', width: 170 }}>
+                    Reviewer
+                  </TableCell>
+                  <TableCell sx={{ bgcolor: '#f8fafc', py: 1.25, fontSize: '12px', fontWeight: 600, color: '#64748b', borderBottom: '1px solid #e2e8f0', width: 170 }}>
                     Vector DB
                   </TableCell>
                 </TableRow>
@@ -843,19 +855,7 @@ export default function Documents({
                             >
                               {doc.name}
                             </Typography>
-                            {/* {reviewerName && (
-                              <Chip
-                                size="small"
-                                label={`Reviewer: ${reviewerName}`}
-                                sx={{
-                                  height: 20,
-                                  fontSize: '11px',
-                                  bgcolor: '#f1f5f9',
-                                  color: '#475569',
-                                  fontWeight: 500,
-                                }}
-                              />
-                            )} */}
+                            
                           </Box>
                           <Typography sx={{ fontSize: '11.5px', color: '#64748b', letterSpacing: '0.01em' }}>
                             pages: {doc.pages ?? 0} · clauses: {doc.clauses ?? 0} · paragraphs: {doc.paragraphs ?? 0} · {doc.size}
@@ -871,6 +871,28 @@ export default function Documents({
                       {/* Needs review (display count) */}
                       <TableCell sx={{ py: 1.4 }}>
                         {renderNeedsReviewBadge(doc.needsReview)}
+                      </TableCell>
+
+                      {/* Reviewer */}
+                      <TableCell sx={{ py: 1.4 }}>
+                        {doc.current_reviewer ? (
+                          <Chip
+                            size="small"
+                            label={`${doc.current_reviewer}`}
+                            sx={{
+                              height: 20,
+                              fontSize: '11px',
+                              bgcolor: '#e0f2fe',
+                              color: '#0369a1',
+                              fontWeight: 600,
+                              border: '1px solid #bae6fd',
+                            }}
+                          />
+                        ) : (
+                          <Typography sx={{ fontSize: '12px', color: '#64748b' }}>
+                            Not assigned
+                          </Typography>
+                        )}
                       </TableCell>
 
                       {/* Vector DB */}
@@ -959,16 +981,16 @@ export default function Documents({
             )}
           </Box>
 
-          {/* Extraction Status & Needs Review Cards (Replaced Review Progress) */}
-          <Box
+          {/* Extraction Status & Needs Review Cards & Current Reviewer (Replaced Review Progress) */}
+           {/* <Box
             sx={{
               display: 'grid',
-              gridTemplateColumns: '1fr 1fr',
-              gap: 1.5,
+              gridTemplateColumns: 'repeat(2, 1fr)',
+              gap: 1.25,
             }}
-          >
+          > */}
             {/* Extraction Status card */}
-            <Box
+            {/* <Box
               sx={{
                 p: 1.5,
                 borderRadius: 2,
@@ -990,10 +1012,10 @@ export default function Documents({
                   {selectedDoc.warnings.length} warning{selectedDoc.warnings.length > 1 ? 's' : ''} reported
                 </Typography>
               )}
-            </Box>
+            </Box>  */}
 
             {/* Needs Review card (display count) */}
-            <Box
+            {/* <Box
               sx={{
                 p: 1.5,
                 borderRadius: 2,
@@ -1014,8 +1036,41 @@ export default function Documents({
               <Typography sx={{ fontSize: '10.5px', color: selectedDoc.needsReview > 0 ? '#9a3412' : '#64748b' }}>
                 {selectedDoc.needsReview > 0 ? 'items to verify' : 'All clear'}
               </Typography>
-            </Box>
-          </Box>
+            </Box> */}
+
+            {/* Current Reviewer card */}
+            {/* <Box
+              sx={{
+                p: 1.5,
+                borderRadius: 2,
+                bgcolor: selectedDoc.current_reviewer ? '#eff6ff' : '#f8fafc',
+                border: '1px solid',
+                borderColor: selectedDoc.current_reviewer ? '#bfdbfe' : '#e2e8f0',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 0.5,
+              }}
+            >
+              <Typography sx={{ fontSize: '11px', fontWeight: 600, color: selectedDoc.current_reviewer ? '#1d4ed8' : '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Current reviewer
+              </Typography>
+              <Typography
+                sx={{
+                  fontSize: '13px',
+                  fontWeight: 700,
+                  color: selectedDoc.current_reviewer ? '#1e3a5f' : '#64748b',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {selectedDoc.current_reviewer ? selectedDoc.current_reviewer : 'null'}
+              </Typography>
+              <Typography sx={{ fontSize: '10.5px', color: selectedDoc.current_reviewer ? '#2563eb' : '#94a3b8' }}>
+                {selectedDoc.current_reviewer ? 'In review' : 'No reviewer'}
+              </Typography>
+            </Box> */}
+          {/* </Box> */}
 
           {/* Details Section */}
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
@@ -1078,21 +1133,21 @@ export default function Documents({
                 </Typography>
               </Box>
 
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
+              {/* <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
                 <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 100 }}>
                   In Drive since
                 </Typography>
                 <Typography sx={{ fontSize: '12px', fontWeight: 500, color: '#0f172a', textAlign: 'right' }}>
                   {selectedDoc.inDriveSince}
                 </Typography>
-              </Box>
+              </Box> */}
 
               <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
-                <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 100 }}>
-                  Reviewer
+                <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 110 }}>
+                  Current reviewer
                 </Typography>
-                <Typography sx={{ fontSize: '12px', fontWeight: 500, color: '#0f172a', textAlign: 'right' }}>
-                  {selectedDoc.reviewer}
+                <Typography sx={{ fontSize: '12px', fontWeight: 600, color: selectedDoc.current_reviewer ? '#0f172a' : '#64748b', textAlign: 'right' }}>
+                  {selectedDoc.current_reviewer ? selectedDoc.current_reviewer : 'null'}
                 </Typography>
               </Box>
 

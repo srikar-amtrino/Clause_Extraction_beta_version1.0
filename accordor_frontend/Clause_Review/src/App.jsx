@@ -146,6 +146,9 @@ function normalizeDoc(d, currentUser = null) {
   const needsReview = d.needsReview ?? classification?.needs_review ?? null;
   const warnings = d.warnings || extraction?.warnings || [];
   const size = d.size || (pages > 0 ? `${Math.max(12, Math.round(pages * 26.5))} KB` : (d.mime_type?.includes('pdf') ? '1.4 MB' : '24 KB'));
+  const currentReviewer = d.current_reviewer !== undefined
+    ? d.current_reviewer
+    : (d.rawDoc?.current_reviewer !== undefined ? d.rawDoc.current_reviewer : null);
 
   return {
     id: d.document_id || d.id,
@@ -163,13 +166,15 @@ function normalizeDoc(d, currentUser = null) {
     needsReview,
     warnings,
     stages: d.stages || {},
-    status: d.status || (isClassified ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted' ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'rejected' ? 'Draft' : 'Needs review'),
+    current_reviewer: currentReviewer,
+    currentReviewer: currentReviewer,
+    status: d.status || (currentReviewer ? 'In review' : (isClassified ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted' ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'rejected' ? 'Draft' : 'Needs review')),
     statusTag: d.statusTag || (warnings.length > 0 ? `${warnings.length} warning${warnings.length > 1 ? 's' : ''}` : null),
     vectorDbStatus: d.vectorDbStatus || 'Not sent yet',
     vectorDbDetail: d.vectorDbDetail || '',
     folder: d.folder || d.drive_folder_name || 'Google Drive',
     inDriveSince: d.inDriveSince || (d.last_extracted_at ? new Date(d.last_extracted_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : 'Recently'),
-    reviewer: d.reviewer || currentUser?.username || currentUser?.name || (currentUser?.email ? currentUser.email.split('@')[0] : 'User'),
+    reviewer: currentReviewer || d.reviewer || currentUser?.username || currentUser?.name || (currentUser?.email ? currentUser.email.split('@')[0] : 'User'),
     lastSaved: d.lastSaved || (d.last_extracted_at ? new Date(d.last_extracted_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : 'Today'),
     lastExtracted: d.lastExtracted || (d.last_extracted_at ? new Date(d.last_extracted_at).toLocaleString() : null),
     issues: {
@@ -481,7 +486,7 @@ function AppWorkspace() {
       const s = (d.extractionStatus || d.extraction_status || 'pending').toLowerCase();
       return s === 'pending' || s === 'extracted' || s === 'extracted_with_warnings';
     }).length,
-    inReview: extractedDocuments.filter((d) => d.status === 'In review').length,
+    inReview: extractedDocuments.filter((d) => d.status === 'In review' || Boolean(d.current_reviewer)).length,
     draft: queueDocuments.filter((d) => d.extractionStatus === 'rejected').length + extractedDocuments.filter((d) => d.status === 'Draft').length,
     reviewed: extractedDocuments.filter((d) => d.status === 'Reviewed' || (d.extractionStatus === 'classified' && d.needsReview === 0)).length,
     updatedToVector: extractedDocuments.filter((d) => d.vectorDbStatus && d.vectorDbStatus.startsWith('Updated')).length,
