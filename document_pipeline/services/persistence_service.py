@@ -17,6 +17,11 @@ from django.db import transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
+from document_pipeline.activity import (
+    log_drive_discovered,
+    log_parse_result,
+    log_parsing_skipped,
+)
 from document_pipeline.models import (
     Document,
     ExtractedClause,
@@ -128,6 +133,7 @@ def persist_parse_result(result, *, ingestion_source, force=False, store_raw=Non
 
         current = document.extraction_runs.filter(is_current=True).first()
         if not force and _unchanged(current, result, source):
+            log_parsing_skipped(document, current)
             return PersistOutcome(document=document, run=current, created=created,
                                   skipped=True,
                                   clause_count=current.clause_count,
@@ -153,6 +159,11 @@ def persist_parse_result(result, *, ingestion_source, force=False, store_raw=Non
         run.save(update_fields=['persist_duration_ms'])
 
         _update_document(document, result, source, run)
+
+        if created:
+            # Parsed straight from a Drive id, without a sync having seen it.
+            log_drive_discovered(document)
+        log_parse_result(document, run, result, persist_ms=duration_ms)
 
     logger.info('persisted %s: run %s attempt %d, %d clauses, %d paragraphs',
                 external_id, run.id, run.attempt, len(clauses), len(paragraphs))

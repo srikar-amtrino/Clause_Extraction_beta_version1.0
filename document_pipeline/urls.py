@@ -3,6 +3,7 @@ from django.urls import path
 from .document_views import (
 	classification_review,
 	classification_review_history,
+	classification_save,
 	document_classification,
 	document_classification_input,
 	document_detail,
@@ -57,6 +58,9 @@ urlpatterns = [
 	     name='document-classification-input'),
 	path('documents/<uuid:document_id>/classification/', document_classification,
 	     name='document-classification'),
+	# The review screen's Save button. Writes reviewer decisions; never the vector DB.
+	path('documents/<uuid:document_id>/classification/save/', classification_save,
+	     name='document-classification-save'),
 	path('taxonomy/', taxonomy, name='taxonomy'),
 
 	# Review workspace -- overview helpers.
