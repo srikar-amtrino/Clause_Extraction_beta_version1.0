@@ -767,6 +767,7 @@ Pipeline events, in the order a document meets them:
 | phase | action | actor | metadata |
 |---|---|---|---|
 | `data_ingestion` | `drive_discovered` | Drive Sync | `drive_file_id, file_name, mime_type, size_bytes, folder_id, drive_modified_time` |
+| `data_ingestion` | `pipeline_queued` | Drive Sync | `task_id, classify` — a sync queued parse → chunk → classify. While it runs, another sync does not queue the document again; the sync response lists it under `ingestion.already_running` |
 | `data_staging` | `download_staged` | Parser | `extraction_run_id, drive_file_id, size_bytes, mime_type, content_sha256, download_ms` |
 | `data_parsing` | `parsing_started` | Parser | `drive_file_id, parser_build` |
 | `data_parsing` | `parsed` | Parser | `extraction_run_id, attempt, status, parser_build, clauses, paragraphs, page_count, warnings, warning_codes, parse_ms, persist_ms` |

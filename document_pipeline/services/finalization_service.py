@@ -10,9 +10,11 @@ logger = logging.getLogger(__name__)
 
 def check_low_confidence_chunks(document_id) -> bool:
     """Check if any classification in the latest run has low confidence requiring judge."""
-    from document_pipeline.models import Classification, ClassificationRun
+    from document_pipeline.models import Classification, Document
+    from document_pipeline.services.export_service import current_classification_run
 
-    run = ClassificationRun.objects.filter(document_id=document_id, is_current=True).first()
+    document = Document.objects.filter(pk=document_id).first()
+    run = current_classification_run(document) if document else None
     if not run:
         return False
 

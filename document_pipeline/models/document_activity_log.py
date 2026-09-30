@@ -39,6 +39,7 @@ class DocumentActivityLog(models.Model):
     # Pipeline actions, in the order a document meets them. Chunking has no
     # phase of its own and is logged under data_parsing.
     ACT_DRIVE_DISCOVERED = 'drive_discovered'            # data_ingestion
+    ACT_PIPELINE_QUEUED = 'pipeline_queued'
     ACT_DOWNLOAD_STAGED = 'download_staged'              # data_staging
     ACT_PARSING_STARTED = 'parsing_started'              # data_parsing
     ACT_PARSED = 'parsed'

@@ -105,6 +105,7 @@ def _sync_and_queue(credentials, folders, folder_ids):
         task_ids.append(result.id)
         log_celery_task_dispatched("trigger_full_document_pipeline", str(result.id), "streaming_io_queue -> parsing_queue -> llm_queue", str(document.id))
     print(f'[http] queued {len(task_ids)} ingestion tasks, '
+          f'{len(plan.in_flight)} already running, '
           f'{len(plan.rejected)} files not parseable', flush=True)
     return outcome, plan, task_ids, refreshed_credentials_json
 
@@ -114,6 +115,8 @@ def _ingestion_payload(plan, task_ids):
         'status': 'queued',
         'task_ids': task_ids,
         'document_ids': [str(document.id) for document in plan.to_ingest],
+        # Already being processed by a sync moments ago; not queued again.
+        'already_running': [str(document.id) for document in plan.in_flight],
         'rejected': [
             {**_document_summary(document), 'kind': rejection.kind, 'reason': str(rejection)}
             for document, rejection in plan.rejected

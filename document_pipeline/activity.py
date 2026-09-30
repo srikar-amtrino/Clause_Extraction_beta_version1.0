@@ -127,6 +127,18 @@ def log_drive_discovered(document):
     )
 
 
+def log_pipeline_queued(document_id, task_id, *, classify):
+    """A sync handed the document's pipeline to Celery. What stops a second
+    sync from queuing it again while this one is still running."""
+    A = _log()
+    log_activity(
+        document_id, A.DATA_INGESTION, A.ACT_PIPELINE_QUEUED,
+        summary='Queued for parsing, chunking%s.' % (' and classification' if classify else ''),
+        actor_system=DRIVE_SYNC,
+        metadata={'task_id': task_id, 'classify': classify},
+    )
+
+
 def log_parsing_started(document):
     from django.conf import settings
     A = _log()
@@ -362,11 +374,15 @@ def log_classification_finished(run):
 def log_moved_to_review(document_id, paragraph_stats):
     """The document's review records exist and it waits for a reviewer.
     Written once per classification run."""
-    from document_pipeline.models import ClassificationRun
+    from document_pipeline.models import Document
     from document_pipeline.review_views import _blockers
+    from document_pipeline.services.export_service import current_classification_run
     A = _log()
 
-    run = ClassificationRun.objects.filter(document_id=document_id, is_current=True).first()
+    # The run of the document's current chunking. A document re-chunked keeps
+    # a current run per chunk run, so "any current run" can be the old one.
+    document = Document.objects.filter(pk=document_id).first()
+    run = current_classification_run(document) if document else None
     run_id = str(run.id) if run else None
     if run_id and _already_logged(document_id, A.ACT_NEEDS_REVIEW, run_id):
         return

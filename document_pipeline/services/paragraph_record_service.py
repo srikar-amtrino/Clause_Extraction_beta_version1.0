@@ -30,17 +30,16 @@ def materialise_paragraph_records(document_id) -> dict:
     from document_pipeline.models import (
         Chunk,
         Classification,
-        ClassificationRun,
         Document,
         DocumentParagraphRecord,
     )
+    from document_pipeline.services.export_service import current_classification_run
 
     doc = Document.objects.select_related().get(pk=document_id)
-    current_run = (
-        ClassificationRun.objects.filter(document=doc, is_current=True)
-        .order_by('-created_at')
-        .first()
-    )
+    # The run of the document's current chunking. Each chunk run keeps its own
+    # current classification run, so after a re-chunk "the newest current run
+    # of the document" can belong to the chunking that was replaced.
+    current_run = current_classification_run(doc)
     if not current_run:
         logger.warning(
             'materialise_paragraph_records: no current classification run for %s',
