@@ -112,6 +112,10 @@ TIME_ZONE = "UTC"
 USE_I18N = False
 USE_TZ = True
 
+# The auth log writes to logs/, which holds no tracked file and so is missing
+# from a fresh clone. Created here, or logging setup fails before Django starts.
+(BASE_DIR / "logs").mkdir(exist_ok=True)
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
