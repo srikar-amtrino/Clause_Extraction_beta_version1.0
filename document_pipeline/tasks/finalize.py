@@ -20,16 +20,14 @@ def finalize_document_classification_task(self, document_id: str):
     Routes to ``llm_queue``; ``scripts/run_worker.ps1`` (or ``run_worker.bat``)
     runs a worker on it.
     """
-    from document_pipeline.models import Document, DocumentActivityLog
     from document_pipeline.services.finalization_service import (
-        check_low_confidence_chunks,
         notify_frontend_via_websocket,
         update_document_status,
     )
     from document_pipeline.services.paragraph_record_service import (
         materialise_paragraph_records,
     )
-    from document_pipeline.activity import log_activity
+    from document_pipeline.activity import log_moved_to_review
     from document_pipeline.pipeline_logger import log_finalization_complete
 
     try:
@@ -49,25 +47,9 @@ def finalize_document_classification_task(self, document_id: str):
         # 3. Transition document status -- pipeline pauses here.
         update_document_status(document_id, status="NEEDS_REVIEW")
 
-        # 4. Write 5-phase activity log entries.
-        log_activity(
-            document_id=document_id,
-            phase=DocumentActivityLog.DATA_CLASSIFICATION,
-            action=DocumentActivityLog.ACT_CLASSIFIED,
-            summary=(
-                'Classified %(total)s paragraphs (%(flagged)s flagged for review).'
-                % stats
-            ),
-            actor_system='LLM Classifier',
-            metadata=stats,
-        )
-        log_activity(
-            document_id=document_id,
-            phase=DocumentActivityLog.DATA_CLASSIFICATION,
-            action=DocumentActivityLog.ACT_NEEDS_REVIEW,
-            summary='Document moved to review queue.',
-            actor_system='Pipeline',
-        )
+        # 4. Activity log. The `classified` event was written when the run
+        # closed; this one is written once per run, however often this retries.
+        log_moved_to_review(document_id, stats)
 
         # 5. Log storytelling completion
         log_finalization_complete(
@@ -88,7 +70,6 @@ def finalize_document_classification_task(self, document_id: str):
         return {
             "status": "FINALIZED",
             "document_id": document_id,
-            "needs_judge": needs_judge,
             "paragraph_records": stats,
         }
     except Exception as exc:

@@ -181,8 +181,10 @@ PERSIST_BULK_BATCH_SIZE = env_int("PERSIST_BULK_BATCH_SIZE", 500)
 # As with PARSER_BUILD, the code default moves with each rule change and a blank
 # environment value falls back to it.
 # 2026-09-18: exhibit region from headings, not from sentences that cite one.
+# 2026-09-29: table cells in chunk text; a parent clause with more than a heading
+# in its own words gets a micro chunk of its own.
 # At most 16 characters (chunk_runs.chunker_version); a system check enforces it.
-CHUNKER_VERSION = os.environ.get("CHUNKER_VERSION") or "2026.09.18"
+CHUNKER_VERSION = os.environ.get("CHUNKER_VERSION") or "2026.09.29"
 CHUNK_BULK_BATCH_SIZE = env_int("CHUNK_BULK_BATCH_SIZE", 500)
 
 # ---------------------------------------------------------------- Pipeline

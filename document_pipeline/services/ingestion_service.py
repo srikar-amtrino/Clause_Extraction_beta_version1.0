@@ -20,6 +20,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from core.models import IngestionSource
+from document_pipeline.activity import log_drive_discovered, log_parsing_error, log_parsing_started
 from document_pipeline.models import Document
 from document_pipeline.parsing.result import SCHEMA_VERSION
 from document_pipeline.services.drive_service import (
@@ -142,6 +143,7 @@ def sync_drive_files(files, *, ingestion_source, folder_ids=()):
 
                 # Truly new file
                 new_doc = _create_document(ingestion_source, file_id, meta)
+                log_drive_discovered(new_doc)
                 outcome.created.append(new_doc)
                 existing[file_id] = new_doc
                 existing_by_name[(name, parent)] = new_doc
@@ -363,9 +365,14 @@ def plan_dispatch(documents, changed_ids):
 def ingest_document(credentials, document, *, force=False):
     """Download, parse and persist one document. -> PersistOutcome"""
     print('[ingestion] downloading and parsing %s' % document.source_external_id, flush=True)
-    result = stream_and_parse(credentials, document.source_external_id)
-    outcome = persist_parse_result(result,
-                                   ingestion_source=document.ingestion_source,
-                                   force=force)
+    log_parsing_started(document)
+    try:
+        result = stream_and_parse(credentials, document.source_external_id)
+        outcome = persist_parse_result(result,
+                                       ingestion_source=document.ingestion_source,
+                                       force=force)
+    except Exception as exc:
+        log_parsing_error(document, exc)
+        raise
     print('[ingestion] persisted %s' % document.source_external_id, flush=True)
     return outcome
