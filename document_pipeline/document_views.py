@@ -6,14 +6,13 @@ from django.views.decorators.http import require_GET, require_POST
 from core.auth_helpers import require_auth
 from .models import (
     CanonicalType,
-    Classification,
     ClassificationRun,
     Document,
     ExtractionRun,
 )
 from .services import export_service, review_service
 from .services.ingestion_service import google_drive_source
-from .services.review_service import ReviewError, SaveError
+from .services.review_service import SaveError
 
 # Read by a person as often as by a script: pretty-printed on purpose.
 PRETTY = {'indent': 2, 'ensure_ascii': False}
@@ -368,122 +367,6 @@ def _json_body(request):
         return json.loads(request.body or b'{}'), None
     except ValueError:
         return None, JsonResponse({'detail': 'Body must be JSON.'}, status=400)
-
-
-def _item_for(classification):
-    """The one decided item, in exactly the shape `items` uses in the
-    classification response.
-
-    Returned from a write so the client swaps the row into state instead of
-    refetching the document, and so there is only one item shape to learn.
-    """
-    payload = export_service.classification_json(classification.run.document)
-    target = str(classification.id)
-    for item in payload['items']:
-        if item['classification_id'] == target:
-            return item
-    return None
-
-
-@require_POST
-@require_auth
-def classification_review(request, classification_id):
-    """Record a reviewer's decision about one classification.
-
-      { "decision": "accepted" | "corrected" | "rejected",
-        "type": "<taxonomy key>",   required for corrected, absent otherwise
-        "label": "Clause" | "Non-clause",       optional; defaults to the verdict
-        "sub_type": "...",                      optional; never on a Non-clause
-        "note": "..." }                         optional; required for rejected
-
-    -> 200 with the updated item, in the same shape `items` uses.
-
-    Deciding again supersedes the previous decision and keeps it: the trail of
-    who changed their mind survives. The reviewer is taken from the Drive
-    session, never from the body.
-    """
-    classification = (Classification.objects
-                      .select_related('run', 'run__document')
-                      .filter(pk=classification_id).first())
-    if classification is None:
-        return JsonResponse({'detail': 'No classification with that id.'}, status=404)
-
-    from .review_views import _check_editable
-    editable, response = _check_editable(classification.document_id, request.user)
-    if not editable:
-        return response
-
-    payload, error = _json_body(request)
-    if error:
-        return error
-    try:
-        review_service.record_decision(
-            classification, payload,
-            (request.user.email, request.user.username))
-    except ReviewError as problem:
-        return JsonResponse({'detail': str(problem)}, status=400)
-    return JsonResponse(_item_for(classification), json_dumps_params=PRETTY)
-
-
-@require_GET
-def classification_review_history(request, classification_id):
-    """Every decision ever made about one classification, newest first.
-
-    Ordered by `revision`, not by time: a bulk accept writes many rows in the
-    same microsecond, and timestamps tie. `is_current` marks the one in force;
-    the rest are what it replaced, which is the point of keeping them.
-    """
-    classification = Classification.objects.filter(pk=classification_id).first()
-    if classification is None:
-        return JsonResponse({'detail': 'No classification with that id.'}, status=404)
-    rows = (classification.reviews.select_related('canonical_type')
-            .order_by('-revision'))
-    return JsonResponse({
-        'classification_id': str(classification.id),
-        'reviews': [dict(review_service.review_json(r), is_current=r.is_current) for r in rows],
-    }, json_dumps_params=PRETTY)
-
-
-@require_POST
-@require_auth
-def document_reviews(request, document_id):
-    """Record several decisions for one document at once.
-
-      { "decisions": [ { "classification_id": "...", "decision": "accepted" }, ... ] }
-
-    Each entry takes the same fields as the single endpoint. All or nothing:
-    the batch is validated before anything is written, so "accept everything
-    visible" either lands whole or leaves the queue exactly as it was.
-
-    -> 200 { "updated": 38, "items": [...], "summary": {...} }, where `items`
-    holds only the rows that changed and `summary` is the whole run, so a
-    header can be re-rendered from one response.
-    """
-    document, error = _get_document(document_id)
-    if error:
-        return error
-    from .review_views import _check_editable
-    editable, response = _check_editable(document.id, request.user)
-    if not editable:
-        return response
-
-    payload, error = _json_body(request)
-    if error:
-        return error
-    try:
-        reviews = review_service.record_decisions(
-            document, payload.get('decisions'),
-            (request.user.email, request.user.username))
-    except ReviewError as problem:
-        return JsonResponse({'detail': str(problem)}, status=400)
-
-    changed = {str(r.classification_id) for r in reviews}
-    fresh = export_service.classification_json(document)
-    return JsonResponse({
-        'updated': len(reviews),
-        'items': [item for item in fresh['items'] if item['classification_id'] in changed],
-        'summary': fresh['summary'],
-    }, json_dumps_params=PRETTY)
 
 
 @require_GET

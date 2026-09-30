@@ -11,7 +11,7 @@ What the backend exposes to the review frontend. Three groups:
 - **Review** — the review screen reads `GET /api/documents/<id>/classification/`
   and saves with `POST /api/documents/<id>/classification/save/`. It takes the
   document's lock through `/api/documents/<id>/workspace/lock/*`. **Needs the
-  login token.** A Save stores the reviewer's decision beside the model's
+  login token.** A Save updates each item in place, keeping the model's
   verdict and never overwrites it: a run stays an audit record. Nothing
   reaches the vector DB until Update Vector DB.
 - **Review workspace** — the rest of `/api/documents/<id>/workspace/*`: an
@@ -223,14 +223,15 @@ asks why a clause got the verdict it did.
 
 ## `GET /api/documents/<id>/classification/`
 
-**The review screen's data.** The current classification run: the model's
-verdict on every item, plus what the reviewer has saved for it. Token required.
+**The review screen's data.** The current classification run: every item as
+it stands now. Token required.
 
-- `type` / `type_name` / `sub_type` / `label` are **always the model's answer**
-  and never change.
-- `final` is the item with the reviewer's saved decision applied. **Show
-  `final`**, and send its values back on Save.
-- `review` is the saved decision itself, or `null` while nobody has saved one.
+- `text`, `label`, `type`, `type_name` and `sub_type` are **the item as it
+  stands**: what the reviewer saved, or the model's answer until someone saves.
+  Show them and send them back on Save. Nothing else to read.
+- `model` is what the classifier answered, and never changes.
+- `original_text` is the document's own text, whatever edits were saved.
+- `review` is who saved the item and how, or `null` while nobody has.
 
 | parameter | notes |
 |---|---|
@@ -264,6 +265,7 @@ verdict on every item, plus what the reviewer has saved for it. Token required.
       "breadcrumb": "2 SCOPE OF SERVICES > 2.3 The Service Provider shall… > (a) If the…",
       "lead_in": "The Service Provider shall install the System in Phases, and:",
       "text": "If the Service Provider delays Phases, then either the payments shall be postponed or…",
+      "original_text": "If the Service Provider delays Phases, then either the payments shall be postponed or…",
       "outcome": "classified",
       "label": "Clause",
       "type": "service-provider-obligations",
@@ -275,12 +277,12 @@ verdict on every item, plus what the reviewer has saved for it. Token required.
       "expected_types": ["scope-of-services"],
       "deviated": true,
       "error": null,
-      "review": null,
-      "final": {
+      "model": {
         "label": "Clause", "type": "service-provider-obligations",
         "type_name": "Service Provider Obligations",
-        "sub_type": "Installation Delay Consequences", "decision": null
-      }
+        "sub_type": "Installation Delay Consequences"
+      },
+      "review": null
     }
   ],
   "access": { "user": { "id": "…", "username": "vamshi" }, "is_read_only": false,
@@ -291,15 +293,14 @@ verdict on every item, plus what the reviewer has saved for it. Token required.
 ```
 
 - `classification_id` is the handle Save takes. It is stable; `clause_id` is not.
-- `review` is `null` until someone saves a decision — the same not-yet rule as
+- `review` is `null` until someone saves the item — the same not-yet rule as
   `stages`. Once saved:
-  `{ review_id, revision, decision, label, type, type_name, sub_type, note,
-  reviewed_by, reviewed_by_name, reviewed_at }`. An item is "saved" exactly
-  when `review` is not `null`.
-- `final` always has `label, type, type_name, sub_type, decision`. `decision`
-  is `null` (nobody saved yet: the model's answer), `accepted` (the model's
-  answer, confirmed), `corrected` (the reviewer's values) or `rejected`
-  (`label`, `type` and `sub_type` all `null`).
+  `{ decision, note, text_edited, reviewed_by, reviewed_by_name, reviewed_at }`.
+  An item is "saved" exactly when `review` is not `null`. `decision` is
+  `accepted` (the model's answer, confirmed), `corrected` (the reviewer changed
+  the label, type or sub-type) or `rejected` (`label`, `type` and `sub_type`
+  are then `null`). `text_edited` is `true` when `text` differs from
+  `original_text`.
 - `lead_in` is the parent clause's own words, the sentence this item completes.
   Show it above the item: "describe the nature of the breach;" means little
   without "Processor shall notify Controller… Such notification shall as a
@@ -375,7 +376,8 @@ later.
     { "classification_id": "a40d8ff0-…", "label": "Non-clause",
       "type": "party-identification", "sub_type": null },
     { "classification_id": "1a81e0b7-…", "label": "Clause",
-      "type": "data-protection-and-privacy", "sub_type": "Data Retention" },
+      "type": "data-protection-and-privacy", "sub_type": "Data Retention",
+      "text": "for the provision of the Services only;" },
     { "classification_id": "bd0e59c2-…" },
     { "classification_id": "bed38e34-…", "decision": "rejected",
       "note": "Contact block, not a clause." }
@@ -388,7 +390,8 @@ What to send:
 - **`classification_run_id`** — `classification_run.classification_run_id`
   from the GET you rendered.
 - **`items`** — every row the reviewer **changed or ticked as verified** since
-  the last Save, with the values the row shows now (`final.*` after any edits).
+  the last Save, with the values the row shows now: `label`, `type`,
+  `sub_type` and, when the text box was edited, `text`.
   Rows you leave out are not touched.
 - **`type` is a taxonomy `key`** (`"data-protection-and-privacy"`), never the
   display name. Build the type dropdown from `GET /api/taxonomy/` and keep the
@@ -430,13 +433,21 @@ DB button from `vector_sync`. No refetch needed.
   Highlight each row named in `errors` and show its `detail`.
 - **Saving twice is safe.** A row identical to its saved decision counts as
   `unchanged` and writes nothing.
-- **Changing your mind is kept.** Saving a different value later replaces the
-  decision in force; the earlier one stays in the history.
+- **Saved in place.** Each item is one row in `classifications`; Save updates
+  that row and never adds one. The model's answer stays in its own columns
+  (`model` in the response). What changed, from what to what, is in the
+  Save's `saved_review` event in the activity log.
+- **Text edits.** Send `text` to save an edited clause text (it cannot be
+  empty). `original_text` keeps the document's own words.
 - `review_status` becomes `reviewed` once every item in the document has been
   saved (`reopened_reviewed` for a document published before), otherwise
   `in_review`.
 - One `saved_review` event goes to the document timeline per Save that wrote
-  something.
+  something. Its `metadata.items` lists every item that changed and how:
+  `[{ classification_id, clause_id, changes: { type: { from, to }, text: { from, to }, … } }]`
+  — only the fields that moved (`decision`, `label`, `type`, `sub_type`,
+  `note`, `text`). This is the change history: the row itself only holds the
+  latest values.
 
 | status | when |
 |---|---|
@@ -487,7 +498,7 @@ every write also needs the document's lock.
    first reviewer.
 2. `POST .../workspace/lock/` → take the lock. `acquired: false` means someone
    else has it: open the document read-only.
-3. `GET .../classification/` → the screen's data. Show `final`.
+3. `GET .../classification/` → the screen's data, already showing every saved change.
 4. Every 60 s while the document is open: `POST .../workspace/lock/heartbeat/`.
    The lock expires 120 s after the last renewal.
 5. Edits stay in the browser; remember which rows were changed or verified.
@@ -804,8 +815,8 @@ tell the passes apart.
 3. The list → `GET /api/documents/queue/` for what is waiting, or
    `documentService.list({ classified: true })` for everything classified.
 4. Opening a document → take the lock, then `documentService.classification(id)`.
-   Render `items` in order. Show `final.label` / `final.type_name` /
-   `final.sub_type`, and `lead_in` above an item that has one. An item with
+   Render `items` in order. Show `label` / `type_name` / `sub_type` / `text`,
+   and `lead_in` above an item that has one. An item with
    `review !== null` is saved. Everything read-only when `access.is_read_only`.
 5. Heartbeat every 60 s while open; release on close.
 6. "Only what needs review" → `?needs_review=true`, or filter on `needs_review`.
@@ -813,7 +824,7 @@ tell the passes apart.
    `classification_id`s.
 8. Save → `POST .../classification/save/` with `classification_run_id` and one
    entry per changed id: `{ classification_id, label, type, sub_type }` from the
-   row's current values. Swap the returned `items` in and clear the set. On
+   row's current values, plus `text` when the text box was edited. Swap the returned `items` in and clear the set. On
    `400`, mark the rows in `errors`. On `409`, reload.
 9. Update Vector DB → enabled while `vector_sync.pending_changes > 0`.
 
