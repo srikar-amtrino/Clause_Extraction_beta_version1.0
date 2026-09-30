@@ -56,6 +56,7 @@ def trigger_classification_workflow(document_id: str, *, force=False, classifier
     """
     from django.conf import settings
 
+    from document_pipeline.activity import log_classifying_started
     from document_pipeline.classification.bedrock_client import classifier_from_settings
     from document_pipeline.classification.prompt import PROMPT_VERSION
     from document_pipeline.classification.taxonomy import load_vocabulary
@@ -89,6 +90,7 @@ def trigger_classification_workflow(document_id: str, *, force=False, classifier
         return None
 
     run = start_run(chunk_run, classifier=classifier, vocab=vocab)
+    log_classifying_started(run)
     batches = plan_run_batches(run)
     if not batches:
         # No micro chunks: close the run now rather than leaving it running,
