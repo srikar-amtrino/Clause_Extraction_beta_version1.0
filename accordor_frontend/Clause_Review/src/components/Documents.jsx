@@ -12,6 +12,7 @@ import {
   TableContainer,
   Checkbox,
   LinearProgress,
+  CircularProgress,
   TextField,
   InputAdornment,
   IconButton,
@@ -35,25 +36,80 @@ export default function Documents({
   onConnectDrive,
   onCheckDrive,
   isEmptyData = false,
+  queueCount = 0,
+  onNavigateToOverview,
+  searchQuery = '',
+  onSearchChange,
 }) {
   const { currentUser } = useAuth();
   const currentUserName = currentUser?.username || currentUser?.name || (currentUser?.email ? currentUser.email.split('@')[0] : 'Reviewer');
 
-  // Format real documents from backend pipeline API or Google Drive
+  // Format real documents from backend pipeline API or Google Drive and strictly deduplicate by document name
   const allDocs = useMemo(() => {
     if (!documents || documents.length === 0 || isEmptyData) {
       return [];
     }
-    return documents.map((d, i) => {
+
+    // Deduplicate by normalized document name to ensure every document appears at most ONCE
+    const uniqueMap = new Map();
+    documents.forEach((d, idx) => {
+      const nameKey = (d.name || d.fileName || '').trim().toLowerCase();
+      if (!nameKey) {
+        uniqueMap.set(String(d.id || d.document_id || idx), d);
+        return;
+      }
+      if (!uniqueMap.has(nameKey)) {
+        uniqueMap.set(nameKey, d);
+      } else {
+        const existing = uniqueMap.get(nameKey);
+        const existingStatus = (existing.extraction_status || existing.extractionStatus || '').toLowerCase();
+        const newStatus = (d.extraction_status || d.extractionStatus || '').toLowerCase();
+        const existingClassified = existingStatus === 'classified' || Boolean(existing.stages?.classification || existing.classified);
+        const newClassified = newStatus === 'classified' || Boolean(d.stages?.classification || d.classified);
+        if (!existingClassified && newClassified) {
+          uniqueMap.set(nameKey, d);
+        } else if (existingClassified && !newClassified) {
+          // Keep existing classified document
+        } else {
+          const existingPages = existing.pages ?? existing.stages?.extraction?.pages ?? 0;
+          const newPages = d.pages ?? d.stages?.extraction?.pages ?? 0;
+          const isExistingExtracted = existingStatus === 'extracted' || existingStatus === 'extracted_with_warnings';
+          const isNewExtracted = newStatus === 'extracted' || newStatus === 'extracted_with_warnings';
+          if (!isExistingExtracted && isNewExtracted) {
+            uniqueMap.set(nameKey, d);
+          } else if (newPages > existingPages) {
+            uniqueMap.set(nameKey, d);
+          }
+        }
+      }
+    });
+
+    const uniqueDocs = Array.from(uniqueMap.values());
+
+    return uniqueDocs.map((d, i) => {
       const extraction = d.stages?.extraction;
       const classification = d.stages?.classification;
       const pages = d.pages ?? extraction?.pages ?? 0;
       const clauses = d.clauses ?? extraction?.clauses ?? 0;
       const paragraphs = d.paragraphs ?? extraction?.paragraphs ?? 0;
-      const extractionStatus = d.extractionStatus || d.extraction_status || extraction?.status || 'pending';
+      const rawExtractionStatus = (
+        d.extraction_status ||
+        d.extractionStatus ||
+        extraction?.status ||
+        'pending'
+      ).toLowerCase();
+      const isClassified =
+        rawExtractionStatus === 'classified' ||
+        (d.status && String(d.status).toLowerCase() === 'classified') ||
+        d.classified === true ||
+        Boolean(classification && (classification.status === 'succeeded' || (classification.micro_chunks && classification.micro_chunks > 0) || classification.id));
+      const extractionStatus = isClassified ? 'classified' : rawExtractionStatus;
       const needsReview = d.needsReview ?? classification?.needs_review ?? null;
       const warnings = d.warnings || extraction?.warnings || [];
       const size = d.size || (pages > 0 ? `${Math.max(12, Math.round(pages * 26.5))} KB` : '24 KB');
+      const currentReviewer = d.current_reviewer !== undefined
+        ? d.current_reviewer
+        : (d.rawDoc?.current_reviewer !== undefined ? d.rawDoc.current_reviewer : null);
 
       return {
         id: d.id || d.document_id || `doc-${i}`,
@@ -69,13 +125,15 @@ export default function Documents({
         needsReview,
         warnings,
         stages: d.stages || {},
-        status: d.status || (extractionStatus === 'extracted' ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted_with_warnings' ? 'Needs review' : extractionStatus === 'rejected' ? 'Draft' : 'Needs review'),
+        current_reviewer: currentReviewer,
+        currentReviewer: currentReviewer,
+        status: d.status || (currentReviewer ? 'In review' : (isClassified ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted' ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted_with_warnings' ? 'Needs review' : extractionStatus === 'rejected' ? 'Draft' : 'Needs review')),
         statusTag: d.statusTag || (warnings.length > 0 ? `${warnings.length} warning${warnings.length > 1 ? 's' : ''}` : null),
         vectorDbStatus: d.vectorDbStatus || 'Not sent yet',
         vectorDbDetail: d.vectorDbDetail || '',
         parties: d.parties || (d.folder || driveState.folderPath ? `Folder: ${d.folder || driveState.folderPath}` : 'Parties to Agreement'),
         inDriveSince: d.inDriveSince || (d.last_extracted_at ? new Date(d.last_extracted_at).toLocaleDateString() : (d.modifiedTime || 'Recently')),
-        reviewer: d.reviewer || currentUserName || driveState.user?.name || driveState.user?.email || 'Reviewer',
+        reviewer: currentReviewer || d.reviewer || currentUserName || driveState.user?.name || driveState.user?.email || 'Reviewer',
         lastSaved: d.lastSaved || (d.last_extracted_at ? new Date(d.last_extracted_at).toLocaleDateString() : (d.modifiedTime || 'Today')),
         lastExtracted: d.lastExtracted || (d.last_extracted_at ? new Date(d.last_extracted_at).toLocaleString() : null),
         folder: d.folder || driveState.folderPath || 'Google Drive',
@@ -87,16 +145,25 @@ export default function Documents({
         },
         recentActivity: d.recentActivity || {
           user: driveState.user?.name || 'System',
-          action: extractionStatus === 'extracted' ? 'Last extraction completed' : extractionStatus === 'rejected' ? 'Document rejected by parser' : 'File ready from Google Drive',
+          action: isClassified ? 'Pipeline classification completed' : extractionStatus === 'extracted' ? 'Last extraction completed' : extractionStatus === 'rejected' ? 'Document rejected by parser' : 'File ready from Google Drive',
           timestamp: d.modifiedTime || (d.last_extracted_at ? new Date(d.last_extracted_at).toLocaleDateString() : 'Today'),
         },
         webViewLink: d.webViewLink || d.drive_web_link,
       };
     });
-  }, [documents, driveState, isEmptyData]);
+  }, [documents, driveState, isEmptyData, currentUserName]);
 
   const [activeFilter, setActiveFilter] = useState('all');
-  const [searchQuery, setSearchQuery] = useState('');
+  const [localSearch, setLocalSearch] = useState('');
+  const activeSearch = searchQuery !== undefined && searchQuery !== '' ? searchQuery : localSearch;
+
+  const handleSearchChange = (val) => {
+    setLocalSearch(val);
+    if (onSearchChange) {
+      onSearchChange(val);
+    }
+  };
+
   const [selectedDocId, setSelectedDocId] = useState(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(true);
   const [typeMenuAnchor, setTypeMenuAnchor] = useState(null);
@@ -106,7 +173,7 @@ export default function Documents({
   const selectedDoc = useMemo(() => {
     if (allDocs.length === 0) return null;
     if (selectedDocId) {
-      const found = allDocs.find((d) => d.id === selectedDocId);
+      const found = allDocs.find((d) => d.id === selectedDocId || d.documentId === selectedDocId);
       if (found) return found;
     }
     return allDocs[0];
@@ -119,7 +186,7 @@ export default function Documents({
     return {
       all: allDocs.length,
       needsReview: allDocs.filter((d) => (d.needsReview && d.needsReview > 0) || d.status === 'Needs review').length,
-      inReview: allDocs.filter((d) => d.status === 'In review').length,
+      inReview: allDocs.filter((d) => d.status === 'In review' || Boolean(d.current_reviewer)).length,
       draft: draftCount,
       indraft: draftCount,
       saved: allDocs.filter((d) => d.status === 'Saved').length,
@@ -137,31 +204,53 @@ export default function Documents({
     return allDocs.filter((d) => {
       // Tab filter
       if (activeFilter === 'needs-review' && !(d.needsReview > 0 || d.status === 'Needs review')) return false;
+      if (activeFilter === 'in-review' && !(d.status === 'In review' || Boolean(d.current_reviewer))) return false;
+      if (activeFilter === 'draft' && !(d.status === 'Draft' || d.extractionStatus === 'rejected')) return false;
+      if (activeFilter === 'saved' && d.status !== 'Saved') return false;
+      if (activeFilter === 'reviewed' && d.status !== 'Reviewed') return false;
       if (activeFilter === 'extracted' && d.extractionStatus !== 'extracted') return false;
       if (activeFilter === 'warnings' && !(d.extractionStatus === 'extracted_with_warnings' || (d.warnings && d.warnings.length > 0))) return false;
       if (activeFilter === 'rejected' && d.extractionStatus !== 'rejected') return false;
       if (activeFilter === 'updated' && !(d.vectorDbStatus && d.vectorDbStatus.startsWith('Updated'))) return false;
 
-      // Search filter
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
-        const matchesName = d.name.toLowerCase().includes(q);
+      // Search filter across name, title, parties, reviewer, and folder
+      if (activeSearch && activeSearch.trim()) {
+        const q = activeSearch.trim().toLowerCase();
+        const matchesName = (d.name || '').toLowerCase().includes(q);
         const matchesTitle = d.title ? d.title.toLowerCase().includes(q) : false;
         const matchesParties = d.parties ? d.parties.toLowerCase().includes(q) : false;
-        if (!matchesName && !matchesTitle && !matchesParties) return false;
+        const matchesReviewer = d.reviewer ? d.reviewer.toLowerCase().includes(q) : false;
+        const matchesFolder = d.folder ? d.folder.toLowerCase().includes(q) : false;
+        if (!matchesName && !matchesTitle && !matchesParties && !matchesReviewer && !matchesFolder) return false;
       }
       return true;
     });
-  }, [allDocs, activeFilter, searchQuery]);
+  }, [allDocs, activeFilter, activeSearch]);
 
   // Handle document row selection
   const handleSelectDoc = (doc) => {
-    setSelectedDocId(doc.id);
+    setSelectedDocId(doc.id || doc.documentId);
     setIsDrawerOpen(true);
   };
 
   // Extraction Status badge helper
   const renderExtractionBadge = (status, warnings = []) => {
+    if (status === 'classified') {
+      return (
+        <Chip
+          label="• Classified"
+          size="small"
+          sx={{
+            height: 22,
+            fontSize: '11px',
+            fontWeight: 600,
+            bgcolor: '#dcfce7',
+            color: '#166534',
+            border: '1px solid #bbf7d0',
+          }}
+        />
+      );
+    }
     if (status === 'extracted') {
       return (
         <Chip
@@ -171,9 +260,9 @@ export default function Documents({
             height: 22,
             fontSize: '11px',
             fontWeight: 600,
-            bgcolor: '#dcfce7',
-            color: '#166534',
-            border: '1px solid #bbf7d0',
+            bgcolor: '#e0f2fe',
+            color: '#0369a1',
+            border: '1px solid #bae6fd',
           }}
         />
       );
@@ -210,7 +299,8 @@ export default function Documents({
     if (status === 'rejected') {
       return (
         <Chip
-          label="• Rejected"
+          icon={<CloseIcon sx={{ fontSize: '13px !important', color: '#991b1b' }} />}
+          label="Rejected"
           size="small"
           sx={{
             height: 22,
@@ -219,21 +309,33 @@ export default function Documents({
             bgcolor: '#fee2e2',
             color: '#991b1b',
             border: '1px solid #fecaca',
+            '& .MuiChip-icon': { ml: '6px', mr: '-2px' },
           }}
         />
       );
     }
     return (
       <Chip
-        label="• Pending"
+        icon={
+          <CircularProgress
+            size={11}
+            thickness={5}
+            sx={{
+              color: '#0284c7',
+              animationDuration: '1s',
+            }}
+          />
+        }
+        label="Pending"
         size="small"
         sx={{
           height: 22,
           fontSize: '11px',
-          fontWeight: 500,
-          bgcolor: '#f3f4f6',
-          color: '#6b7280',
-          border: '1px solid #e5e7eb',
+          fontWeight: 600,
+          bgcolor: '#f0f9ff',
+          color: '#0369a1',
+          border: '1px solid #bae6fd',
+          '& .MuiChip-icon': { ml: '6px', mr: '-2px' },
         }}
       />
     );
@@ -429,8 +531,8 @@ export default function Documents({
             <TextField
               size="small"
               placeholder="Search..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              value={activeSearch}
+              onChange={(e) => handleSearchChange(e.target.value)}
               sx={{
                 width: { xs: 180, sm: 220 },
                 '& .MuiOutlinedInput-root': {
@@ -607,16 +709,43 @@ export default function Documents({
               <DescriptionOutlinedIcon sx={{ fontSize: 28 }} />
             </Box>
             <Typography variant="subtitle1" sx={{ fontWeight: 600, color: '#1b1f24', fontSize: '15px' }}>
-              No documents found in Drive
+              {queueCount > 0 ? 'Files are in Your Queue' : 'No documents found in Drive'}
             </Typography>
-            <Typography variant="body2" sx={{ color: '#7b838c', maxWidth: 420, lineHeight: 1.5 }}>
-              {driveState.isConnected
+            <Typography variant="body2" sx={{ color: '#7b838c', maxWidth: 440, lineHeight: 1.5 }}>
+              {queueCount > 0
+                ? `You have ${queueCount} file${queueCount === 1 ? '' : 's'} currently in Your Queue waiting for extraction or classification. Once classified in the database, they will automatically appear here.`
+                : driveState.isConnected
                 ? driveState.folderPath
                   ? `No files found in folder "${driveState.folderPath}". Please upload DOCX or PDF files into this folder or click Sync files.`
                   : 'Connected to Google Drive. Choose a folder from the Overview section to load contracts.'
                 : 'Connect your Google Drive account from the Overview section to load real contracts for review.'}
             </Typography>
-            {driveState.isConnected ? (
+            {queueCount > 0 ? (
+              <Box sx={{ display: 'flex', gap: 1.5, mt: 1 }}>
+                {onNavigateToOverview && (
+                  <Button
+                    variant="contained"
+                    size="small"
+                    onClick={onNavigateToOverview}
+                    sx={{ bgcolor: '#1e3a5f', textTransform: 'none', fontWeight: 600 }}
+                  >
+                    View Your Queue ({queueCount})
+                  </Button>
+                )}
+                {onCheckDrive && (
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    onClick={onCheckDrive}
+                    disabled={driveState.isSyncing}
+                    startIcon={<SyncIcon sx={{ fontSize: 16 }} />}
+                    sx={{ textTransform: 'none', fontWeight: 600, borderColor: '#cfcfc8', color: '#1b1f24' }}
+                  >
+                    Sync status
+                  </Button>
+                )}
+              </Box>
+            ) : driveState.isConnected ? (
               <Box sx={{ display: 'flex', gap: 1.5, mt: 1 }}>
                 {onOpenPicker && (
                   <Button
@@ -666,6 +795,9 @@ export default function Documents({
             <Table stickyHeader size="small">
               <TableHead>
                 <TableRow>
+                  <TableCell sx={{ bgcolor: '#f8fafc', py: 1.25, fontSize: '12px', fontWeight: 600, color: '#64748b', borderBottom: '1px solid #e2e8f0', width: 45 }}>
+                    #
+                  </TableCell>
                   <TableCell sx={{ bgcolor: '#f8fafc', py: 1.25, fontSize: '12px', fontWeight: 600, color: '#64748b', borderBottom: '1px solid #e2e8f0' }}>
                     Document
                   </TableCell>
@@ -676,19 +808,24 @@ export default function Documents({
                     Needs review
                   </TableCell>
                   <TableCell sx={{ bgcolor: '#f8fafc', py: 1.25, fontSize: '12px', fontWeight: 600, color: '#64748b', borderBottom: '1px solid #e2e8f0', width: 170 }}>
+                    Reviewer
+                  </TableCell>
+                  <TableCell sx={{ bgcolor: '#f8fafc', py: 1.25, fontSize: '12px', fontWeight: 600, color: '#64748b', borderBottom: '1px solid #e2e8f0', width: 170 }}>
                     Vector DB
                   </TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
-                {filteredDocs.map((doc) => {
+                {filteredDocs.map((doc, index) => {
                   const isSelected = selectedDoc?.id === doc.id;
+                  const reviewerName = doc.reviewer || currentUserName;
 
                   return (
                     <TableRow
                       key={doc.id}
                       hover
                       onClick={() => handleSelectDoc(doc)}
+                      onDoubleClick={() => onOpenWorkspace && onOpenWorkspace(doc)}
                       sx={{
                         cursor: 'pointer',
                         bgcolor: isSelected ? '#f8fafc' : '#ffffff',
@@ -696,10 +833,15 @@ export default function Documents({
                         '&:hover': { bgcolor: isSelected ? '#f1f5f9' : '#f8fafc' },
                       }}
                     >
-                      {/* Document Info (No docx logo, no checkbox) */}
+                      {/* Serial number */}
+                      <TableCell sx={{ py: 1.4, fontSize: '12px', fontWeight: 600, color: '#64748b', width: 45 }}>
+                        {index + 1}
+                      </TableCell>
+
+                      {/* Document Info + Reviewer beside document name */}
                       <TableCell sx={{ py: 1.4 }}>
                         <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, gap: 0.35 }}>
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
                             <Typography
                               sx={{
                                 fontSize: '13.5px',
@@ -713,21 +855,7 @@ export default function Documents({
                             >
                               {doc.name}
                             </Typography>
-                            {/* {doc.webViewLink && (
-                              <Tooltip title="Open in Google Drive" arrow>
-                                <IconButton
-                                  size="small"
-                                  component="a"
-                                  href={doc.webViewLink}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  onClick={(e) => e.stopPropagation()}
-                                  sx={{ p: 0.2, color: '#94a3b8', '&:hover': { color: '#0284c7' } }}
-                                >
-                                  <OpenInNewIcon sx={{ fontSize: 13 }} />
-                                </IconButton>
-                              </Tooltip>
-                            )} */}
+                            
                           </Box>
                           <Typography sx={{ fontSize: '11.5px', color: '#64748b', letterSpacing: '0.01em' }}>
                             pages: {doc.pages ?? 0} · clauses: {doc.clauses ?? 0} · paragraphs: {doc.paragraphs ?? 0} · {doc.size}
@@ -743,6 +871,28 @@ export default function Documents({
                       {/* Needs review (display count) */}
                       <TableCell sx={{ py: 1.4 }}>
                         {renderNeedsReviewBadge(doc.needsReview)}
+                      </TableCell>
+
+                      {/* Reviewer */}
+                      <TableCell sx={{ py: 1.4 }}>
+                        {doc.current_reviewer ? (
+                          <Chip
+                            size="small"
+                            label={`${doc.current_reviewer}`}
+                            sx={{
+                              height: 20,
+                              fontSize: '11px',
+                              bgcolor: '#e0f2fe',
+                              color: '#0369a1',
+                              fontWeight: 600,
+                              border: '1px solid #bae6fd',
+                            }}
+                          />
+                        ) : (
+                          <Typography sx={{ fontSize: '12px', color: '#64748b' }}>
+                            Not assigned
+                          </Typography>
+                        )}
                       </TableCell>
 
                       {/* Vector DB */}
@@ -831,16 +981,16 @@ export default function Documents({
             )}
           </Box>
 
-          {/* Extraction Status & Needs Review Cards (Replaced Review Progress) */}
-          <Box
+          {/* Extraction Status & Needs Review Cards & Current Reviewer (Replaced Review Progress) */}
+           {/* <Box
             sx={{
               display: 'grid',
-              gridTemplateColumns: '1fr 1fr',
-              gap: 1.5,
+              gridTemplateColumns: 'repeat(2, 1fr)',
+              gap: 1.25,
             }}
-          >
+          > */}
             {/* Extraction Status card */}
-            <Box
+            {/* <Box
               sx={{
                 p: 1.5,
                 borderRadius: 2,
@@ -862,10 +1012,10 @@ export default function Documents({
                   {selectedDoc.warnings.length} warning{selectedDoc.warnings.length > 1 ? 's' : ''} reported
                 </Typography>
               )}
-            </Box>
+            </Box>  */}
 
             {/* Needs Review card (display count) */}
-            <Box
+            {/* <Box
               sx={{
                 p: 1.5,
                 borderRadius: 2,
@@ -886,8 +1036,41 @@ export default function Documents({
               <Typography sx={{ fontSize: '10.5px', color: selectedDoc.needsReview > 0 ? '#9a3412' : '#64748b' }}>
                 {selectedDoc.needsReview > 0 ? 'items to verify' : 'All clear'}
               </Typography>
-            </Box>
-          </Box>
+            </Box> */}
+
+            {/* Current Reviewer card */}
+            {/* <Box
+              sx={{
+                p: 1.5,
+                borderRadius: 2,
+                bgcolor: selectedDoc.current_reviewer ? '#eff6ff' : '#f8fafc',
+                border: '1px solid',
+                borderColor: selectedDoc.current_reviewer ? '#bfdbfe' : '#e2e8f0',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 0.5,
+              }}
+            >
+              <Typography sx={{ fontSize: '11px', fontWeight: 600, color: selectedDoc.current_reviewer ? '#1d4ed8' : '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Current reviewer
+              </Typography>
+              <Typography
+                sx={{
+                  fontSize: '13px',
+                  fontWeight: 700,
+                  color: selectedDoc.current_reviewer ? '#1e3a5f' : '#64748b',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {selectedDoc.current_reviewer ? selectedDoc.current_reviewer : 'null'}
+              </Typography>
+              <Typography sx={{ fontSize: '10.5px', color: selectedDoc.current_reviewer ? '#2563eb' : '#94a3b8' }}>
+                {selectedDoc.current_reviewer ? 'In review' : 'No reviewer'}
+              </Typography>
+            </Box> */}
+          {/* </Box> */}
 
           {/* Details Section */}
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
@@ -950,21 +1133,21 @@ export default function Documents({
                 </Typography>
               </Box>
 
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
+              {/* <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
                 <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 100 }}>
                   In Drive since
                 </Typography>
                 <Typography sx={{ fontSize: '12px', fontWeight: 500, color: '#0f172a', textAlign: 'right' }}>
                   {selectedDoc.inDriveSince}
                 </Typography>
-              </Box>
+              </Box> */}
 
               <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
-                <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 100 }}>
-                  Reviewer
+                <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 110 }}>
+                  Current reviewer
                 </Typography>
-                <Typography sx={{ fontSize: '12px', fontWeight: 500, color: '#0f172a', textAlign: 'right' }}>
-                  {selectedDoc.reviewer}
+                <Typography sx={{ fontSize: '12px', fontWeight: 600, color: selectedDoc.current_reviewer ? '#0f172a' : '#64748b', textAlign: 'right' }}>
+                  {selectedDoc.current_reviewer ? selectedDoc.current_reviewer : 'null'}
                 </Typography>
               </Box>
 

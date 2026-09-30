@@ -1,7 +1,8 @@
 import React from 'react';
-import { Box, Typography, TextField, InputAdornment, Button, CircularProgress } from '@mui/material';
+import { Box, Typography, TextField, InputAdornment, Button, CircularProgress, IconButton, Tooltip } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import SyncIcon from '@mui/icons-material/Sync';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 
 export default function TopNav({
   title = 'Overview',
@@ -9,6 +10,8 @@ export default function TopNav({
   onSearchChange,
   onCheckDrive,
   isCheckingDrive = false,
+  isSidebarCollapsed = false,
+  onToggleSidebar,
 }) {
   return (
     <Box
@@ -24,17 +27,36 @@ export default function TopNav({
         px: { xs: 2, sm: 3.5 },
       }}
     >
-      <Typography
-        variant="h6"
-        sx={{
-          fontSize: '15px',
-          fontWeight: 600,
-          color: '#1b1f24',
-          textTransform: 'capitalize',
-        }}
-      >
-        {title}
-      </Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        {isSidebarCollapsed && onToggleSidebar && (
+          <Tooltip title="Expand sidebar" arrow placement="bottom">
+            <IconButton
+              size="small"
+              onClick={onToggleSidebar}
+              sx={{
+                p: 0.5,
+                mr: 0.5,
+                color: '#64748b',
+                borderRadius: 1,
+                '&:hover': { bgcolor: '#f1f5f9', color: '#1e3a5f' },
+              }}
+            >
+              <ChevronRightIcon sx={{ fontSize: 20 }} />
+            </IconButton>
+          </Tooltip>
+        )}
+        <Typography
+          variant="h6"
+          sx={{
+            fontSize: '15px',
+            fontWeight: 600,
+            color: '#1b1f24',
+            textTransform: 'capitalize',
+          }}
+        >
+          {title}
+        </Typography>
+      </Box>
 
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
         {/* Search bar */}

@@ -128,6 +128,7 @@ def record_decision(classification, payload, reviewed_by=(None, None)):
     return ClassificationReview.objects.create(
         classification=classification,
         run=classification.run,
+        document_id=classification.document_id,
         revision=previous + 1,
         reviewed_by_email=email,
         reviewed_by_name=name,
@@ -188,6 +189,7 @@ def record_decisions(document, decisions, reviewed_by=(None, None)):
      .update(is_current=False))
     return ClassificationReview.objects.bulk_create([
         ClassificationReview(classification=classification, run=run,
+                             document_id=classification.document_id,
                              revision=highest.get(classification.id, 0) + 1,
                              reviewed_by_email=email, reviewed_by_name=name, **fields)
         for classification, fields in checked

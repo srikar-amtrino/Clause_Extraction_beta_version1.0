@@ -17,8 +17,8 @@ def finalize_document_classification_task(self, document_id: str):
     The document waits in ``needs_review`` until a human reviewer
     saves and then explicitly publishes from the workspace.
 
-    Routes to ``llm_queue``; run workers with
-    ``celery -A accorder_backend worker -Q llm_queue -c 4``.
+    Routes to ``llm_queue``; ``scripts/run_worker.ps1`` (or ``run_worker.bat``)
+    runs a worker on it.
     """
     from document_pipeline.models import Document, DocumentActivityLog
     from document_pipeline.services.finalization_service import (
@@ -42,6 +42,11 @@ def finalize_document_classification_task(self, document_id: str):
 
         # 2. Materialise canonical Postgres records for the review workspace.
         stats = materialise_paragraph_records(document_id)
+        print(
+            '[REVIEW WORKSPACE] paragraph records result document=%s stats=%s'
+            % (document_id, stats),
+            flush=True,
+        )
         print(
             '[REVIEW WORKSPACE] paragraph records result document=%s stats=%s'
             % (document_id, stats),
@@ -87,6 +92,12 @@ def finalize_document_classification_task(self, document_id: str):
             flush=True,
         )
 
+        print(
+            '[REVIEW WORKSPACE] finalization completed document=%s status=needs_review'
+            % document_id,
+            flush=True,
+        )
+
         return {
             "status": "FINALIZED",
             "document_id": document_id,
@@ -94,6 +105,8 @@ def finalize_document_classification_task(self, document_id: str):
             "paragraph_records": stats,
         }
     except Exception as exc:
+        print('[REVIEW WORKSPACE] finalization failed document=%s error=%s: %s'
+              % (document_id, type(exc).__name__, exc), flush=True)
         print('[REVIEW WORKSPACE] finalization failed document=%s error=%s: %s'
               % (document_id, type(exc).__name__, exc), flush=True)
         raise self.retry(exc=exc, countdown=2 ** self.request.retries)
