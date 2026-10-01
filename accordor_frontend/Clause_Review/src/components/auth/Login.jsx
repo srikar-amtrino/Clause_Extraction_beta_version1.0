@@ -35,18 +35,7 @@ export default function Login() {
 
   const [showPassword, setShowPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
-  const [successMsg, setSuccessMsg] = useState(() => {
-    try {
-      const flash = sessionStorage.getItem('clausewright_flash_signup');
-      if (flash) {
-        sessionStorage.removeItem('clausewright_flash_signup');
-        return flash;
-      }
-    } catch {
-      /* ignore */
-    }
-    return location.state?.message || '';
-  });
+  const [successMsg, setSuccessMsg] = useState(() => location.state?.message || '');
   const [fieldErrors, setFieldErrors] = useState({});
 
   const handleTogglePassword = () => {
@@ -91,11 +80,6 @@ export default function Login() {
     if (!validate()) return;
 
     try {
-      try {
-        sessionStorage.setItem('clausewright_flash_login', 'You have logged in successfully!');
-      } catch {
-        /* ignore */
-      }
       await login(formData.email.trim(), formData.password, formData.rememberMe);
       navigate('/overview', {
         replace: true,
@@ -105,11 +89,6 @@ export default function Login() {
         },
       });
     } catch (err) {
-      try {
-        sessionStorage.removeItem('clausewright_flash_login');
-      } catch {
-        /* ignore */
-      }
       setErrorMsg(err.message || 'Authentication failed');
     }
   };

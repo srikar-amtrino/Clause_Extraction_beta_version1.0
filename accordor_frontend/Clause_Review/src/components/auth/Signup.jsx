@@ -134,12 +134,7 @@ export default function Signup() {
         password: formData.password,
         role: formData.role,
       });
-      // Redirect to login page, not overview page directly
-      try {
-        sessionStorage.setItem('clausewright_flash_signup', 'Account created successfully! Please sign in with your credentials.');
-      } catch {
-        /* ignore */
-      }
+      // Redirect to login page with navigation state
       navigate('/login', {
         replace: true,
         state: {
