@@ -8,6 +8,7 @@ import Overview from './components/Overview';
 import Documents from './components/Documents';
 import ReviewWorkspace from './components/ReviewWorkspace';
 import ActivityLog from './components/ActivityLog';
+import VectorPlayground from './components/VectorPlayground';
 import FolderMetadataModal from './components/FolderMetadataModal';
 import ErrorBoundary from './components/ErrorBoundary';
 import Login from './components/auth/Login';
@@ -164,6 +165,8 @@ function AppWorkspace() {
     ? 'documents'
     : location.pathname.includes('/activity-log')
     ? 'activity-log'
+    : location.pathname.includes('/vector-playground')
+    ? 'vector-playground'
     : 'overview';
 
   const [selectedReviewDoc, setSelectedReviewDoc] = useState(null);
@@ -358,6 +361,7 @@ function AppWorkspace() {
     if (nav === 'overview') navigate('/overview');
     else if (nav === 'documents') navigate('/documents');
     else if (nav === 'activity-log') navigate('/activity-log');
+    else if (nav === 'vector-playground') navigate('/vector-playground');
   };
 
   const handleOpenReviewWorkspace = (doc) => {
@@ -808,6 +812,8 @@ function AppWorkspace() {
               />
             ) : activeNav === 'activity-log' ? (
               <ActivityLog />
+            ) : activeNav === 'vector-playground' ? (
+              <VectorPlayground />
             ) : (
               <Overview
                 driveState={driveState}
@@ -922,6 +928,14 @@ export default function App() {
       />
       <Route
         path="/activity-log"
+        element={
+          <ProtectedRoute>
+            <AppWorkspace />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/vector-playground"
         element={
           <ProtectedRoute>
             <AppWorkspace />
