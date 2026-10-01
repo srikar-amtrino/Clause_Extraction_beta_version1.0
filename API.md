@@ -767,6 +767,7 @@ Pipeline events, in the order a document meets them:
 | phase | action | actor | metadata |
 |---|---|---|---|
 | `data_ingestion` | `drive_discovered` | Drive Sync | `drive_file_id, file_name, mime_type, size_bytes, folder_id, drive_modified_time` |
+| `data_ingestion` | `pipeline_queued` | Drive Sync | `task_id, classify` — a sync queued parse → chunk → classify. While it runs, another sync does not queue the document again; the sync response lists it under `ingestion.already_running` |
 | `data_staging` | `download_staged` | Parser | `extraction_run_id, drive_file_id, size_bytes, mime_type, content_sha256, download_ms` |
 | `data_parsing` | `parsing_started` | Parser | `drive_file_id, parser_build` |
 | `data_parsing` | `parsed` | Parser | `extraction_run_id, attempt, status, parser_build, clauses, paragraphs, page_count, warnings, warning_codes, parse_ms, persist_ms` |
@@ -818,20 +819,46 @@ tell the passes apart.
 
 ## What is not here yet
 
-- **The old review routes.** `POST /api/classifications/<id>/review/`,
-  `GET /api/classifications/<id>/review/history/` and
-  `POST /api/documents/<id>/reviews/` have views but are not in `urls.py`, so
-  they return `404`. Save (`/classification/save/`) replaces them; don't use
-  them.
-- **Checking what a write sends.** The workspace stores `label`,
-  `canonical_type` and `sub_type` as sent; the checks above are on the frontend
-  for now.
-- **The updated row in a write's response.** Edits return only `updated`.
-- **Restoring a draft.** Its payload is stored but never returned.
-- **Page numbers.** `source_page` is always `1`.
-- **Listing documents by review status.** `queue` lists only `needs_review`;
-  `GET /api/documents/` has no `review_status` filter. Ask if a screen needs one.
-- **Pagination inside a document.** `paragraphs` returns every row.
-- **Triggering a run.** Parsing and classification start from the Drive sync
-  and management commands, not from these endpoints.
-- **Auth on the results endpoints.** Not checked yet; send the token anyway.
+- **Filtering the list by review progress.** `stages.classification.review`
+  tells a row how far it got, but there is no `reviewed=true|false` filter on
+  `GET /api/documents/` yet. Ask if a screen needs one.
+- **Pagination inside a document.** `items` returns all 338. Fine at this size;
+  if a screen starts to feel it, ask and it gets a window like the list.
+- **Triggering a run.** Parsing and classification are started from management
+  commands, not HTTP.
+- **Auth.** The results and review endpoints do not check the session yet. They
+  will. Send `credentials: 'include'` now so nothing breaks when they do.
+
+## Publish to vector database
+
+`POST /api/documents/<id>/workspace/publish/` validates the review workspace
+and queues a Celery task. The task sends reviewed paragraph text to the EC2
+endpoint at `http://54.215.196.139:8000/embed`, then upserts the returned vectors into the configured
+Qdrant collection. It returns `queued`, `task_id`, and a message; embedding is
+asynchronous. Failed upstream calls do not mark paragraphs as synced and are
+recorded on the vector sync run.
+
+Configure these values in the backend `.env` and in the Celery worker's
+environment. Keep the Qdrant API key secret; do not commit it:
+
+- `EMBEDDING_BATCH_SIZE` — defaults to `4` paragraphs per request. The backend
+  caps this at 4 because larger batches exceeded the EC2 service's request
+  timeout in testing.
+- `EMBEDDING_API_TIMEOUT_SECONDS` — defaults to `60`.
+- `QDRANT_URL` and `QDRANT_API_KEY` — Qdrant cluster URL and API key.
+- `QDRANT_COLLECTION` — defaults to `legal_clauses_v1`.
+
+The embedding endpoint receives one batch per request:
+
+```json
+{
+  "texts": ["Reviewed paragraph text"]
+}
+```
+
+Return either `{"embeddings": [[0.1, 0.2]]}` or the compatible shape
+`{"data": [{"embedding": [0.1, 0.2]}]}`. Return exactly one vector per text,
+with a consistent dimension. The `legal_clauses_v1` collection must be created
+before publishing and configured for the embedding dimension (1024 for dense
+BGE-M3 vectors). Paragraph UUIDs are used as Qdrant point IDs, so re-publishing
+updates existing points rather than duplicating them.

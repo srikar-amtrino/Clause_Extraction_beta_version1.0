@@ -150,8 +150,11 @@ def _current_runs_by_document(document_ids):
     page, in two queries rather than two per row."""
     extraction = {r.document_id: r for r in ExtractionRun.objects.filter(
         document_id__in=document_ids, is_current=True)}
+    # The run of the current chunking of the current extraction: a re-chunked
+    # document keeps a current classification run for every chunk run it had.
     classification = {r.document_id: r for r in ClassificationRun.objects.filter(
-        document_id__in=document_ids, is_current=True)}
+        document_id__in=document_ids, is_current=True,
+        chunk_run__is_current=True, chunk_run__extraction_run__is_current=True)}
     return extraction, classification
 
 

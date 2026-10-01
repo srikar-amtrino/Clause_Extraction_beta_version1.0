@@ -36,7 +36,10 @@ def trigger_full_document_pipeline(credentials_json: str, document_id: str, forc
              chunk_document_task.si(document_id, force)]
     if classify:
         steps.append(classify_document_task.si(document_id, force))
-    return chain(*steps).delay()
+    result = chain(*steps).delay()
+    from document_pipeline.activity import log_pipeline_queued
+    log_pipeline_queued(document_id, str(result.id), classify=classify)
+    return result
 
 
 def trigger_classification_workflow(document_id: str, *, force=False, classifier=None):

@@ -147,6 +147,9 @@ export const documentService = {
     return post(`/api/documents/${documentId}/workspace/lock/release/`, {}, options);
   },
 
+  publishToVectorDb(documentId) {
+    return post(`/api/documents/${documentId}/workspace/publish/`, {});
+  },
 
   /**
    * The current classification run: `summary` plus one `items` entry per micro
