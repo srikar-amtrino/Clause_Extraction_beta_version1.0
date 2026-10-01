@@ -7,6 +7,11 @@
 
   micro  one per leaf clause. Carries the parent breadcrumb and the parent
          lead-in so it reads on its own. This is the unit a verdict cites.
+         Optionally also one per parent clause whose own words are more than a
+         heading ("Processor shall notify Controller without undue delay and
+         shall:"), holding only that clause's own text, so an obligation stated
+         in a lead-in gets a verdict of its own instead of living only as
+         context for its sub-clauses.
 
 Retrieve broad, cite narrow. Macro chunks nest, so a clause's text appears in
 its own micro chunk and in the macro chunk of every ancestor. That is
@@ -79,12 +84,68 @@ def _descendants(node, kids):
     return out
 
 
-def _own_text(rec):
-    """A clause's own text plus its body paragraphs, nothing inherited."""
+def _own_text(rec, table_text=''):
+    """A clause's own text plus its body paragraphs, nothing inherited, then
+    the tables that sit under it when they are passed in."""
     parts = [rec.get('text') or '']
     if rec.get('body_text'):
         parts.append(rec['body_text'])
+    if table_text:
+        parts.append(table_text)
     return '\n'.join(p for p in parts if p.strip()).strip()
+
+
+def render_tables(cells):
+    """Table cells -> text, one line per row, cells joined by ' | '.
+
+    `cells` are dicts with table, row, col and text, in reading order. A cell
+    spread over several paragraphs is joined with a space, and a column a row
+    leaves empty stays empty rather than shifting the columns after it left.
+    """
+    tables, order = {}, []
+    for cell in cells:
+        table = cell.get('table')
+        if table not in tables:
+            tables[table] = {}
+            order.append(table)
+        row = tables[table].setdefault(cell.get('row') or 0, {})
+        row.setdefault(cell.get('col') or 0, []).append((cell.get('text') or '').strip())
+    lines = []
+    for table in order:
+        for row_index in sorted(tables[table]):
+            row = tables[table][row_index]
+            texts = [' '.join(t for t in row.get(col, []) if t) for col in range(max(row) + 1)]
+            if any(texts):
+                lines.append(' | '.join(texts).strip())
+    return '\n'.join(lines)
+
+
+def is_heading_only(rec):
+    """True when a clause's own words are nothing but a section heading.
+
+    `RECITALS`, `5. PERSONAL DATA BREACHES` and `Definitions and
+    Interpretation` are headings: the breadcrumb of every clause beneath them
+    already says them, and there is nothing in them to classify. A sentence, a
+    lead-in ending in a colon or any body paragraph is not a heading.
+    """
+    if (rec.get('body_text') or '').strip():
+        return False
+    text = (rec.get('text') or '').strip()
+    words = text.split()
+    if not words:
+        return True
+    if len(words) > _HEADING_MAX_WORDS:
+        return False
+    letters = [c for c in text if c.isalpha()]
+    if letters and all(c.isupper() for c in letters):
+        return True
+    if text.endswith(':'):
+        return False
+    # Title case: every word long enough to be more than a connective is
+    # capitalised. "Definitions and Interpretation" passes, "for the provision
+    # of Services" does not.
+    long_words = [w for w in words if sum(c.isalpha() for c in w) >= 4]
+    return bool(long_words) and all(w.lstrip('("\'')[:1].isupper() for w in long_words)
 
 
 def _crumb_label(n):
@@ -204,7 +265,8 @@ def _chunk(kind, rec, idx, text, paragraph_ids, child_ids, compound):
     }
 
 
-def build_chunks(clauses, paragraphs_by_clause=None):
+def build_chunks(clauses, paragraphs_by_clause=None, table_cells_by_clause=None,
+                 parent_text_micros=False):
     """-> (chunks, stats). Macro chunks are the retrieval units, micro chunks
     the citation units. Every clause is represented at least once.
 
@@ -218,14 +280,30 @@ def build_chunks(clauses, paragraphs_by_clause=None):
     the MSA sample). The database knows the real edge and passes it in; the
     default reproduces the POC exactly so the port stays diffable against the
     notebook.
+
+    `table_cells_by_clause` maps clause_id -> the table cells that sit under
+    that clause (dicts with table, row, col, text). The parser keeps table
+    cells out of clause text entirely, so without this a clause that introduces
+    a table -- "Processor uses the following Subprocessors:" -- is chunked,
+    classified and embedded without the table it introduces.
+
+    `parent_text_micros` also gives every parent clause whose own words are more
+    than a heading (see is_heading_only) a micro chunk of its own text, emitted
+    right after its macro so reading order holds. It is never indexed: its
+    macro already contains it. Both default off, which reproduces the POC.
     """
     flat = list(clauses or [])
     idx, kids = _index(flat), _children(flat)
+    tables = {cid: render_tables(cells)
+              for cid, cells in (table_cells_by_clause or {}).items()}
 
     def own_paragraphs(rec):
         if paragraphs_by_clause is None:
             return list(rec.get('paragraph_ids') or [])
         return list(paragraphs_by_clause.get(rec['clause_id']) or [])
+
+    def own_text(rec):
+        return _own_text(rec, tables.get(rec['clause_id'], ''))
 
     chunks = []
     for rec in sorted(flat, key=lambda r: r['order_index']):
@@ -233,7 +311,7 @@ def build_chunks(clauses, paragraphs_by_clause=None):
 
         if desc:
             # macro: this clause plus everything beneath it, in reading order
-            body = [_own_text(rec)] + [_own_text(d) for d in desc]
+            body = [own_text(rec)] + [own_text(d) for d in desc]
             paras = own_paragraphs(rec)
             for d in desc:
                 paras.extend(own_paragraphs(d))
@@ -250,10 +328,22 @@ def build_chunks(clauses, paragraphs_by_clause=None):
             if len(inside) > 1:
                 mc['region'] = REGION_MIXED
             chunks.append(mc)
+            if parent_text_micros and not is_heading_only(rec):
+                # the parent's own words, as a citation unit of their own. Its
+                # sub-clauses keep their own micros; nothing is merged.
+                mi = _chunk(MICRO, rec, idx,
+                            own_text(rec),
+                            own_paragraphs(rec),
+                            [],
+                            bool(rec.get('is_compound_lead_in')))
+                mi['indexed_for_retrieval'] = False
+                mi['regions_included'] = [mi['region']]
+                mi['is_parent_text'] = True
+                chunks.append(mi)
         else:
             # micro: a leaf, carrying its parent's breadcrumb and lead-in
             mi = _chunk(MICRO, rec, idx,
-                        _own_text(rec),
+                        own_text(rec),
                         own_paragraphs(rec),
                         [],
                         bool(rec.get('is_compound_lead_in')))

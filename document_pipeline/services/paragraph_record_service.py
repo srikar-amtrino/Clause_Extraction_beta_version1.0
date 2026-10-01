@@ -30,17 +30,16 @@ def materialise_paragraph_records(document_id) -> dict:
     from document_pipeline.models import (
         Chunk,
         Classification,
-        ClassificationRun,
         Document,
         DocumentParagraphRecord,
     )
+    from document_pipeline.services.export_service import current_classification_run
 
     doc = Document.objects.select_related().get(pk=document_id)
-    current_run = (
-        ClassificationRun.objects.filter(document=doc, is_current=True)
-        .order_by('-created_at')
-        .first()
-    )
+    # The run of the document's current chunking. Each chunk run keeps its own
+    # current classification run, so after a re-chunk "the newest current run
+    # of the document" can belong to the chunking that was replaced.
+    current_run = current_classification_run(doc)
     if not current_run:
         logger.warning(
             'materialise_paragraph_records: no current classification run for %s',
@@ -56,6 +55,7 @@ def materialise_paragraph_records(document_id) -> dict:
     )
 
     created = updated = flagged = 0
+    current_ids = []
 
     with transaction.atomic():
         for idx, clf in enumerate(classifications):
@@ -94,7 +94,16 @@ def materialise_paragraph_records(document_id) -> dict:
                        % (document_id, para_id, clf.id, clf.needs_review,
                           clf.review_reasons))
             else:
-                # Refresh LLM-owned fields but preserve reviewer edits.
+                # Refresh LLM-owned fields but preserve reviewer edits. The row
+                # follows the current run: a re-chunk or re-classification must
+                # not leave it pointing at the verdict it replaced.
+                record.chunk = chunk
+                record.classification = clf
+                record.breadcrumb = defaults_on_create['breadcrumb']
+                record.sequence_order = idx
+                if record.reviewed_text == record.original_text:
+                    record.reviewed_text = chunk.text
+                record.original_text = chunk.text
                 record.llm_issues = clf.review_reasons or []
                 record.confidence = clf.confidence
                 # Only reset classification fields if no human has edited yet.
@@ -105,8 +114,10 @@ def materialise_paragraph_records(document_id) -> dict:
                     )
                     record.sub_type = clf.sub_type or ''
                 record.save(update_fields=[
+                    'chunk', 'classification', 'breadcrumb', 'sequence_order',
+                    'original_text', 'reviewed_text',
                     'llm_issues', 'confidence', 'label',
-                    'canonical_type', 'sub_type',
+                    'canonical_type', 'sub_type', 'updated_at',
                 ])
                 updated += 1
                 _trace('paragraph updated document=%s paragraph=%s record=%s '
@@ -116,12 +127,23 @@ def materialise_paragraph_records(document_id) -> dict:
 
             if clf.needs_review:
                 flagged += 1
+            current_ids.append(para_id)
+
+        # Rows for chunks the current run no longer has (the clause is gone
+        # from the parse, or the chunker drew it differently) would otherwise
+        # be embedded on the next publish as if they were still in the document.
+        removed, _ = (DocumentParagraphRecord.objects
+                      .filter(document_id=document_id)
+                      .exclude(paragraph_id__in=current_ids)
+                      .delete())
 
     total = created + updated
     logger.info(
-        'materialise_paragraph_records: doc=%s total=%d created=%d updated=%d flagged=%d',
-        document_id, total, created, updated, flagged,
+        'materialise_paragraph_records: doc=%s total=%d created=%d updated=%d '
+        'flagged=%d removed=%d',
+        document_id, total, created, updated, flagged, removed,
     )
     _trace('paragraph upsert committed document=%s total=%d created=%d updated=%d flagged=%d'
            % (document_id, total, created, updated, flagged))
-    return {'total': total, 'created': created, 'updated': updated, 'flagged': flagged}
+    return {'total': total, 'created': created, 'updated': updated, 'flagged': flagged,
+            'removed': removed}

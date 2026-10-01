@@ -17,53 +17,6 @@ import { useAuth } from './context/AuthContext';
 import { googleDriveService } from './services/googleDriveService';
 import { documentService } from './services/documentService';
 
-const CACHED_DOCS_KEY = 'clausewright_cached_documents';
-const CACHED_DRIVE_STATE_KEY = 'clausewright_cached_drivestate';
-
-function getCachedDocs() {
-  try {
-    const raw = localStorage.getItem(CACHED_DOCS_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return deduplicateDocs(parsed);
-  } catch {
-    return [];
-  }
-}
-function saveCachedDocs(docs) {
-  try {
-    const deduped = deduplicateDocs(docs);
-    localStorage.setItem(CACHED_DOCS_KEY, JSON.stringify(deduped));
-  } catch {
-    /* ignore */
-  }
-}
-
-function getCachedDriveState() {
-  try {
-    const raw = localStorage.getItem(CACHED_DRIVE_STATE_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
-
-function saveCachedDriveState(state) {
-  try {
-    const toSave = {
-      isConnected: state.isConnected,
-      folderPath: state.folderPath,
-      folderIds: state.folderIds,
-      agreementType: state.agreementType,
-      sectorial: state.sectorial,
-      lastChecked: state.lastChecked,
-      user: state.user,
-    };
-    localStorage.setItem(CACHED_DRIVE_STATE_KEY, JSON.stringify(toSave));
-  } catch {
-    /* ignore */
-  }
-}
-
 // Deduplicate documents strictly by normalized name so a document NEVER appears twice
 function deduplicateDocs(docs) {
   const map = new Map();
@@ -213,25 +166,32 @@ function AppWorkspace() {
   const [selectedReviewDoc, setSelectedReviewDoc] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Google Drive connection and sync state initialized from cache so there is no 2s delay on page refresh
-  const [driveState, setDriveState] = useState(() => {
-    const cached = getCachedDriveState();
-    return cached || {
-      isConnected: false,
-      isSyncing: false,
-      folderPath: '',
-      folderIds: [],
-      agreementType: '',
-      sectorial: '',
-      lastChecked: null,
-      user: null,
-    };
+  // Google Drive connection and sync state
+  const [driveState, setDriveState] = useState({
+    isConnected: false,
+    isSyncing: false,
+    folderPath: '',
+    folderIds: [],
+    agreementType: '',
+    sectorial: '',
+    lastChecked: null,
+    user: null,
   });
 
-  // Real Documents initialized from cache so there is 0s delay on refresh and no data loss
-  const [fetchedDocuments, setFetchedDocuments] = useState(() => getCachedDocs());
+  // Real Documents loaded directly from API
+  const [fetchedDocuments, setFetchedDocuments] = useState([]);
   const [_isLoadingDocs, setIsLoadingDocs] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+
+  // Clear any legacy cache keys from localStorage and sessionStorage
+  useEffect(() => {
+    try {
+      localStorage.removeItem('clausewright_cached_drivestate');
+      localStorage.removeItem('clausewright_cached_documents');
+      localStorage.removeItem('accordor_cached_documents_v1');
+      sessionStorage.clear();
+    } catch (_) {}
+  }, []);
 
   // Load real documents immediately from /api/documents/ and merge with Google Drive if connected
   useEffect(() => {
@@ -287,7 +247,6 @@ function AppWorkspace() {
         const deduped = deduplicateDocs(mergedDocs);
         if (isMounted && deduped.length > 0) {
           setFetchedDocuments(deduped);
-          saveCachedDocs(deduped);
         }
       } catch (err) {
         console.warn('Initial document fetch notice:', err);
@@ -315,7 +274,7 @@ function AppWorkspace() {
   const extractedDocuments = React.useMemo(() => {
     return fetchedDocuments.filter((d) => {
       const status = (d.extraction_status || d.extractionStatus || '').toLowerCase();
-      return status === 'classified';
+      return status === 'classified' || d.status === 'Saved' || d.isSaved;
     });
   }, [fetchedDocuments]);
 
@@ -343,6 +302,10 @@ function AppWorkspace() {
             if (match) {
               const prevNorm = doc;
               const newNorm = normalizeDoc({ ...doc, ...match }, currentUser);
+              if (prevNorm.status === 'Saved') {
+                newNorm.status = 'Saved';
+                newNorm.isSaved = true;
+              }
               if (
                 newNorm.extractionStatus !== prevNorm.extractionStatus ||
                 newNorm.pages !== prevNorm.pages ||
@@ -357,7 +320,6 @@ function AppWorkspace() {
           });
           if (hasChange) {
             const deduped = deduplicateDocs(updated);
-            saveCachedDocs(deduped);
             return deduped;
           }
           return prev;
@@ -404,6 +366,30 @@ function AppWorkspace() {
     navigate('/documents');
   };
 
+  const handleUpdateDocument = (updatedDoc) => {
+    if (!updatedDoc) return;
+    const targetId = updatedDoc.id || updatedDoc.documentId;
+    const targetName = (updatedDoc.name || updatedDoc.fileName || '').trim().toLowerCase();
+
+    setSelectedReviewDoc((prev) => (prev && (prev.id === targetId || prev.documentId === targetId) ? { ...prev, ...updatedDoc } : updatedDoc));
+    setFetchedDocuments((prev) => {
+      let matched = false;
+      const updated = prev.map((d) => {
+        const matchesId = (d.id && d.id === targetId) || (d.documentId && d.documentId === targetId);
+        const matchesName = targetName && (d.name || d.fileName || '').trim().toLowerCase() === targetName;
+        if (matchesId || matchesName) {
+          matched = true;
+          return { ...d, ...updatedDoc };
+        }
+        return d;
+      });
+      if (!matched) {
+        updated.unshift(updatedDoc);
+      }
+      return updated;
+    });
+  };
+
   // Second modal state (after selecting folder in Google Picker)
   const [selectedFolderForConfig, setSelectedFolderForConfig] = useState(null);
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
@@ -418,19 +404,8 @@ function AppWorkspace() {
     setToastSeverity(severity);
   };
 
-  // Check for login success feedback from sessionStorage or navigation state
+  // Check for login success feedback from navigation state
   useEffect(() => {
-    try {
-      const flash = sessionStorage.getItem('clausewright_flash_login');
-      if (flash) {
-        sessionStorage.removeItem('clausewright_flash_login');
-        showToast(flash, 'success');
-        return;
-      }
-    } catch {
-      /* ignore */
-    }
-
     if (location.state?.loginSuccess) {
       showToast(location.state.message || 'You have logged in successfully!', 'success');
       try {
@@ -456,7 +431,6 @@ function AppWorkspace() {
             lastChecked: res.config?.lastChecked || 'just now',
             user: res.config?.user || { email: currentUser?.email || 'Google Account' },
           };
-          saveCachedDriveState(updated);
           setDriveState((prev) => ({ ...prev, ...updated }));
         } else if (res && res.isConnected === false && !res.isOffline) {
           // Explicitly disconnected
@@ -469,7 +443,6 @@ function AppWorkspace() {
             lastChecked: null,
             user: null,
           };
-          saveCachedDriveState(disconnected);
           setDriveState((prev) => ({ ...prev, ...disconnected }));
         }
       } catch (err) {
@@ -550,7 +523,6 @@ function AppWorkspace() {
           isSyncing: true,
           lastChecked: 'just now',
         };
-        saveCachedDriveState(next);
         return next;
       });
 
@@ -597,7 +569,6 @@ function AppWorkspace() {
 
       const deduped = deduplicateDocs(mergedDocs);
       setFetchedDocuments(deduped);
-      saveCachedDocs(deduped);
       setIsConfigModalOpen(false);
       setSelectedFolderForConfig(null);
       showToast(`Saved folder "${folder.name}". Retrieved ${deduped.length} files.`);
@@ -645,7 +616,6 @@ function AppWorkspace() {
             folderPath: folderName,
             lastChecked: 'just now',
           };
-          saveCachedDriveState(next);
           return next;
         });
       }
@@ -682,7 +652,6 @@ function AppWorkspace() {
 
       const deduped = deduplicateDocs(mergedDocs);
       setFetchedDocuments(deduped);
-      saveCachedDocs(deduped);
       showToast(`Synced ${deduped.length} documents.`);
     } catch (err) {
       console.warn('Sync notice:', err.message);
@@ -781,6 +750,7 @@ function AppWorkspace() {
             showToast={showToast}
             isSidebarCollapsed={isSidebarCollapsed}
             onToggleSidebar={() => setIsSidebarCollapsed((prev) => !prev)}
+            onUpdateDocument={handleUpdateDocument}
           />
         ) : (
           <>

@@ -43,6 +43,7 @@ def classify_chunk_batch_task(self, run_id: str, chunk_ids: list, batch_index: i
 	acks_late=True,
 )
 def finalize_classification_run_task(self, _batch_results, run_id: str):
+	from document_pipeline.activity import log_classification_finished
 	from document_pipeline.models import ClassificationRun
 	from document_pipeline.services.classification_service import finalize_run
 	from document_pipeline.pipeline_logger import log_celery_task_started
@@ -51,6 +52,7 @@ def finalize_classification_run_task(self, _batch_results, run_id: str):
 	log_celery_task_started("finalize_classification_run_task", task_id, f"Run {run_id}")
 
 	run = finalize_run(ClassificationRun.objects.get(pk=run_id))
+	log_classification_finished(run)
 	print("[celery] finalized classification run %s: %s, %d/%d classified"
 	      % (run_id, run.status, run.classified_count, run.micro_count), flush=True)
 
