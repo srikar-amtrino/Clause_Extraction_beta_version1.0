@@ -32,9 +32,11 @@ def finalize_document_classification_task(self, document_id: str):
 
     try:
         print('[REVIEW WORKSPACE] finalization started document=%s' % document_id, flush=True)
-        # 1. Low-confidence chunks (< 0.7) are automatically flagged for
-        # human review in the Review Workspace during materialise_paragraph_records below.
-        # Haiku judge service is not yet implemented.
+        # 1. Optionally run the haiku judge for low-confidence chunks.
+        needs_judge = check_low_confidence_chunks(document_id)
+        if needs_judge:
+            from document_pipeline.tasks.judge import trigger_haiku_judge_task
+            trigger_haiku_judge_task.delay(document_id)
 
         # 2. Give every classification row its clause text, so the
         # classifications table reads on its own and Save edits it in place.
@@ -47,6 +49,11 @@ def finalize_document_classification_task(self, document_id: str):
 
         # 3. Materialise canonical Postgres records for the review workspace.
         stats = materialise_paragraph_records(document_id)
+        print(
+            '[REVIEW WORKSPACE] paragraph records result document=%s stats=%s'
+            % (document_id, stats),
+            flush=True,
+        )
         print(
             '[REVIEW WORKSPACE] paragraph records result document=%s stats=%s'
             % (document_id, stats),
@@ -76,12 +83,20 @@ def finalize_document_classification_task(self, document_id: str):
             flush=True,
         )
 
+        print(
+            '[REVIEW WORKSPACE] finalization completed document=%s status=needs_review'
+            % document_id,
+            flush=True,
+        )
+
         return {
             "status": "FINALIZED",
             "document_id": document_id,
             "paragraph_records": stats,
         }
     except Exception as exc:
+        print('[REVIEW WORKSPACE] finalization failed document=%s error=%s: %s'
+              % (document_id, type(exc).__name__, exc), flush=True)
         print('[REVIEW WORKSPACE] finalization failed document=%s error=%s: %s'
               % (document_id, type(exc).__name__, exc), flush=True)
         raise self.retry(exc=exc, countdown=2 ** self.request.retries)

@@ -35,7 +35,12 @@ async function request(path, { params, method = 'GET', body, keepalive = false }
     method,
     credentials: 'include',
     keepalive,
-    headers: { Accept: 'application/json' },
+    cache: 'no-store',
+    headers: {
+      Accept: 'application/json',
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      Pragma: 'no-cache',
+    },
   };
   const token = getStoredToken();
   if (token) options.headers.Authorization = `Bearer ${token}`;
@@ -142,6 +147,9 @@ export const documentService = {
     return post(`/api/documents/${documentId}/workspace/lock/release/`, {}, options);
   },
 
+  publishToVectorDb(documentId) {
+    return post(`/api/documents/${documentId}/workspace/publish/`, {});
+  },
 
   /**
    * The current classification run: `summary` plus one `items` entry per micro
@@ -154,5 +162,26 @@ export const documentService = {
   classification(documentId, { needsReview } = {}) {
     return get(`/api/documents/${documentId}/classification/`,
       toQuery({ needs_review: needsReview }));
+  },
+
+  /**
+   * Save classification decisions:
+   * POST /api/documents/<documentId>/classification/save/
+   * Body: { classification_run_id: string, items: Array<{ classification_id, label, type, sub_type, text, reviewed_text, decision, note }> }
+   */
+  saveClassification(documentId, data) {
+    return post(`/api/documents/${documentId}/classification/save/`, data);
+  },
+
+  getDocumentNote(documentId) {
+    return get(`/api/documents/${documentId}/note/`);
+  },
+
+  saveDocumentNote(documentId, text) {
+    return post(`/api/documents/${documentId}/note/`, { text });
+  },
+
+  getDocumentActivity(documentId) {
+    return get(`/api/documents/${documentId}/activity/`);
   },
 };

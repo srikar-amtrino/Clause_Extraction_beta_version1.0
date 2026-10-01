@@ -127,7 +127,7 @@ export default function Documents({
         stages: d.stages || {},
         current_reviewer: currentReviewer,
         currentReviewer: currentReviewer,
-        status: d.status || (currentReviewer ? 'In review' : (isClassified ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted' ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted_with_warnings' ? 'Needs review' : extractionStatus === 'rejected' ? 'Draft' : 'Needs review')),
+        status: (d.status === 'Saved' || d.isSaved) ? 'Saved' : (d.status || (currentReviewer ? 'In review' : (isClassified ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted' ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted_with_warnings' ? 'Needs review' : extractionStatus === 'rejected' ? 'Draft' : 'Needs review'))),
         statusTag: d.statusTag || (warnings.length > 0 ? `${warnings.length} warning${warnings.length > 1 ? 's' : ''}` : null),
         vectorDbStatus: d.vectorDbStatus || 'Not sent yet',
         vectorDbDetail: d.vectorDbDetail || '',
@@ -855,7 +855,20 @@ export default function Documents({
                             >
                               {doc.name}
                             </Typography>
-                            
+                            {doc.status === 'Saved' && (
+                              <Chip
+                                label="Saved"
+                                size="small"
+                                sx={{
+                                  height: 20,
+                                  fontSize: '11px',
+                                  fontWeight: 600,
+                                  bgcolor: '#ecfdf5',
+                                  color: '#065f46',
+                                  border: '1px solid #a7f3d0',
+                                }}
+                              />
+                            )}
                           </Box>
                           <Typography sx={{ fontSize: '11.5px', color: '#64748b', letterSpacing: '0.01em' }}>
                             pages: {doc.pages ?? 0} · clauses: {doc.clauses ?? 0} · paragraphs: {doc.paragraphs ?? 0} · {doc.size}
