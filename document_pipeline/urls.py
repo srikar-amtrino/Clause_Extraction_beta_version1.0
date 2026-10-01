@@ -1,15 +1,12 @@
 from django.urls import path
 
 from .document_views import (
-	classification_review,
-	classification_review_history,
 	classification_save,
 	document_classification,
 	document_classification_input,
 	document_detail,
 	document_extraction,
 	document_list,
-	document_reviews,
 	taxonomy,
 )
 from .review_views import (

@@ -38,7 +38,16 @@ def finalize_document_classification_task(self, document_id: str):
             from document_pipeline.tasks.judge import trigger_haiku_judge_task
             trigger_haiku_judge_task.delay(document_id)
 
-        # 2. Materialise canonical Postgres records for the review workspace.
+        # 2. Give every classification row its clause text, so the
+        # classifications table reads on its own and Save edits it in place.
+        from document_pipeline.models import Document
+        from document_pipeline.services.export_service import current_classification_run
+        from document_pipeline.services.review_service import fill_text
+        current = current_classification_run(Document.objects.get(pk=document_id))
+        if current is not None:
+            fill_text(current)
+
+        # 3. Materialise canonical Postgres records for the review workspace.
         stats = materialise_paragraph_records(document_id)
         print(
             '[REVIEW WORKSPACE] paragraph records result document=%s stats=%s'
@@ -51,21 +60,21 @@ def finalize_document_classification_task(self, document_id: str):
             flush=True,
         )
 
-        # 3. Transition document status -- pipeline pauses here.
+        # 4. Transition document status -- pipeline pauses here.
         update_document_status(document_id, status="NEEDS_REVIEW")
 
-        # 4. Activity log. The `classified` event was written when the run
+        # 5. Activity log. The `classified` event was written when the run
         # closed; this one is written once per run, however often this retries.
         log_moved_to_review(document_id, stats)
 
-        # 5. Log storytelling completion
+        # 6. Log storytelling completion
         log_finalization_complete(
             str(document_id),
             paragraph_records_count=stats.get("total", 0),
             flagged_for_review=stats.get("flagged", 0),
         )
 
-        # 6. Notify the frontend that the document is ready for review.
+        # 7. Notify the frontend that the document is ready for review.
         notify_frontend_via_websocket(document_id, event="DOCUMENT_CLASSIFIED")
 
         print(

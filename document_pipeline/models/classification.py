@@ -83,6 +83,35 @@ class Classification(models.Model):
     error = models.TextField(blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # ---- The reviewer's pass, updated in place by Save ---------------------
+    # label / canonical_type / sub_type above stay the model's answer. What a
+    # reviewer saves goes here, on the same row: saving again overwrites these
+    # columns, it never adds a row. Who changed what, from what, is in the
+    # document's activity log.
+    ACCEPTED = 'accepted'
+    CORRECTED = 'corrected'
+    REJECTED = 'rejected'
+    DECISION_CHOICES = [(ACCEPTED, ACCEPTED), (CORRECTED, CORRECTED), (REJECTED, REJECTED)]
+
+    # The clause text as it stands: the source text, until a reviewer edits it.
+    # chunk.text keeps the source text either way.
+    text = models.TextField(null=True, blank=True)
+    # Null until someone saves the item.
+    review_decision = models.CharField(max_length=16, choices=DECISION_CHOICES,
+                                       null=True, blank=True)
+    # The verdict the item carries after review: the model's own when accepted,
+    # the reviewer's when corrected, empty when rejected.
+    reviewed_label = models.CharField(max_length=16, choices=LABEL_CHOICES,
+                                      null=True, blank=True)
+    reviewed_canonical_type = models.ForeignKey('document_pipeline.CanonicalType',
+                                                on_delete=models.PROTECT, null=True, blank=True,
+                                                related_name='reviewed_classifications')
+    reviewed_sub_type = models.CharField(max_length=255, null=True, blank=True)
+    review_note = models.TextField(blank=True, default='')
+    reviewed_by = models.ForeignKey('core.User', on_delete=models.SET_NULL, null=True, blank=True,
+                                    related_name='reviewed_classifications')
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+
     class Meta:
         db_table = 'classifications'
         constraints = [
@@ -105,6 +134,16 @@ class Classification(models.Model):
             models.CheckConstraint(
                 condition=Q(confidence__isnull=True) | Q(confidence__gte=0.0, confidence__lte=1.0),
                 name='classification_confidence_range'),
+            # The reviewer's verdict obeys the same shape rules as the model's.
+            models.CheckConstraint(
+                condition=~Q(review_decision='corrected') | Q(reviewed_canonical_type__isnull=False),
+                name='corrected_has_reviewed_type'),
+            models.CheckConstraint(
+                condition=~Q(review_decision='rejected') | ~Q(review_note=''),
+                name='rejected_has_review_note'),
+            models.CheckConstraint(
+                condition=~Q(reviewed_label='Non-clause') | Q(reviewed_sub_type__isnull=True),
+                name='reviewed_non_clause_has_no_sub_type'),
         ]
         indexes = [
             models.Index(fields=['chunk'], name='class_chunk_idx'),
@@ -112,6 +151,8 @@ class Classification(models.Model):
             # The review queue reads exactly this slice.
             models.Index(fields=['run'], condition=Q(needs_review=True),
                          name='class_run_review_idx'),
+            # Review progress per run: how many items have been saved.
+            models.Index(fields=['run', 'review_decision'], name='class_run_decision_idx'),
         ]
 
     def __str__(self):

@@ -1,8 +1,10 @@
-"""Recording what a reviewer decided about a classification.
+"""The review screen's Save: what a reviewer did to a document's items.
 
-One entry point, `record_decision`, used by both the single and the bulk
-endpoint, so a decision made on its own and a decision made in a batch of forty
-go through exactly the same validation.
+Each item is one Classification row, and Save updates that row in place. The
+model's answer stays in label / canonical_type / sub_type; what the reviewer
+saves goes into the row's review columns and `text`. Saving again overwrites
+those columns and never adds a row. Who changed what, from what, is written to
+the document's activity log, one event per Save.
 
 Every rejected payload raises ReviewError carrying a sentence meant to be read
 by the person who caused it. The view turns that into a 400 without knowing
@@ -11,243 +13,22 @@ anything about the rules.
 import uuid
 
 from django.db import transaction
-from django.db.models import Count, Max
+from django.db.models import Count
 
-from document_pipeline.models import CanonicalType, Classification, ClassificationReview
+from document_pipeline.models import CanonicalType, Classification
 
-DECISIONS = {ClassificationReview.ACCEPTED,
-             ClassificationReview.CORRECTED,
-             ClassificationReview.REJECTED}
+C = Classification
 
-LABELS = {ClassificationReview.CLAUSE: CanonicalType.CLAUSE,
-          ClassificationReview.NON_CLAUSE: CanonicalType.NON_CLAUSE}
+LABELS = {C.CLAUSE: CanonicalType.CLAUSE, C.NON_CLAUSE: CanonicalType.NON_CLAUSE}
+
+# The row's review columns, as one Save writes them.
+REVIEW_FIELDS = ['text', 'review_decision', 'reviewed_label', 'reviewed_canonical_type',
+                 'reviewed_sub_type', 'review_note', 'reviewed_by', 'reviewed_at']
 
 
 class ReviewError(ValueError):
     """A payload the reviewer has to fix. The message is user-facing."""
 
-
-def reviewer_from_session(request):
-    """-> (email, name). The signed-in Drive account, or (None, None).
-
-    Read from the session, never from the request body: a reviewer name the
-    client gets to choose is worth nothing in an audit trail.
-    """
-    user = request.session.get('google_drive_user') or {}
-    return user.get('email') or None, user.get('name') or None
-
-
-def _string(payload, key):
-    value = payload.get(key)
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise ReviewError('%s must be text.' % key)
-    return value.strip() or None
-
-
-def _resolve_type(key, label, taxonomy_version):
-    """The canonical type a correction names, in the version the run used.
-
-    Looked up in that version rather than the newest, so a correction can only
-    name a type the verdict itself could have carried.
-    """
-    canonical_type = CanonicalType.objects.filter(version=taxonomy_version, key=key).first()
-    if canonical_type is None:
-        raise ReviewError('No type "%s" in taxonomy %s.' % (key, taxonomy_version))
-    if not canonical_type.is_active:
-        raise ReviewError('Type "%s" is retired and cannot be assigned.' % key)
-    if canonical_type.applies_to != LABELS[label]:
-        raise ReviewError('Type "%s" is a %s type; a %s cannot take it.'
-                          % (key, canonical_type.applies_to.replace('_', '-'), label))
-    return canonical_type
-
-
-def validate(classification, payload):
-    """-> the fields a ClassificationReview needs, or raise ReviewError.
-
-    Split out from the write so the bulk endpoint can check a whole batch
-    before it commits any of it.
-    """
-    if not isinstance(payload, dict):
-        raise ReviewError('Each decision must be an object.')
-
-    decision = _string(payload, 'decision')
-    if decision is None:
-        raise ReviewError('decision is required: %s.' % ' | '.join(sorted(DECISIONS)))
-    if decision not in DECISIONS:
-        raise ReviewError('Unknown decision "%s". Use %s.'
-                          % (decision, ' | '.join(sorted(DECISIONS))))
-
-    # The label a correction carries, defaulting to the one the verdict already
-    # has. A failed verdict has no label, so a correction there must name one.
-    label = _string(payload, 'label') or classification.label
-    if label is not None and label not in LABELS:
-        raise ReviewError('Unknown label "%s". Use %s | %s.'
-                          % (label, ClassificationReview.CLAUSE, ClassificationReview.NON_CLAUSE))
-
-    note = _string(payload, 'note') or ''
-    if decision == ClassificationReview.REJECTED and not note:
-        raise ReviewError('A rejected verdict needs a note saying what is wrong with it.')
-
-    type_key = _string(payload, 'type')
-    sub_type = _string(payload, 'sub_type')
-
-    if decision != ClassificationReview.CORRECTED:
-        if type_key is not None:
-            raise ReviewError('Only a corrected verdict carries a type; this one is "%s".'
-                              % decision)
-        return {'decision': decision, 'label': None, 'canonical_type': None,
-                'sub_type': None, 'note': note}
-
-    if type_key is None:
-        raise ReviewError('A corrected verdict needs the type it should have had.')
-    if label is None:
-        raise ReviewError('A corrected verdict needs a label, because the original '
-                          'classification failed and has none.')
-    canonical_type = _resolve_type(type_key, label, classification.run.taxonomy_version)
-    if label == ClassificationReview.NON_CLAUSE and sub_type:
-        raise ReviewError('A Non-clause has no sub-type.')
-    return {'decision': decision, 'label': label, 'canonical_type': canonical_type,
-            'sub_type': sub_type if label == ClassificationReview.CLAUSE else None,
-            'note': note}
-
-
-@transaction.atomic
-def record_decision(classification, payload, reviewed_by=(None, None)):
-    """Store one decision and return it, superseding the previous one.
-
-    The old row is kept with is_current cleared rather than updated in place,
-    so "accepted, then corrected an hour later" stays legible afterwards.
-    """
-    fields = validate(classification, payload)
-    email, name = reviewed_by
-    previous = (ClassificationReview.objects.filter(classification=classification)
-                .aggregate(highest=Max('revision'))['highest'] or 0)
-    (ClassificationReview.objects
-     .filter(classification=classification, is_current=True)
-     .update(is_current=False))
-    return ClassificationReview.objects.create(
-        classification=classification,
-        run=classification.run,
-        document_id=classification.document_id,
-        revision=previous + 1,
-        reviewed_by_email=email,
-        reviewed_by_name=name,
-        **fields)
-
-
-@transaction.atomic
-def record_decisions(document, decisions, reviewed_by=(None, None)):
-    """Several decisions for one document, all or nothing. -> [review]
-
-    Validated as a batch before anything is written, so a bulk "accept
-    everything visible" either lands whole or leaves the queue exactly as it
-    was. The reviewer never has to work out which half of a click took effect.
-    """
-    from document_pipeline.services.export_service import current_classification_run
-
-    if not isinstance(decisions, list) or not decisions:
-        raise ReviewError('decisions must be a non-empty list.')
-
-    run = current_classification_run(document)
-    if run is None:
-        raise ReviewError('This document has no current classification to review.')
-
-    wanted = []
-    for index, entry in enumerate(decisions):
-        if not isinstance(entry, dict):
-            raise ReviewError('decisions[%d] must be an object.' % index)
-        classification_id = entry.get('classification_id')
-        if not classification_id:
-            raise ReviewError('decisions[%d] is missing classification_id.' % index)
-        wanted.append((str(classification_id), entry))
-
-    ids = [cid for cid, _ in wanted]
-    if len(set(ids)) != len(ids):
-        raise ReviewError('The same classification appears twice in one request.')
-
-    try:
-        rows = {str(c.id): c for c in Classification.objects.filter(run=run, id__in=ids)}
-    except (ValueError, TypeError):
-        raise ReviewError('classification_id must be a UUID.')
-
-    missing = [cid for cid in ids if cid not in rows]
-    if missing:
-        raise ReviewError('Not part of the current classification run for this document: %s.'
-                          % ', '.join(missing[:5]))
-
-    # The whole batch is checked before a row is written.
-    checked = [(rows[cid], validate(rows[cid], entry)) for cid, entry in wanted]
-
-    # The revision each row is about to get, in one query for the whole batch.
-    highest = {row['classification_id']: row['highest'] for row in
-               (ClassificationReview.objects.filter(classification_id__in=ids)
-                .values('classification_id').annotate(highest=Max('revision')))}
-
-    email, name = reviewed_by
-    (ClassificationReview.objects
-     .filter(classification_id__in=ids, is_current=True)
-     .update(is_current=False))
-    return ClassificationReview.objects.bulk_create([
-        ClassificationReview(classification=classification, run=run,
-                             document_id=classification.document_id,
-                             revision=highest.get(classification.id, 0) + 1,
-                             reviewed_by_email=email, reviewed_by_name=name, **fields)
-        for classification, fields in checked
-    ])
-
-
-def review_json(review):
-    """One decision as the API returns it.
-
-    None stays None: an item nobody has decided on sends `review: null`, the
-    same not-yet shape the stage summaries use.
-    """
-    if review is None:
-        return None
-    return {
-        'review_id': str(review.id),
-        'revision': review.revision,
-        'decision': review.decision,
-        'label': review.label,
-        'type': review.canonical_type.key if review.canonical_type else None,
-        'type_name': review.canonical_type.name if review.canonical_type else None,
-        'sub_type': review.sub_type,
-        'note': review.note or None,
-        'reviewed_by': review.reviewed_by_email,
-        'reviewed_by_name': review.reviewed_by_name,
-        'reviewed_at': review.created_at.isoformat() if review.created_at else None,
-    }
-
-
-def current_reviews_for_run(run):
-    """-> {classification_id: review} for every decided item in the run."""
-    if run is None:
-        return {}
-    rows = (ClassificationReview.objects
-            .filter(run=run, is_current=True)
-            .select_related('canonical_type'))
-    return {r.classification_id: r for r in rows}
-
-
-def review_counts_by_run(run_ids):
-    """-> {run_id: {decision: count}} for a page of documents, in one query.
-
-    The list endpoint shows review progress per row; without this it would be
-    a query per row.
-    """
-    counts = {}
-    rows = (ClassificationReview.objects
-            .filter(run_id__in=run_ids, is_current=True)
-            .values('run_id', 'decision')
-            .annotate(total=Count('id')))
-    for row in rows:
-        counts.setdefault(row['run_id'], {})[row['decision']] = row['total']
-    return counts
-
-
-# ------------------------------------------------------------------ save
 
 class SaveError(ReviewError):
     """A Save the reviewer has to fix. Carries the per-item problems and the
@@ -269,74 +50,171 @@ def _blank(value):
     return None if value in ('', 'null', 'None') else value
 
 
-def final_verdict(classification, review):
-    """-> {label, type, type_name, sub_type, decision}: what the item is once the
-    reviewer's decision is applied. What the screen shows and what goes to the
-    vector DB.
+def _is_uuid(value):
+    try:
+        uuid.UUID(str(value))
+    except ValueError:
+        return False
+    return True
 
-    The model's answer while nobody has decided, or when the decision was to
-    accept it; the reviewer's when they corrected it; nothing when they
-    rejected it without a replacement.
+
+def _resolve_type(key, label, taxonomy_version):
+    """The canonical type a correction names, in the version the run used.
+
+    Looked up in that version rather than the newest, so a correction can only
+    name a type the verdict itself could have carried.
     """
-    decision = review.decision if review is not None else None
-    if decision == ClassificationReview.CORRECTED:
-        label, canonical_type, sub_type = review.label, review.canonical_type, review.sub_type
-    elif decision == ClassificationReview.REJECTED:
-        label, canonical_type, sub_type = None, None, None
-    else:
-        label = classification.label
-        canonical_type = classification.canonical_type
-        sub_type = classification.sub_type
+    canonical_type = CanonicalType.objects.filter(version=taxonomy_version, key=key).first()
+    if canonical_type is None:
+        raise ReviewError('No type "%s" in taxonomy %s.' % (key, taxonomy_version))
+    if not canonical_type.is_active:
+        raise ReviewError('Type "%s" is retired and cannot be assigned.' % key)
+    if canonical_type.applies_to != LABELS[label]:
+        raise ReviewError('Type "%s" is a %s type; a %s cannot take it.'
+                          % (key, canonical_type.applies_to.replace('_', '-'), label))
+    return canonical_type
+
+
+# ------------------------------------------------------------------ reading
+
+def current_verdict(classification):
+    """-> (label, CanonicalType | None, sub_type): the item as it stands.
+
+    The reviewer's saved verdict once there is one -- empty for a rejection --
+    and the model's answer until then.
+    """
+    c = classification
+    if c.review_decision:
+        return c.reviewed_label, c.reviewed_canonical_type, c.reviewed_sub_type
+    return c.label, c.canonical_type, c.sub_type
+
+
+def current_text(classification):
+    """The clause text as it stands: the reviewer's edit, else the source."""
+    if classification.text is not None:
+        return classification.text
+    return classification.chunk.text
+
+
+def review_json(classification):
+    """The item's saved review as the API returns it, or None while nobody has
+    saved it -- the same not-yet shape the stage summaries use."""
+    c = classification
+    if not c.review_decision:
+        return None
+    user = c.reviewed_by
     return {
-        'label': label,
-        'type': canonical_type.key if canonical_type else None,
-        'type_name': canonical_type.name if canonical_type else None,
-        'sub_type': sub_type,
-        'decision': decision,
+        'decision': c.review_decision,
+        'note': c.review_note or None,
+        'text_edited': current_text(c) != c.chunk.text,
+        'reviewed_by': user.email if user else None,
+        'reviewed_by_name': user.username if user else None,
+        'reviewed_at': c.reviewed_at.isoformat() if c.reviewed_at else None,
     }
 
 
-def _decision_for(classification, current, entry):
-    """One Save entry -> the payload `validate` takes.
+def review_counts_by_run(run_ids):
+    """-> {run_id: {decision: count}} for a page of documents, in one query.
+
+    The list endpoint shows review progress per row; without this it would be
+    a query per row.
+    """
+    counts = {}
+    rows = (Classification.objects
+            .filter(run_id__in=run_ids, review_decision__isnull=False)
+            .values('run_id', 'review_decision')
+            .annotate(total=Count('id')))
+    for row in rows:
+        counts.setdefault(row['run_id'], {})[row['review_decision']] = row['total']
+    return counts
+
+
+# ------------------------------------------------------------------ one entry
+
+def _decision_for(classification, entry):
+    """One Save entry -> (decision, label, type key, sub_type, note).
 
     The client sends the values the row shows now; which of accepted or
     corrected that is gets worked out here by comparing them with the model's
     answer, so no client has to know the rule. A field it leaves out keeps the
     value the row already has.
     """
-    if _blank(entry.get('decision')) == ClassificationReview.REJECTED:
-        return {'decision': ClassificationReview.REJECTED, 'note': entry.get('note')}
+    c = classification
+    note = entry.get('note')
+    if note is not None and not isinstance(note, str):
+        raise ReviewError('note must be text.')
+    note = (note or '').strip()
 
-    shown = final_verdict(classification, current)
-    if shown['decision'] == ClassificationReview.REJECTED:
+    if _blank(entry.get('decision')) == C.REJECTED:
+        if not note:
+            raise ReviewError('A rejected verdict needs a note saying what is wrong with it.')
+        return C.REJECTED, None, None, None, note
+
+    label, canonical_type, sub_type = current_verdict(c)
+    if c.review_decision == C.REJECTED:
         # Nothing to fall back on once rejected: start from the model's answer.
-        shown = final_verdict(classification, None)
-    label = _blank(entry['label']) if 'label' in entry else shown['label']
-    type_key = _blank(entry['type']) if 'type' in entry else shown['type']
-    sub_type = _blank(entry['sub_type']) if 'sub_type' in entry else _blank(shown['sub_type'])
-    if label == ClassificationReview.NON_CLAUSE:
+        label, canonical_type, sub_type = c.label, c.canonical_type, c.sub_type
+    for key in ('label', 'type', 'sub_type'):
+        if key in entry and entry[key] is not None and not isinstance(entry[key], str):
+            raise ReviewError('%s must be text.' % key)
+    label = _blank(entry['label']) if 'label' in entry else label
+    type_key = (_blank(entry['type']) if 'type' in entry
+                else (canonical_type.key if canonical_type else None))
+    sub_type = _blank(entry['sub_type']) if 'sub_type' in entry else _blank(sub_type)
+    if label == C.NON_CLAUSE:
         sub_type = None
 
-    model = (classification.label,
-             classification.canonical_type.key if classification.canonical_type else None,
-             _blank(classification.sub_type))
-    note = entry.get('note')
+    model = (c.label, c.canonical_type.key if c.canonical_type else None, _blank(c.sub_type))
     if (label, type_key, sub_type) == model:
-        return {'decision': ClassificationReview.ACCEPTED, 'note': note}
-    return {'decision': ClassificationReview.CORRECTED, 'label': label, 'type': type_key,
-            'sub_type': sub_type, 'note': note}
+        if c.label is None:
+            raise ReviewError('The classifier gave this item no answer to accept. '
+                              'Choose a label and a type.')
+        return C.ACCEPTED, label, type_key, sub_type, note
+    if label not in LABELS:
+        raise ReviewError('Unknown label "%s". Use %s | %s.' % (label, C.CLAUSE, C.NON_CLAUSE))
+    if type_key is None:
+        raise ReviewError('A corrected verdict needs the type it should have had.')
+    return C.CORRECTED, label, type_key, sub_type, note
 
 
-def _same_as(review, fields):
-    """True when a fresh decision would store exactly what `review` holds."""
-    return (review is not None
-            and review.decision == fields['decision']
-            and review.label == fields['label']
-            and review.canonical_type_id == (fields['canonical_type'].id
-                                             if fields['canonical_type'] else None)
-            and review.sub_type == fields['sub_type']
-            and (review.note or '') == fields['note'])
+def _text_for(classification, entry):
+    if 'text' not in entry:
+        return current_text(classification)
+    text = entry['text']
+    if not isinstance(text, str) or not text.strip():
+        raise ReviewError('text cannot be empty.')
+    return text
 
+
+def _state(classification):
+    """The item as it stands, for telling a real change from a repeat and for
+    the history: before a first Save that is the model's answer, which is what
+    the reviewer was looking at when they changed it."""
+    c = classification
+    label, canonical_type, sub_type = current_verdict(c)
+    return {
+        'decision': c.review_decision,
+        'label': label,
+        'type': canonical_type.key if canonical_type else None,
+        'sub_type': sub_type,
+        'note': c.review_note or '',
+        'text': current_text(c),
+    }
+
+
+def _changes(classification, before, after):
+    """What one Save changed on one item, for the activity log: the fields that
+    moved, each with its value before and after."""
+    shown = {'decision': 'decision', 'label': 'label', 'type': 'type',
+             'sub_type': 'sub_type', 'note': 'note', 'text': 'text'}
+    moved = {name: {'from': before[key], 'to': after[key]}
+             for key, name in shown.items() if before[key] != after[key]}
+    return {'classification_id': str(classification.id),
+            'clause_id': classification.chunk.clause.local_id,
+            'changes': moved}
+
+
+# ------------------------------------------------------------------ save
 
 def _next_review_status(current, all_reviewed):
     reopened = current in ('published', 'reopened_in_review', 'reopened_reviewed')
@@ -345,31 +223,34 @@ def _next_review_status(current, all_reviewed):
     return 'reopened_in_review' if reopened else 'in_review'
 
 
-def _mirror(document, classification, verdict, user, now):
-    """Copy one saved verdict onto the document's paragraph record, the table
+def _mirror(document, classification, user, now):
+    """Copy one saved item onto the document's paragraph record, the table
     Update Vector DB reads. Created when finalize never materialised it, so a
     Save never depends on which path classified the document."""
     from document_pipeline.models import DocumentParagraphRecord
 
-    chunk = classification.chunk
+    c = classification
+    chunk = c.chunk
     record, _ = DocumentParagraphRecord.objects.get_or_create(
         document_id=document.id, paragraph_id=chunk.local_id,
         defaults={
-            'chunk': chunk, 'classification': classification,
+            'chunk': chunk, 'classification': c,
             'breadcrumb': chunk.breadcrumb.split(' > ') if chunk.breadcrumb else [],
             'sequence_order': chunk.order_index,
             'original_text': chunk.text, 'reviewed_text': chunk.text,
-            'confidence': classification.confidence,
-            'llm_issues': classification.review_reasons or [],
+            'confidence': c.confidence,
+            'llm_issues': c.review_reasons or [],
         })
-    label = verdict['label'] or classification.label or DocumentParagraphRecord.CLAUSE
-    canonical_type = verdict['type'] or ''
-    sub_type = verdict['sub_type'] or ''
-    changed = ((record.label, record.canonical_type, record.sub_type)
-               != (label, canonical_type, sub_type))
+    label, canonical_type, sub_type = current_verdict(c)
+    values = (label or c.label or DocumentParagraphRecord.CLAUSE,
+              canonical_type.key if canonical_type else '',
+              sub_type or '',
+              current_text(c))
+    changed = (record.label, record.canonical_type, record.sub_type,
+               record.reviewed_text) != values
     record.chunk = chunk
-    record.classification = classification
-    record.label, record.canonical_type, record.sub_type = label, canonical_type, sub_type
+    record.classification = c
+    record.label, record.canonical_type, record.sub_type, record.reviewed_text = values
     record.is_reviewed = True
     record.reviewed_by = user
     # Pending for the vector DB when its values moved, or when it has never
@@ -381,23 +262,16 @@ def _mirror(document, classification, verdict, user, now):
     record.save()
 
 
-def _is_uuid(value):
-    try:
-        uuid.UUID(str(value))
-    except ValueError:
-        return False
-    return True
-
-
 @transaction.atomic
 def save_document(document, classification_run_id, items, user):
     """The Save button: store what the reviewer did to one document.
 
-    Only the items sent are touched. Every entry is checked before anything is
-    written, so a Save lands whole or not at all. An entry identical to its
-    current decision is counted as unchanged and writes nothing, so pressing
-    Save twice leaves no trace. Nothing is sent to the vector DB: saved items
-    are marked pending, and Update Vector DB picks them up.
+    Only the items sent are touched, each on its own row. Every entry is
+    checked before anything is written, so a Save lands whole or not at all.
+    An entry identical to what the row already holds is counted as unchanged
+    and writes nothing, so pressing Save twice leaves no trace. Nothing is sent
+    to the vector DB: saved items are marked pending, and Update Vector DB
+    picks them up.
 
     -> {'saved': {accepted, corrected, rejected, unchanged},
         'classification_ids': [...], 'review_status': str}
@@ -438,65 +312,88 @@ def save_document(document, classification_run_id, items, user):
 
     rows = {str(c.id): c for c in (Classification.objects
                                    .filter(run=run, id__in=ids)
-                                   .select_related('chunk', 'canonical_type', 'run'))}
-    reviews = current_reviews_for_run(run)
+                                   .select_related('chunk', 'chunk__clause', 'canonical_type',
+                                                   'reviewed_canonical_type', 'run'))}
 
-    changed, counts = [], {'accepted': 0, 'corrected': 0, 'rejected': 0, 'unchanged': 0}
+    now = timezone.now()
+    counts = {'accepted': 0, 'corrected': 0, 'rejected': 0, 'unchanged': 0}
+    changed, log = [], []
     for cid, entry in wanted:
-        classification = rows.get(cid)
-        if classification is None:
+        c = rows.get(cid)
+        if c is None:
             errors.append({'classification_id': cid,
                            'detail': "Not part of this document's current classification."})
             continue
-        current = reviews.get(classification.id)
         try:
-            payload = _decision_for(classification, current, entry)
-            fields = validate(classification, payload)
+            decision, label, type_key, sub_type, note = _decision_for(c, entry)
+            canonical_type = (_resolve_type(type_key, label, run.taxonomy_version)
+                              if type_key else None)
+            text = _text_for(c, entry)
         except ReviewError as problem:
             errors.append({'classification_id': cid, 'detail': str(problem)})
             continue
-        if _same_as(current, fields):
+        before = _state(c)
+        after = {'decision': decision, 'label': label,
+                 'type': canonical_type.key if canonical_type else None,
+                 'sub_type': sub_type, 'note': note, 'text': text}
+        if before == after:
             counts['unchanged'] += 1
-        else:
-            counts[fields['decision']] += 1
-            changed.append(dict(payload, classification_id=cid))
+            continue
+        counts[decision] += 1
+        log.append(_changes(c, before, after))
+        c.text = text
+        c.review_decision = decision
+        c.reviewed_label = label
+        c.reviewed_canonical_type = canonical_type
+        c.reviewed_sub_type = sub_type
+        c.review_note = note
+        c.reviewed_by = user
+        c.reviewed_at = now
+        changed.append(c)
 
     if errors:
         raise SaveError('%d item(s) could not be saved, so nothing was saved.' % len(errors),
                         errors=errors)
 
     if changed:
-        record_decisions(document, changed, (user.email, user.username))
-
-    now = timezone.now()
-    reviews = current_reviews_for_run(run)
+        Classification.objects.bulk_update(changed, REVIEW_FIELDS)
     for cid in ids:
-        classification = rows[cid]
-        _mirror(document, classification,
-                final_verdict(classification, reviews.get(classification.id)), user, now)
+        _mirror(document, rows[cid], user, now)
 
+    reviewed = Classification.objects.filter(run=run, review_decision__isnull=False).count()
     total = Classification.objects.filter(run=run).count()
     document.refresh_from_db(fields=['review_status'])
-    status = _next_review_status(document.review_status, len(reviews) >= total)
+    status = _next_review_status(document.review_status, reviewed >= total)
     if status != document.review_status:
         Document.objects.filter(pk=document.pk).update(review_status=status)
 
-    written = counts['accepted'] + counts['corrected'] + counts['rejected']
-    if written:
+    if changed:
         parts = ['%d %s' % (counts[k], k) for k in ('accepted', 'corrected', 'rejected')
                  if counts[k]]
         log_activity(
             document_id=document.id,
             phase=DocumentActivityLog.USER_INTERACTION,
             action=DocumentActivityLog.ACT_SAVED,
-            summary='%s saved %d item(s): %s.' % (user.username, written, ', '.join(parts)),
+            summary='%s saved %d item(s): %s.' % (user.username, len(changed), ', '.join(parts)),
             actor_user=user,
             metadata=dict(counts, classification_run_id=str(run.id),
-                          classification_ids=[c['classification_id'] for c in changed],
-                          reviewed=len(reviews), total=total),
+                          reviewed=reviewed, total=total, items=log),
         )
 
     return {'saved': counts, 'classification_ids': ids, 'review_status': status}
+
+
+def fill_text(run):
+    """Copy each item's source text onto its classification row, where a row
+    written by the classifier has none, so the classifications table reads on
+    its own. A reviewer's edit is never overwritten."""
+    from django.db.models import OuterRef, Subquery
+    from document_pipeline.models import Chunk
+
+    return (Classification.objects
+            .filter(run=run, text__isnull=True)
+            .update(text=Subquery(Chunk.objects.filter(pk=OuterRef('chunk_id'))
+                                  .values('text')[:1])))
 
 
 def vector_sync_state(document):
