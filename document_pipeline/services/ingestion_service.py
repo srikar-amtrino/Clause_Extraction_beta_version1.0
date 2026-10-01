@@ -79,7 +79,8 @@ def _int_or_none(value):
         return None
 
 
-def sync_drive_files(files, *, ingestion_source, folder_ids=()):
+def sync_drive_files(files, *, ingestion_source, folder_ids=(), agreement_type=None,
+                     sectorial_category=None):
     """Reconcile a flattened Drive file map against the Document table.
 
     `files` is {drive_file_id: {id, name, mimeType, modifiedTime, size,
@@ -128,7 +129,8 @@ def sync_drive_files(files, *, ingestion_source, folder_ids=()):
                     # Update external ID rather than creating a duplicate row
                     old_id = duplicate_match.source_external_id
                     duplicate_match.source_external_id = file_id
-                    _reconcile(duplicate_match, meta, outcome)
+                    _reconcile(duplicate_match, meta, outcome, agreement_type,
+                               sectorial_category)
                     # Ensure it is treated as updated for ingestion if mtime changed
                     if duplicate_match not in outcome.updated and duplicate_match not in outcome.renamed:
                         outcome.updated.append(duplicate_match)
@@ -143,7 +145,8 @@ def sync_drive_files(files, *, ingestion_source, folder_ids=()):
                     continue
 
                 # Truly new file
-                new_doc = _create_document(ingestion_source, file_id, meta)
+                new_doc = _create_document(ingestion_source, file_id, meta,
+                                           agreement_type, sectorial_category)
                 log_drive_discovered(new_doc)
                 outcome.created.append(new_doc)
                 existing[file_id] = new_doc
@@ -158,7 +161,7 @@ def sync_drive_files(files, *, ingestion_source, folder_ids=()):
                 )
                 continue
 
-            _reconcile(document, meta, outcome)
+            _reconcile(document, meta, outcome, agreement_type, sectorial_category)
 
         for file_id, document in existing.items():
             if file_id in files or document.deleted_at is not None:
@@ -194,19 +197,22 @@ def sync_drive_files(files, *, ingestion_source, folder_ids=()):
     return outcome
 
 
-def _create_document(ingestion_source, file_id, meta):
+def _create_document(ingestion_source, file_id, meta, agreement_type=None,
+                     sectorial_category=None):
     return Document.objects.create(
         ingestion_source=ingestion_source,
         source_external_id=file_id,
         source_parent_id=meta.get('parent_id') or '',
         name=meta.get('name') or '',
+        agreement_type=agreement_type or '',
+        sectorial_category=sectorial_category or '',
         mime_type=meta.get('mimeType') or '',
         file_size_bytes=_int_or_none(meta.get('size')),
         source_modified_time=parse_datetime(meta.get('modifiedTime') or '') or None,
     )
 
 
-def _reconcile(document, meta, outcome):
+def _reconcile(document, meta, outcome, agreement_type=None, sectorial_category=None):
     """Classify what changed about a file we already know about.
 
     A rename is not a content change: the name is updated but the document is
@@ -215,6 +221,13 @@ def _reconcile(document, meta, outcome):
     name = meta.get('name') or ''
     parent = meta.get('parent_id') or ''
     modified = parse_datetime(meta.get('modifiedTime') or '') or None
+    metadata_fields = []
+    if agreement_type is not None and document.agreement_type != agreement_type:
+        document.agreement_type = agreement_type
+        metadata_fields.append('agreement_type')
+    if sectorial_category is not None and document.sectorial_category != sectorial_category:
+        document.sectorial_category = sectorial_category
+        metadata_fields.append('sectorial_category')
 
     bucket = None
     if document.deleted_at is not None:
@@ -228,6 +241,8 @@ def _reconcile(document, meta, outcome):
         bucket = outcome.moved
 
     if bucket is None:
+        if metadata_fields:
+            document.save(update_fields=metadata_fields + ['updated_at'])
         outcome.unchanged += 1
         return
 
@@ -238,7 +253,7 @@ def _reconcile(document, meta, outcome):
     document.file_size_bytes = _int_or_none(meta.get('size'))
     document.save(update_fields=[
         'name', 'source_parent_id', 'source_modified_time', 'mime_type',
-        'file_size_bytes', 'deleted_at', 'updated_at',
+        'file_size_bytes', 'deleted_at', 'updated_at', *metadata_fields,
     ])
     bucket.append(document)
 

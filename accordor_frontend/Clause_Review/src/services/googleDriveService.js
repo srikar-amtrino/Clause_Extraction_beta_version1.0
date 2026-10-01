@@ -7,7 +7,7 @@
  * Auxiliary endpoints:
  * - GET  http://127.0.0.1:8000/api/google-drive/picker/config/
  * - GET  http://127.0.0.1:8000/api/google-drive/picker/token/
- * - GET  http://127.0.0.1:8000/api/google-drive/files/?folder_id=...
+ * - POST http://127.0.0.1:8000/api/google-drive/files/
  */
 
 const BACKEND_BASE = 'http://127.0.0.1:8000';
@@ -109,20 +109,22 @@ export const googleDriveService = {
   },
 
   // Fetch files for specific folders
-  async fetchFiles(folderIds = []) {
-    const params = new URLSearchParams();
-    folderIds.forEach((id) => params.append('folder_id', id));
-
-    let response = await fetch(`/api/google-drive/files/?${params.toString()}`, {
+  async fetchFiles(folderIds = [], { agreementType = '', sectorialCategory = '' } = {}) {
+    const options = {
+      method: 'POST',
       credentials: 'include',
       cache: 'no-store',
-    }).catch(() => null);
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        folder_ids: folderIds,
+        agreement_type: agreementType,
+        sectorial_category: sectorialCategory,
+      }),
+    };
+    let response = await fetch('/api/google-drive/files/', options).catch(() => null);
 
-    if (!response || !response.ok) {
-      response = await fetch(`${BACKEND_BASE}/api/google-drive/files/?${params.toString()}`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
+    if (!response || response.status === 404) {
+      response = await fetch(`${BACKEND_BASE}/api/google-drive/files/`, options);
     }
 
     if (!response.ok) {
