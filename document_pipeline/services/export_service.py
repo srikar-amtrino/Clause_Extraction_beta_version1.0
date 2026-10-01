@@ -30,8 +30,8 @@ from document_pipeline.models import (
 )
 from document_pipeline.services.classification_service import _groups_for
 from document_pipeline.services.review_service import (
-    current_reviews_for_run,
-    final_verdict,
+    current_text,
+    current_verdict,
     review_json,
 )
 
@@ -161,20 +161,21 @@ def classification_json(document):
         return {'document': header, 'classification_run': None, 'summary': None, 'items': []}
 
     rows = (Classification.objects.filter(run=classification_run)
-            .select_related('chunk', 'chunk__clause', 'canonical_type')
+            .select_related('chunk', 'chunk__clause', 'canonical_type',
+                            'reviewed_canonical_type', 'reviewed_by')
             .order_by('chunk__order_index'))
-    # Every decision made against this run, in one query rather than one per
-    # item. An item nobody has decided on carries review: null.
-    reviews = current_reviews_for_run(classification_run)
     items, by_type, by_outcome, by_decision = [], Counter(), Counter(), Counter()
     for c in rows:
         chunk = c.chunk
-        type_name = c.canonical_type.name if c.canonical_type else None
+        # The item as it stands: the reviewer's saved verdict and text once
+        # there are any, the model's until then. `model` keeps the model's.
+        label, canonical_type, sub_type = current_verdict(c)
+        type_name = canonical_type.name if canonical_type else None
         by_outcome[c.outcome] += 1
-        by_type['%s: %s' % (c.label, type_name) if c.label else 'failed'] += 1
-        review = reviews.get(c.id)
-        if review is not None:
-            by_decision[review.decision] += 1
+        by_type['%s: %s' % (label, type_name) if label else
+                ('rejected' if c.review_decision == 'rejected' else 'failed')] += 1
+        if c.review_decision:
+            by_decision[c.review_decision] += 1
         items.append({
             # The handle a review decision is posted against. Stable across
             # requests, unlike clause_id, which is local to an extraction run.
@@ -190,22 +191,28 @@ def classification_json(document):
             # "describe the nature of the breach" reads under "Processor shall
             # notify Controller ... and shall:". Null for a top-level clause.
             'lead_in': chunk.lead_in_text or None,
-            'text': chunk.text,
+            'text': current_text(c),
+            # The document's own words, unchanged by any edit.
+            'original_text': chunk.text,
             'outcome': c.outcome,
-            'label': c.label,
-            'type': c.canonical_type.key if c.canonical_type else None,
+            'label': label,
+            'type': canonical_type.key if canonical_type else None,
             'type_name': type_name,
-            'sub_type': c.sub_type,
+            'sub_type': sub_type,
             'confidence': c.confidence,
             'needs_review': c.needs_review,
             'review_reasons': c.review_reasons,
             'expected_types': c.expected_type_keys,
             'deviated': c.deviated,
             'error': c.error or None,
-            'review': review_json(review),
-            # What the item is with the reviewer's decision applied: what to
-            # show, what Save sends back, and what reaches the vector DB.
-            'final': final_verdict(c, review),
+            # What the classifier answered, whatever a reviewer did since.
+            'model': {
+                'label': c.label,
+                'type': c.canonical_type.key if c.canonical_type else None,
+                'type_name': c.canonical_type.name if c.canonical_type else None,
+                'sub_type': c.sub_type,
+            },
+            'review': review_json(c),
         })
 
     r = classification_run
