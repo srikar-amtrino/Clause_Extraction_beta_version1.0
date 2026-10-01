@@ -9,6 +9,7 @@ import Documents from './components/Documents';
 import ReviewWorkspace from './components/ReviewWorkspace';
 import ActivityLog from './components/ActivityLog';
 import FolderMetadataModal from './components/FolderMetadataModal';
+import ErrorBoundary from './components/ErrorBoundary';
 import Login from './components/auth/Login';
 import Signup from './components/auth/Signup';
 import ProtectedRoute from './components/auth/ProtectedRoute';
@@ -363,7 +364,7 @@ function AppWorkspace() {
     const selected = doc || fetchedDocuments[0];
     if (selected) {
       setSelectedReviewDoc(selected);
-      navigate(`/review/${selected.id || selected.documentId || 'doc'}`);
+      navigate(`/review/${selected.documentId || selected.id || 'doc'}`);
     }
   };
 
@@ -755,14 +756,16 @@ function AppWorkspace() {
         }}
       >
         {isReviewRoute ? (
-          <ReviewWorkspace
-            document={currentReviewDoc}
-            onBackToDocuments={handleBackToDocuments}
-            showToast={showToast}
-            isSidebarCollapsed={isSidebarCollapsed}
-            onToggleSidebar={() => setIsSidebarCollapsed((prev) => !prev)}
-            onUpdateDocument={handleUpdateDocument}
-          />
+          <ErrorBoundary onReset={handleBackToDocuments}>
+            <ReviewWorkspace
+              document={currentReviewDoc}
+              onBackToDocuments={handleBackToDocuments}
+              showToast={showToast}
+              isSidebarCollapsed={isSidebarCollapsed}
+              onToggleSidebar={() => setIsSidebarCollapsed((prev) => !prev)}
+              onUpdateDocument={handleUpdateDocument}
+            />
+          </ErrorBoundary>
         ) : (
           <>
             <TopNav

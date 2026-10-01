@@ -7,6 +7,7 @@ import {
   IconButton,
   Tooltip,
   TextField,
+  CircularProgress,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import UndoOutlinedIcon from '@mui/icons-material/UndoOutlined';
@@ -39,6 +40,19 @@ function formatBreadcrumbDisplay(text) {
     return lower.charAt(0).toUpperCase() + lower.slice(1);
   }
   return text;
+}
+
+function resolveTaxonomyKey(typeOrName, taxonomyMap) {
+  if (!typeOrName || typeOrName === 'Unassigned' || typeOrName === 'unassigned') return null;
+  const raw = String(typeOrName).trim();
+  const lower = raw.toLowerCase();
+  if (taxonomyMap && taxonomyMap.has(lower)) {
+    return taxonomyMap.get(lower);
+  }
+  return lower
+    .replace(/\s*&\s*/g, '-and-')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 }
 
 export default function ReviewWorkspace({
@@ -133,7 +147,9 @@ export default function ReviewWorkspace({
         }
 
         if (update.locked) {
-          const isMine = String(update.locked_by_id) === String(currentUserIdRef.current);
+          const isMine =
+            String(update.locked_by_id) === String(currentUserIdRef.current) ||
+            (update.locked_by && String(update.locked_by).toLowerCase() === String(currentUserName).toLowerCase());
           lockOwnedRef.current = isMine;
           if (isMine) setHeartbeat();
           setWorkspaceLock({
@@ -159,21 +175,30 @@ export default function ReviewWorkspace({
     documentService
       .acquireWorkspaceLock(docId)
       .then((result) => {
+        const isEditing = Boolean(
+          result?.acquired === true ||
+          result?.is_read_only === false ||
+          result?.status === 'editing' ||
+          (result?.locked_by && String(result.locked_by).toLowerCase() === String(currentUserName).toLowerCase())
+        );
+        const finalStatus = isEditing ? 'editing' : (result?.status || 'read-only');
+        const finalLockedBy = isEditing ? currentUserName : (result?.locked_by || '');
+
         if (!active) {
           const replayedForSameDocument =
             lockEffectGenerationRef.current !== effectGeneration &&
             lockEffectDocumentIdRef.current === docId;
-          if (result.status === 'editing' && !replayedForSameDocument) {
+          if (finalStatus === 'editing' && !replayedForSameDocument) {
             documentService.releaseWorkspaceLock(docId, { keepalive: true }).catch(() => {});
           }
           return;
         }
-        lockOwnedRef.current = result.status === 'editing';
-        if (result.status === 'editing') setHeartbeat();
+        lockOwnedRef.current = finalStatus === 'editing';
+        if (finalStatus === 'editing') setHeartbeat();
         setWorkspaceLock({
-          status: result.status,
-          lockedBy: result.locked_by,
-          closedBy: result.closed_by,
+          status: finalStatus,
+          lockedBy: finalLockedBy,
+          closedBy: result?.closed_by,
           documentId: docId,
         });
       })
@@ -199,13 +224,23 @@ export default function ReviewWorkspace({
         documentService.releaseWorkspaceLock(docId, { keepalive: true }).catch(() => {});
       }
     };
-  }, [docId, handleHeartbeatFailure, showToast]);
+  }, [docId, handleHeartbeatFailure, showToast, currentUserName]);
 
   const handleTakeEditingAccess = async () => {
     try {
       const result = await documentService.acquireWorkspaceLock(docId, { takeOver: true });
-      lockOwnedRef.current = result.status === 'editing';
-      setWorkspaceLock({ status: result.status, lockedBy: result.locked_by, documentId: docId });
+      const isEditing = Boolean(
+        result?.acquired === true ||
+        result?.is_read_only === false ||
+        result?.status === 'editing' ||
+        (result?.locked_by && String(result.locked_by).toLowerCase() === String(currentUserName).toLowerCase())
+      );
+      const finalStatus = isEditing ? 'editing' : (result?.status || 'read-only');
+      const finalLockedBy = isEditing ? currentUserName : (result?.locked_by || '');
+
+      lockOwnedRef.current = finalStatus === 'editing';
+      if (finalStatus === 'editing') setHeartbeat();
+      setWorkspaceLock({ status: finalStatus, lockedBy: finalLockedBy, documentId: docId });
       showToast?.('Editing access acquired.', 'success');
     } catch (err) {
       showToast?.(err.message || 'Could not take editing access.', 'error');
@@ -263,65 +298,192 @@ export default function ReviewWorkspace({
   const [documentMeta, setDocumentMeta] = useState(null);
   const [isLoadingClauses, setIsLoadingClauses] = useState(false);
   const [isPublishingToVectorDb, setIsPublishingToVectorDb] = useState(false);
+  const [documentStatus, setDocumentStatus] = useState(doc?.status || 'Needs review');
+  const [lastSavedTimestamp, setLastSavedTimestamp] = useState(doc?.lastSaved || null);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [isSavingClassification, setIsSavingClassification] = useState(false);
+
+  const needsReviewCount = useMemo(() => {
+    return extractedClauses.filter(
+      (r) => !r.review?.decision && !r.isReviewed && (r.needs_review || r.needsReview || r.decision === 'needs_review')
+    ).length;
+  }, [extractedClauses]);
+
+  const reviewedCount = useMemo(() => {
+    return extractedClauses.filter(
+      (r) => Boolean(r.review?.decision || r.isReviewed)
+    ).length;
+  }, [extractedClauses]);
+
+  useEffect(() => {
+    if (doc?.status) {
+      setDocumentStatus(doc.status);
+    }
+    if (doc?.lastSaved) {
+      setLastSavedTimestamp(doc.lastSaved);
+    }
+  }, [doc?.status, doc?.lastSaved]);
 
   const handlePublishToVectorDb = async () => {
-    if (!docId || isPublishingToVectorDb) return;
+    const targetDocId = doc?.documentId || doc?.id || docId;
+    if (!targetDocId || isPublishingToVectorDb) return;
+    if (needsReviewCount > 0) {
+      showToast?.(`Cannot update to Vector DB: ${needsReviewCount} clause(s) still need review.`, 'warning');
+      return;
+    }
     setIsPublishingToVectorDb(true);
     try {
-      const result = await documentService.publishToVectorDb(docId);
-      showToast?.(result.message || 'Published to Vector DB.');
+      const result = await documentService.publishToVectorDb(targetDocId);
+      const msg = result?.message || `Published "${docName}" to Vector DB successfully.`;
+      showToast?.(msg, 'success');
+      setDocumentStatus('Updated to vector DB');
+      window.dispatchEvent(
+        new CustomEvent('document_saved', {
+          detail: {
+            documentId: targetDocId,
+            status: 'Updated to vector DB',
+            doc: { ...doc, status: 'Updated to vector DB' },
+          },
+        })
+      );
     } catch (error) {
+      console.error('Vector DB publish error:', error);
       const blockers = error.data?.blockers;
-      showToast?.(blockers?.length
-        ? `Cannot publish: ${blockers.join(', ')}`
-        : (error.message || 'Could not publish to vector database.'));
+      showToast?.(
+        blockers?.length
+          ? `Cannot publish: ${blockers.join(', ')}`
+          : (error.data?.detail || error.message || 'Could not publish to vector database.'),
+        'error'
+      );
     } finally {
       setIsPublishingToVectorDb(false);
     }
   };
 
   // Contents Drawer & Preview State
-  const [isContentsOpen, setIsContentsOpen] = useState(false);
+  const [isContentsOpen, setIsContentsOpen] = useState(true);
   const [expandedSections, setExpandedSections] = useState(() => new Set([1, 2, 3]));
   const [highlightedClauseId, setHighlightedClauseId] = useState(null);
-  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(true);
   const [previewClause, setPreviewClause] = useState(null);
   const previewContainerRef = useRef(null);
+
+  const taxonomyMapRef = useRef(new Map());
 
   // Available canonical taxonomy types
   const [availableCanonicalTypes, setAvailableCanonicalTypes] = useState([
     'Unassigned',
+    'Definitions & Interpretation',
+    'Purpose & Scope of Services',
+    'Customer Obligations',
+    'Service Provider Obligations',
+    'Term & Renewal',
+    'Fees & Payment',
     'Confidentiality',
-    'Term & Termination',
-    'Payment Terms',
-    'Governing Law',
+    'Data Protection & Privacy',
     'Intellectual Property',
-    'Data Protection',
-    'Liability & Indemnity',
-    'Non-Compete',
-    'Warranty',
+    'Representations & Warranties',
+    'Indemnification',
+    'Limitation of Liability',
+    'Suspension & Termination',
     'Force Majeure',
-    'Assignment',
-    'Notice',
-    'Dispute Resolution',
-    'Severability',
+    'Governing Law & Dispute Resolution',
+    'Notices',
   ]);
 
   useEffect(() => {
     let isMounted = true;
-    documentService
-      .taxonomy()
-      .then((res) => {
-        if (isMounted && res && Array.isArray(res.canonical_types) && res.canonical_types.length > 0) {
-          const names = res.canonical_types.map((t) => t.name || t.key).filter(Boolean);
-          setAvailableCanonicalTypes(['Unassigned', ...names]);
-        }
-      })
-      .catch(() => {});
+    if (typeof documentService?.taxonomy === 'function') {
+      documentService
+        .taxonomy()
+        .then((res) => {
+          if (!isMounted || !res) return;
+          const clauseList = Array.isArray(res.clause_types) ? res.clause_types : [];
+          const nonClauseList = Array.isArray(res.non_clause_types) ? res.non_clause_types : [];
+          const allTypes = [...clauseList, ...nonClauseList];
+
+          const map = new Map();
+          allTypes.forEach((t) => {
+            if (t.name && t.key) {
+              map.set(t.name.toLowerCase().trim(), t.key);
+              map.set(t.key.toLowerCase().trim(), t.key);
+            }
+          });
+          taxonomyMapRef.current = map;
+
+          if (clauseList.length > 0) {
+            const names = clauseList.map((t) => t.name).filter(Boolean);
+            setAvailableCanonicalTypes(['Unassigned', ...names]);
+          }
+        })
+        .catch(() => {});
+    }
     return () => {
       isMounted = false;
     };
   }, []);
+
+  // Immediately initialize clauses if pre-fetched classification was provided from document click
+  useEffect(() => {
+    if (doc?._initialClassification && Array.isArray(doc._initialClassification.items) && doc._initialClassification.items.length > 0) {
+      const initRows = doc._initialClassification.items.map((item, i) => {
+        const clauseId = item.clause_id || (item.number ? `c${item.number}` : `c${i + 1}`);
+        const breadcrumb =
+          item.breadcrumb || item.heading_trail || item.heading || (item.number ? `Clause ${item.number}` : `Clause ${i + 1}`);
+        const reviewObj = item.review || null;
+        const isItemReviewed = Boolean(reviewObj?.decision);
+        const itemNeedsReview = isItemReviewed ? false : Boolean(item.needs_review);
+        return {
+          id: item.classification_id || item.id || `clause-${i}`,
+          classification_id: item.classification_id,
+          clause_id: clauseId,
+          paraId: clauseId,
+          number: item.number,
+          paragraph_ids: item.paragraph_ids || [],
+          heading_trail: breadcrumb,
+          breadcrumb: breadcrumb,
+          text: item.text || item.chunk_text || '',
+          label: item.label || 'Clause',
+          type: item.type || 'unassigned',
+          type_name: item.type_name || item.type || 'Unassigned',
+          canonicalType: item.type_name || item.type || 'Unassigned',
+          sub_type: item.sub_type || null,
+          subType: item.sub_type || null,
+          preview: item.preview || doc.webViewLink || '',
+          confidence: item.confidence,
+          needs_review: itemNeedsReview,
+          needsReview: itemNeedsReview,
+          isReviewed: isItemReviewed,
+          review_reasons: isItemReviewed ? [] : (item.review_reasons || []),
+          deviated: isItemReviewed ? false : Boolean(item.deviated),
+          outcome: isItemReviewed ? 'reviewed' : item.outcome,
+          expected_types: item.expected_types || [],
+          review: reviewObj,
+          decision: reviewObj?.decision || (itemNeedsReview ? 'needs_review' : 'accepted'),
+          note: reviewObj?.note || '',
+        };
+      });
+      setExtractedClauses(initRows);
+      if (initRows.length > 0) {
+        setPreviewClause(initRows[0]);
+        setHighlightedClauseId(initRows[0].id || initRows[0].clause_id);
+      }
+      if (doc._initialClassification.summary) {
+        setClassificationSummary(doc._initialClassification.summary);
+      }
+      if (doc._initialClassification.document) {
+        setDocumentMeta(doc._initialClassification.document);
+      }
+    }
+  }, [doc]);
+
+  // Keep first clause selected and highlighted in preview when clauses are ready
+  useEffect(() => {
+    if (extractedClauses.length > 0 && !previewClause) {
+      setPreviewClause(extractedClauses[0]);
+      setHighlightedClauseId(extractedClauses[0].id || extractedClauses[0].clause_id || extractedClauses[0].paraId);
+    }
+  }, [extractedClauses, previewClause]);
 
   // Load classification items directly from backend API (no local storage cache)
   useEffect(() => {
@@ -331,6 +493,18 @@ export default function ReviewWorkspace({
     setIsLoadingClauses(true);
     async function fetchClassification() {
       try {
+        // Fetch full document metadata if doc is loading or missing attributes
+        if (!doc?.folder || doc?.name === 'Loading Document...' || !doc?.pages) {
+          documentService.get(docId).then((fullDoc) => {
+            if (isMounted && fullDoc) {
+              setDocumentMeta(fullDoc);
+              if (onUpdateDocument) {
+                onUpdateDocument({ ...doc, ...fullDoc, id: fullDoc.id || docId, documentId: fullDoc.id || docId });
+              }
+            }
+          }).catch(() => {});
+        }
+
         let classRes = await documentService.classification(docId).catch((err) => {
           console.warn('Direct document classification read:', err);
           return null;
@@ -366,6 +540,8 @@ export default function ReviewWorkspace({
             const breadcrumb =
               item.breadcrumb || item.heading_trail || item.heading || (item.number ? `Clause ${item.number}` : `Clause ${i + 1}`);
             const reviewObj = item.review || null;
+            const isItemReviewed = Boolean(reviewObj?.decision);
+            const itemNeedsReview = isItemReviewed ? false : Boolean(item.needs_review);
             return {
               id: item.classification_id || item.id || `clause-${i}`,
               classification_id: item.classification_id,
@@ -384,20 +560,25 @@ export default function ReviewWorkspace({
               subType: item.sub_type || null,
               preview: item.preview || doc.webViewLink || classRes.document?.drive_web_link || '',
               confidence: item.confidence,
-              needs_review: Boolean(item.needs_review),
-              needsReview: Boolean(item.needs_review),
-              review_reasons: item.review_reasons || [],
-              deviated: Boolean(item.deviated),
-              outcome: item.outcome,
+              needs_review: itemNeedsReview,
+              needsReview: itemNeedsReview,
+              isReviewed: isItemReviewed,
+              review_reasons: isItemReviewed ? [] : (item.review_reasons || []),
+              deviated: isItemReviewed ? false : Boolean(item.deviated),
+              outcome: isItemReviewed ? 'reviewed' : item.outcome,
               expected_types: item.expected_types || [],
               review: reviewObj,
-              decision: reviewObj?.decision || (item.needs_review ? 'needs_review' : 'accepted'),
+              decision: reviewObj?.decision || (itemNeedsReview ? 'needs_review' : 'accepted'),
               note: reviewObj?.note || '',
             };
           });
 
           if (isMounted) {
             setExtractedClauses(rows);
+            if (rows.length > 0 && !previewClause) {
+              setPreviewClause(rows[0]);
+              setHighlightedClauseId(rows[0].id || rows[0].clause_id);
+            }
             if (classRes.summary) {
               setClassificationSummary(classRes.summary);
             }
@@ -462,28 +643,68 @@ export default function ReviewWorkspace({
 
   // Row update helper
   const handleUpdateRow = (rowId, updates) => {
+    const targetKey = String(rowId);
     setExtractedClauses((prev) =>
       prev.map((row) => {
-        if (row.id === rowId || row.clause_id === rowId || row.paraId === rowId) {
-          return { ...row, ...updates };
+        if (
+          String(row.id) === targetKey ||
+          String(row.clause_id) === targetKey ||
+          String(row.paraId) === targetKey ||
+          String(row.classification_id) === targetKey
+        ) {
+          return {
+            ...row,
+            ...updates,
+            needs_review: false,
+            needsReview: false,
+            isReviewed: true,
+            isLocallyEdited: true,
+            decision: updates.decision || (row.decision === 'rejected' ? 'rejected' : 'corrected'),
+          };
         }
         return row;
       })
     );
+    // Auto-select the edited row's checkbox so it is ready to save
+    setSelectedRows((prev) => {
+      const prevStrings = prev.map(String);
+      return prevStrings.includes(targetKey) ? prev : [...prev, targetKey];
+    });
     setHasUnsavedChanges(true);
   };
 
   // Row Selection Handlers
-  const handleSelectAll = (e) => {
-    if (e.target.checked) {
-      setSelectedRows(extractedClauses.map((_, i) => i));
-    } else {
-      setSelectedRows([]);
+  const handleSelectAll = (keysOrEvent, maybeEvent) => {
+    if (Array.isArray(keysOrEvent)) {
+      const keys = keysOrEvent.map(String);
+      setSelectedRows((prev) => {
+        const prevStrings = prev.map(String);
+        const allPresent = keys.length > 0 && keys.every((k) => prevStrings.includes(k));
+        if (allPresent) {
+          return prev.filter((k) => !keys.includes(String(k)));
+        } else {
+          return Array.from(new Set([...prevStrings, ...keys]));
+        }
+      });
+    } else if (keysOrEvent?.target) {
+      if (keysOrEvent.target.checked) {
+        setSelectedRows(extractedClauses.map((r) => String(r.classification_id || r.id || r.clause_id)).filter(Boolean));
+      } else {
+        setSelectedRows([]);
+      }
     }
   };
 
-  const handleToggleRow = (index) => {
-    setSelectedRows((prev) => (prev.includes(index) ? prev.filter((i) => i !== index) : [...prev, index]));
+  const handleToggleRow = (rowKey) => {
+    const key = String(rowKey);
+    setSelectedRows((prev) => {
+      const prevStrings = prev.map(String);
+      if (prevStrings.includes(key)) {
+        return prev.filter((k) => String(k) !== key);
+      } else {
+        return [...prev, key];
+      }
+    });
   };
 
   // Highlight and Scroll Handler
@@ -664,14 +885,29 @@ export default function ReviewWorkspace({
 
   // Save Classification decisions directly to the API
   const handleSaveClassification = async () => {
-    if (!canEdit) {
-      showToast?.('Document is read-only. Cannot save changes.', 'warning');
-      return;
-    }
     const targetDocId = doc?.documentId || doc?.id || docId;
     if (!targetDocId) {
       showToast?.('No document ID found.', 'error');
       return;
+    }
+
+    if (!canEdit) {
+      try {
+        const lockRes = await documentService.acquireWorkspaceLock(targetDocId);
+        const isEditing = Boolean(
+          lockRes?.acquired === true ||
+          lockRes?.is_read_only === false ||
+          lockRes?.status === 'editing' ||
+          (lockRes?.locked_by && String(lockRes.locked_by).toLowerCase() === String(currentUserName).toLowerCase())
+        );
+        if (isEditing) {
+          lockOwnedRef.current = true;
+          setWorkspaceLock({ status: 'editing', lockedBy: currentUserName, documentId: targetDocId });
+        }
+      } catch (_) {
+        showToast?.('Document is read-only. Cannot save changes.', 'warning');
+        return;
+      }
     }
 
     setIsSavingClassification(true);
@@ -688,7 +924,18 @@ export default function ReviewWorkspace({
       }
 
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-      const validItems = extractedClauses
+      const selectedKeySet = new Set(selectedRows.map(String));
+      const rowsToSave = selectedRows.length > 0
+        ? extractedClauses.filter((row, idx) =>
+            selectedKeySet.has(String(row.classification_id)) ||
+            selectedKeySet.has(String(row.id)) ||
+            selectedKeySet.has(String(row.clause_id)) ||
+            selectedKeySet.has(String(row.paraId)) ||
+            selectedKeySet.has(String(idx))
+          )
+        : extractedClauses;
+
+      const validItems = rowsToSave
         .filter((row) => {
           const cid = row.classification_id || row.id;
           return cid && uuidRegex.test(cid);
@@ -696,56 +943,138 @@ export default function ReviewWorkspace({
         .map((row) => {
           const cid = row.classification_id || row.id;
           const label = row.label === 'Non-clause' ? 'Non-clause' : 'Clause';
-          let typeKey = row.type && row.type !== 'unassigned' ? row.type : null;
-          if (!typeKey && row.canonicalType && row.canonicalType !== 'Unassigned') {
-            typeKey = row.canonicalType.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+          let typeKey = resolveTaxonomyKey(row.type, taxonomyMapRef.current);
+          if (!typeKey && row.canonicalType) {
+            typeKey = resolveTaxonomyKey(row.canonicalType, taxonomyMapRef.current);
           }
-          const subType = label === 'Non-clause' ? null : (row.sub_type && row.sub_type !== 'null' ? row.sub_type : null);
           const itemPayload = {
             classification_id: cid,
             label,
           };
           if (typeKey) itemPayload.type = typeKey;
-          if (subType !== undefined) itemPayload.sub_type = subType;
-          if (row.text !== undefined) {
-            itemPayload.text = row.text;
-            itemPayload.reviewed_text = row.text;
+          if (label !== 'Non-clause' && row.sub_type && row.sub_type !== 'null') {
+            itemPayload.sub_type = row.sub_type;
           }
-          if (row.decision) itemPayload.decision = row.decision;
-          if (row.note) itemPayload.note = row.note;
+          if (row.text && typeof row.text === 'string' && row.text.trim()) {
+            itemPayload.text = row.text.trim();
+          }
+          if (row.decision === 'rejected') {
+            itemPayload.decision = 'rejected';
+            itemPayload.note = row.note?.trim() || 'Rejected during review';
+          } else if (row.decision === 'corrected' || row.isLocallyEdited) {
+            itemPayload.decision = 'corrected';
+            if (row.note && row.note.trim()) itemPayload.note = row.note.trim();
+          } else if (row.decision === 'accepted' || row.isReviewed) {
+            itemPayload.decision = 'accepted';
+            if (row.note && row.note.trim()) itemPayload.note = row.note.trim();
+          } else if (row.note && row.note.trim()) {
+            itemPayload.note = row.note.trim();
+          }
           return itemPayload;
         });
 
-      let saveResult = null;
-      if (runId && validItems.length > 0) {
-        saveResult = await documentService.saveClassification(targetDocId, {
-          classification_run_id: runId,
-          items: validItems,
-        });
-      } else if (validItems.length > 0) {
-        saveResult = await documentService
-          .saveClassification(targetDocId, {
-            classification_run_id: targetDocId,
-            items: validItems,
-          })
-          .catch((e) => {
-            console.warn('Fallback save notification:', e);
-            return null;
-          });
+      if (!runId) {
+        throw new Error('classification_run_id not found for this document.');
       }
+      if (validItems.length === 0) {
+        throw new Error('No valid classification items found to save.');
+      }
+
+      const saveResult = await documentService.saveClassification(targetDocId, {
+        classification_run_id: runId,
+        items: validItems,
+      });
 
       if (saveResult?.summary) {
         setClassificationSummary(saveResult.summary);
       }
 
+      // Immediately mark the saved items as reviewed in local state so UI updates without flicker
+      const savedIds = new Set(validItems.map((v) => String(v.classification_id)));
+      setExtractedClauses((prev) =>
+        prev.map((row) => {
+          const cid = String(row.classification_id || row.id);
+          if (savedIds.has(cid)) {
+            return {
+              ...row,
+              needs_review: false,
+              needsReview: false,
+              isReviewed: true,
+              isLocallyEdited: false,
+              decision: row.decision === 'rejected' ? 'rejected' : (row.decision === 'corrected' ? 'corrected' : 'accepted'),
+              review: row.review || {
+                decision: row.decision || 'accepted',
+                reviewed_by_name: currentUserName,
+                reviewed_at: new Date().toISOString(),
+              },
+            };
+          }
+          return row;
+        })
+      );
+      setSelectedRows([]);
+
+      // Re-fetch fresh classification from database to get the updated data immediately
+      const freshClass = await documentService.classification(targetDocId).catch(() => null);
+      if (freshClass && Array.isArray(freshClass.items) && freshClass.items.length > 0) {
+        const freshRows = freshClass.items.map((item, i) => {
+          const clauseId = item.clause_id || (item.number ? `c${item.number}` : `c${i + 1}`);
+          const breadcrumb =
+            item.breadcrumb || item.heading_trail || item.heading || (item.number ? `Clause ${item.number}` : `Clause ${i + 1}`);
+          const reviewObj = item.review || null;
+          const isItemReviewed = Boolean(reviewObj?.decision);
+          const itemNeedsReview = isItemReviewed ? false : Boolean(item.needs_review);
+          return {
+            id: item.classification_id || item.id || `clause-${i}`,
+            classification_id: item.classification_id,
+            clause_id: clauseId,
+            paraId: clauseId,
+            number: item.number,
+            paragraph_ids: item.paragraph_ids || [],
+            heading_trail: breadcrumb,
+            breadcrumb: breadcrumb,
+            text: item.text || item.chunk_text || '',
+            label: item.label || 'Clause',
+            type: item.type || 'unassigned',
+            type_name: item.type_name || item.type || 'Unassigned',
+            canonicalType: item.type_name || item.type || 'Unassigned',
+            sub_type: item.sub_type || null,
+            subType: item.sub_type || null,
+            preview: item.preview || doc?.webViewLink || freshClass.document?.drive_web_link || '',
+            confidence: item.confidence,
+            needs_review: itemNeedsReview,
+            needsReview: itemNeedsReview,
+            isReviewed: isItemReviewed,
+            review_reasons: isItemReviewed ? [] : (item.review_reasons || []),
+            deviated: isItemReviewed ? false : Boolean(item.deviated),
+            outcome: isItemReviewed ? 'reviewed' : item.outcome,
+            expected_types: item.expected_types || [],
+            review: reviewObj,
+            decision: reviewObj?.decision || (itemNeedsReview ? 'needs_review' : 'accepted'),
+            note: reviewObj?.note || '',
+          };
+        });
+        setExtractedClauses(freshRows);
+        setSelectedRows([]);
+        if (freshClass.summary) {
+          setClassificationSummary(freshClass.summary);
+        }
+        if (freshClass.document) {
+          setDocumentMeta(freshClass.document);
+        }
+      }
+
       const nowFormatted = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       setLastSavedTimestamp(nowFormatted);
-      setDocumentStatus('Saved');
+      const backendStatus = saveResult?.review_status || 'reviewed';
+      const displayStatus = backendStatus === 'reviewed' ? 'Reviewed' : (backendStatus === 'pending_review' ? 'Pending Review' : 'Saved');
+      setDocumentStatus(displayStatus);
       setHasUnsavedChanges(false);
 
       const updatedDoc = {
         ...doc,
-        status: 'Saved',
+        status: displayStatus,
+        review_status: backendStatus,
         lastSaved: 'Today',
         modifiedTime: nowFormatted,
         isSaved: true,
@@ -757,40 +1086,25 @@ export default function ReviewWorkspace({
 
       window.dispatchEvent(
         new CustomEvent('document_saved', {
-          detail: { documentId: targetDocId, status: 'Saved', doc: updatedDoc },
+          detail: { documentId: targetDocId, status: displayStatus, doc: updatedDoc },
         })
       );
 
-      showToast?.(`Saved changes for "${doc?.name || 'Document'}". Status updated to Saved!`, 'success');
+      const savedCount = saveResult?.saved
+        ? (saveResult.saved.accepted + saveResult.saved.corrected + saveResult.saved.rejected + saveResult.saved.unchanged)
+        : validItems.length;
+      showToast?.(`Saved ${savedCount} clause decisions to database. Updated data loaded!`, 'success');
     } catch (err) {
       console.error('Error saving classification:', err);
       if (err.status === 409) {
         showToast?.('Document was re-classified on backend. Please reload the document.', 'error');
       } else {
-        const nowFormatted = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        setLastSavedTimestamp(nowFormatted);
-        setDocumentStatus('Saved');
-        setHasUnsavedChanges(false);
-
-        const updatedDoc = {
-          ...doc,
-          status: 'Saved',
-          lastSaved: 'Today',
-          modifiedTime: nowFormatted,
-          isSaved: true,
-        };
-        if (onUpdateDocument) onUpdateDocument(updatedDoc);
-
-        window.dispatchEvent(
-          new CustomEvent('document_saved', {
-            detail: { documentId: targetDocId, status: 'Saved', doc: updatedDoc },
-          })
-        );
-        const detailedErr = err.data?.errors?.length
-          ? err.data.errors.map((e) => e.detail).filter(Boolean).join(', ')
-          : null;
-        const noteMsg = detailedErr ? `${err.message} (${detailedErr})` : err.message || 'Saved locally';
-        showToast?.(`Saved changes. Status set to Saved. (Note: ${noteMsg})`, 'warning');
+        const specificErrors = Array.isArray(err.data?.errors)
+          ? err.data.errors.map((e) => e.detail).filter(Boolean).join('; ')
+          : '';
+        const baseDetail = err.data?.detail || err.message || 'Could not save to database.';
+        const problem = specificErrors ? `${baseDetail}: ${specificErrors}` : baseDetail;
+        showToast?.(`Save error: ${problem}`, 'error');
       }
     } finally {
       setIsSavingClassification(false);
@@ -798,10 +1112,7 @@ export default function ReviewWorkspace({
   };
 
   const totalChunks = classificationSummary?.micro_chunks ?? extractedClauses.length;
-  const reviewedCount = classificationSummary?.review?.reviewed ?? 0;
-  const needsFixCount = extractedClauses.filter(
-    (r) => r.deviated || r.outcome === 'failed' || (r.review_reasons && r.review_reasons.length > 0)
-  ).length;
+  const needsFixCount = needsReviewCount;
 
   const docName = doc?.name || doc?.fileName || 'Document';
   const docTitle = documentMeta?.title || doc?.title || docName;
@@ -953,6 +1264,35 @@ export default function ReviewWorkspace({
                 ...getStatusBadgeStyle(documentStatus),
               }}
             />
+
+            {/* Needs Review Remaining Badge */}
+            {needsReviewCount > 0 ? (
+              <Chip
+                label={`${needsReviewCount} needs review`}
+                size="small"
+                sx={{
+                  height: 22,
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  bgcolor: '#fef3c7',
+                  color: '#b45309',
+                  border: '1px solid #fde68a',
+                }}
+              />
+            ) : (
+              <Chip
+                label="All reviewed"
+                size="small"
+                sx={{
+                  height: 22,
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  bgcolor: '#dcfce7',
+                  color: '#15803d',
+                  border: '1px solid #bbf7d0',
+                }}
+              />
+            )}
           </Box>
 
           {/* Action Buttons */}
@@ -983,9 +1323,9 @@ export default function ReviewWorkspace({
             <Button
               variant="contained"
               size="small"
-              disabled={!canEdit || isPublishingToVectorDb}
-              startIcon={<CloudUploadOutlinedIcon sx={{ fontSize: 16 }} />}
-              onClick={handlePublishToVectorDb}
+              disabled={isSavingClassification}
+              startIcon={<SaveOutlinedIcon sx={{ fontSize: 16 }} />}
+              onClick={handleSaveClassification}
               sx={{
                 height: 30,
                 fontSize: '12px',
@@ -1000,24 +1340,51 @@ export default function ReviewWorkspace({
               {isSavingClassification ? 'Saving...' : 'Save'}
             </Button>
 
-            <Button
-              variant="contained"
-              size="small"
-              startIcon={<CloudUploadOutlinedIcon sx={{ fontSize: 15 }} />}
-              onClick={() => showToast?.(`Updating "${docName}" to vector database...`)}
-              sx={{
-                height: 30,
-                fontSize: '12px',
-                textTransform: 'none',
-                bgcolor: '#1e3a5f',
-                color: '#ffffff',
-                boxShadow: 'none',
-                fontWeight: 600,
-                '&:hover': { bgcolor: '#152943', boxShadow: 'none' },
-              }}
+            <Tooltip
+              title={
+                needsReviewCount > 0
+                  ? `All clauses must be reviewed before updating to Vector DB (${needsReviewCount} remaining)`
+                  : !canEdit
+                    ? 'Document is read-only. Editing access required.'
+                    : 'Publish verified document data to Vector DB'
+              }
+              arrow
             >
-              {isPublishingToVectorDb ? 'Publishing...' : 'Update to vector DB'}
-            </Button>
+              <span>
+                <Button
+                  variant="contained"
+                  size="small"
+                  startIcon={
+                    isPublishingToVectorDb ? (
+                      <CircularProgress size={14} sx={{ color: '#ffffff' }} />
+                    ) : (
+                      <CloudUploadOutlinedIcon sx={{ fontSize: 15 }} />
+                    )
+                  }
+                  disabled={needsReviewCount > 0 || !canEdit || isPublishingToVectorDb}
+                  onClick={handlePublishToVectorDb}
+                  sx={{
+                    height: 30,
+                    fontSize: '12px',
+                    textTransform: 'none',
+                    bgcolor: needsReviewCount === 0 && canEdit ? '#059669' : '#94a3b8',
+                    color: '#ffffff',
+                    boxShadow: 'none',
+                    fontWeight: 600,
+                    '&:hover': {
+                      bgcolor: needsReviewCount === 0 && canEdit ? '#047857' : '#94a3b8',
+                      boxShadow: 'none',
+                    },
+                    '&.Mui-disabled': {
+                      bgcolor: '#e2e8f0',
+                      color: '#94a3b8',
+                    },
+                  }}
+                >
+                  {isPublishingToVectorDb ? 'Updating...' : 'Update to vector DB'}
+                </Button>
+              </span>
+            </Tooltip>
           </Box>
         </Box>
 
@@ -1050,7 +1417,7 @@ export default function ReviewWorkspace({
                       ? 'Document access could not be confirmed. Editing is disabled.'
                       : `Read-only while ${workspaceLock.lockedBy || 'another reviewer'} has the document open.`}
             </span>
-            {workspaceLock.status === 'available' && (
+            {(workspaceLock.status === 'available' || workspaceLock.status === 'read-only') && (
               <Button size="small" variant="outlined" onClick={handleTakeEditingAccess}>
                 Take editing access
               </Button>
@@ -1205,6 +1572,8 @@ export default function ReviewWorkspace({
             isPreviewOpen={isPreviewOpen}
             isContentsOpen={isContentsOpen}
             onToggleContents={() => setIsContentsOpen((prev) => !prev)}
+            onTogglePreview={() => setIsPreviewOpen((prev) => !prev)}
+            onOpenHistory={() => setActiveTab('history')}
             onOpenPreview={handleOpenPreview}
             onUpdateRow={handleUpdateRow}
             availableCanonicalTypes={availableCanonicalTypes}
@@ -1215,7 +1584,7 @@ export default function ReviewWorkspace({
             onFilterChange={setActiveFilter}
             typeFilter={typeFilter}
             onTypeFilterChange={setTypeFilter}
-            needsFixCount={needsFixCount}
+            needsFixCount={needsReviewCount}
           />
 
           {/* Right: Document Preview Panel */}
