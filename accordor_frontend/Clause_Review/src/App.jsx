@@ -110,6 +110,8 @@ function normalizeDoc(d, currentUser = null) {
     name: d.name || 'Untitled Document',
     fileName: d.name || 'document.docx',
     title: d.title || d.name,
+    agreementType: d.agreement_type || d.agreementType || '',
+    sectorial: d.sectorial_category || d.sectorial || '',
     pages,
     clauses,
     paragraphs,
@@ -208,7 +210,10 @@ function AppWorkspace() {
           if (syncResult && syncResult.folders) {
             driveFolders = syncResult.folders;
           } else if (driveState.folderIds && driveState.folderIds.length > 0) {
-            const fetchRes = await googleDriveService.fetchFiles(driveState.folderIds).catch(() => null);
+            const fetchRes = await googleDriveService.fetchFiles(driveState.folderIds, {
+              agreementType: driveState.agreementType,
+              sectorialCategory: driveState.sectorial,
+            }).catch(() => null);
             if (fetchRes && fetchRes.folders) driveFolders = fetchRes.folders;
           }
         }
@@ -428,7 +433,7 @@ function AppWorkspace() {
             folderPath: res.config?.folderPath || res.config?.folder_path || '',
             folderIds: res.config?.folderIds || res.config?.folder_ids || [],
             agreementType: res.config?.agreementType || res.config?.agreement_type || '',
-            sectorial: res.config?.sectorial || '',
+            sectorial: res.config?.sectorial || res.config?.sectorial_category || '',
             lastChecked: res.config?.lastChecked || 'just now',
             user: res.config?.user || { email: currentUser?.email || 'Google Account' },
           };
@@ -528,7 +533,10 @@ function AppWorkspace() {
       });
 
       // Fetch files from Google Drive
-      const data = await googleDriveService.fetchFiles([folder.id]);
+      const data = await googleDriveService.fetchFiles([folder.id], {
+        agreementType,
+        sectorialCategory: sectorial,
+      });
 
       // Check backend pipeline documents
       const pipelineRes = await documentService.list({ limit: 100 }).catch(() => null);
@@ -602,7 +610,10 @@ function AppWorkspace() {
       let driveFolders = syncResult?.folders || [];
 
       if (driveFolders.length === 0 && driveState.folderIds && driveState.folderIds.length > 0) {
-        const fetchRes = await googleDriveService.fetchFiles(driveState.folderIds).catch(() => null);
+        const fetchRes = await googleDriveService.fetchFiles(driveState.folderIds, {
+          agreementType: driveState.agreementType,
+          sectorialCategory: driveState.sectorial,
+        }).catch(() => null);
         if (fetchRes && fetchRes.folders) {
           driveFolders = fetchRes.folders;
         }

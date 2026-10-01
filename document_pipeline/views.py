@@ -1,3 +1,4 @@
+import json
 import os
 
 from django.http import JsonResponse
@@ -70,13 +71,16 @@ def _changes_payload(outcome):
     }
 
 
-def _sync_and_queue(credentials, folders, folder_ids):
+def _sync_and_queue(credentials, folders, folder_ids, agreement_type=None,
+                    sectorial_category=None):
     current_files = _flatten_files(folders)
     print(f'[http] syncing {len(current_files)} Drive files', flush=True)
     source = google_drive_source()
     outcome = sync_drive_files(current_files,
                                ingestion_source=source,
-                               folder_ids=folder_ids)
+                               folder_ids=folder_ids,
+                               agreement_type=agreement_type,
+                               sectorial_category=sectorial_category)
     changed_documents = outcome.created + outcome.updated + outcome.restored
     changed_ids = {document.id for document in changed_documents}
     current_documents = Document.objects.filter(
@@ -192,13 +196,31 @@ def google_drive_picker_config(request):
     return JsonResponse({
         'api_key': os.getenv('GOOGLE_PICKER_API_KEY', ''),
         'app_id': os.getenv('GOOGLE_PICKER_APP_ID', ''),
+        'folder_ids': request.session.get('google_drive_folder_ids', []),
+        'agreement_type': request.session.get('google_drive_agreement_type', ''),
+        'sectorial_category': request.session.get('google_drive_sectorial_category', ''),
     })
 
 
-@require_GET
+@require_POST
 def google_drive_files(request):
-    """Save the selected folders and queue their first ingestion."""
-    folder_ids = request.GET.getlist('folder_id')
+    """Save folder metadata and queue the selected files for ingestion."""
+    try:
+        payload = json.loads(request.body or '{}')
+    except json.JSONDecodeError:
+        return JsonResponse({'detail': 'Request body must be valid JSON.'}, status=400)
+    if not isinstance(payload, dict):
+        return JsonResponse({'detail': 'Request body must be a JSON object.'}, status=400)
+
+    folder_ids = payload.get('folder_ids', [])
+    agreement_type = payload.get('agreement_type')
+    sectorial_category = payload.get('sectorial_category')
+    if not isinstance(folder_ids, list):
+        return JsonResponse({'detail': 'folder_ids must be a list.'}, status=400)
+    if not isinstance(agreement_type, str) or not agreement_type.strip():
+        return JsonResponse({'detail': 'agreement_type is required.'}, status=400)
+    if not isinstance(sectorial_category, str) or not sectorial_category.strip():
+        return JsonResponse({'detail': 'sectorial_category is required.'}, status=400)
 
     try:
         if not folder_ids:
@@ -214,8 +236,11 @@ def google_drive_files(request):
         log_folder_selected(folder_ids, folders, len(current_files))
 
         outcome, plan, task_ids, credentials_json = _sync_and_queue(
-            credentials, folders, folder_ids)
+            credentials, folders, folder_ids, agreement_type.strip(),
+            sectorial_category.strip())
         request.session['google_drive_folder_ids'] = folder_ids
+        request.session['google_drive_agreement_type'] = agreement_type.strip()
+        request.session['google_drive_sectorial_category'] = sectorial_category.strip()
         request.session['google_drive_credentials'] = credentials_json
         return JsonResponse({
             'user': request.session.get('google_drive_user'),
@@ -249,7 +274,9 @@ def google_drive_sync(request):
         log_folder_selected(folder_ids, folders, len(current_files))
 
         outcome, plan, task_ids, credentials_json = _sync_and_queue(
-            credentials, folders, folder_ids)
+            credentials, folders, folder_ids,
+            request.session.get('google_drive_agreement_type'),
+            request.session.get('google_drive_sectorial_category'))
         request.session['google_drive_credentials'] = credentials_json
         return JsonResponse({
             'user': request.session.get('google_drive_user'),
