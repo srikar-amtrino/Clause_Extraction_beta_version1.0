@@ -29,7 +29,11 @@ from document_pipeline.models import (
     ExtractedParagraph,
 )
 from document_pipeline.services.classification_service import _groups_for
-from document_pipeline.services.review_service import current_reviews_for_run, review_json
+from document_pipeline.services.review_service import (
+    current_reviews_for_run,
+    final_verdict,
+    review_json,
+)
 
 EXTRACTION_FILE = 'extraction.json'
 CLASSIFICATION_FILE = 'classification_input.json'
@@ -182,6 +186,10 @@ def classification_json(document):
             'number': chunk.clause_identifier,
             # The section trail this clause sits under.
             'breadcrumb': chunk.breadcrumb,
+            # The parent clause's own words, which this clause completes:
+            # "describe the nature of the breach" reads under "Processor shall
+            # notify Controller ... and shall:". Null for a top-level clause.
+            'lead_in': chunk.lead_in_text or None,
             'text': chunk.text,
             'outcome': c.outcome,
             'label': c.label,
@@ -195,6 +203,9 @@ def classification_json(document):
             'deviated': c.deviated,
             'error': c.error or None,
             'review': review_json(review),
+            # What the item is with the reviewer's decision applied: what to
+            # show, what Save sends back, and what reaches the vector DB.
+            'final': final_verdict(c, review),
         })
 
     r = classification_run

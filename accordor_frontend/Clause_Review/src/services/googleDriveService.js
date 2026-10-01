@@ -26,6 +26,7 @@ export const googleDriveService = {
       const response = await fetch(`${BACKEND_BASE}/api/google-drive/sync/`, {
         method: 'POST',
         credentials: 'include',
+        cache: 'no-store',
         headers: {
           'Content-Type': 'application/json',
         },
@@ -43,6 +44,7 @@ export const googleDriveService = {
         const fallbackResponse = await fetch('/api/google-drive/sync/', {
           method: 'POST',
           credentials: 'include',
+          cache: 'no-store',
           headers: {
             'Content-Type': 'application/json',
           },
@@ -65,11 +67,13 @@ export const googleDriveService = {
     try {
       let response = await fetch('/api/google-drive/picker/config/', {
         credentials: 'include',
+        cache: 'no-store',
       }).catch(() => null);
 
       if (!response || !response.ok) {
         response = await fetch(`${BACKEND_BASE}/api/google-drive/picker/config/`, {
           credentials: 'include',
+          cache: 'no-store',
         }).catch(() => null);
       }
 
@@ -87,11 +91,13 @@ export const googleDriveService = {
   async getPickerToken() {
     let response = await fetch('/api/google-drive/picker/token/', {
       credentials: 'include',
+      cache: 'no-store',
     }).catch(() => null);
 
     if (!response || !response.ok) {
       response = await fetch(`${BACKEND_BASE}/api/google-drive/picker/token/`, {
         credentials: 'include',
+        cache: 'no-store',
       });
     }
 
@@ -109,11 +115,13 @@ export const googleDriveService = {
 
     let response = await fetch(`/api/google-drive/files/?${params.toString()}`, {
       credentials: 'include',
+      cache: 'no-store',
     }).catch(() => null);
 
     if (!response || !response.ok) {
       response = await fetch(`${BACKEND_BASE}/api/google-drive/files/?${params.toString()}`, {
         credentials: 'include',
+        cache: 'no-store',
       });
     }
 

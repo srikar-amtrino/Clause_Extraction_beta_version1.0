@@ -36,7 +36,10 @@ def trigger_full_document_pipeline(credentials_json: str, document_id: str, forc
              chunk_document_task.si(document_id, force)]
     if classify:
         steps.append(classify_document_task.si(document_id, force))
-    return chain(*steps).delay()
+    result = chain(*steps).delay()
+    from document_pipeline.activity import log_pipeline_queued
+    log_pipeline_queued(document_id, str(result.id), classify=classify)
+    return result
 
 
 def trigger_classification_workflow(document_id: str, *, force=False, classifier=None):
@@ -56,6 +59,7 @@ def trigger_classification_workflow(document_id: str, *, force=False, classifier
     """
     from django.conf import settings
 
+    from document_pipeline.activity import log_classifying_started
     from document_pipeline.classification.bedrock_client import classifier_from_settings
     from document_pipeline.classification.prompt import PROMPT_VERSION
     from document_pipeline.classification.taxonomy import load_vocabulary
@@ -89,6 +93,7 @@ def trigger_classification_workflow(document_id: str, *, force=False, classifier
         return None
 
     run = start_run(chunk_run, classifier=classifier, vocab=vocab)
+    log_classifying_started(run)
     batches = plan_run_batches(run)
     if not batches:
         # No micro chunks: close the run now rather than leaving it running,

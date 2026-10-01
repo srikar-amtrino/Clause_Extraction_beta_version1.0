@@ -8,6 +8,8 @@ Every rejected payload raises ReviewError carrying a sentence meant to be read
 by the person who caused it. The view turns that into a 400 without knowing
 anything about the rules.
 """
+import uuid
+
 from django.db import transaction
 from django.db.models import Count, Max
 
@@ -243,3 +245,273 @@ def review_counts_by_run(run_ids):
     for row in rows:
         counts.setdefault(row['run_id'], {})[row['decision']] = row['total']
     return counts
+
+
+# ------------------------------------------------------------------ save
+
+class SaveError(ReviewError):
+    """A Save the reviewer has to fix. Carries the per-item problems and the
+    HTTP status the view answers with."""
+
+    def __init__(self, detail, *, status=400, errors=None, extra=None):
+        super().__init__(detail)
+        self.status = status
+        self.errors = errors or []
+        self.extra = extra or {}
+
+
+def _blank(value):
+    """None for a value that means "nothing": missing, empty, or the literal
+    'null' a dropdown hands back."""
+    if not isinstance(value, str):
+        return value
+    value = value.strip()
+    return None if value in ('', 'null', 'None') else value
+
+
+def final_verdict(classification, review):
+    """-> {label, type, type_name, sub_type, decision}: what the item is once the
+    reviewer's decision is applied. What the screen shows and what goes to the
+    vector DB.
+
+    The model's answer while nobody has decided, or when the decision was to
+    accept it; the reviewer's when they corrected it; nothing when they
+    rejected it without a replacement.
+    """
+    decision = review.decision if review is not None else None
+    if decision == ClassificationReview.CORRECTED:
+        label, canonical_type, sub_type = review.label, review.canonical_type, review.sub_type
+    elif decision == ClassificationReview.REJECTED:
+        label, canonical_type, sub_type = None, None, None
+    else:
+        label = classification.label
+        canonical_type = classification.canonical_type
+        sub_type = classification.sub_type
+    return {
+        'label': label,
+        'type': canonical_type.key if canonical_type else None,
+        'type_name': canonical_type.name if canonical_type else None,
+        'sub_type': sub_type,
+        'decision': decision,
+    }
+
+
+def _decision_for(classification, current, entry):
+    """One Save entry -> the payload `validate` takes.
+
+    The client sends the values the row shows now; which of accepted or
+    corrected that is gets worked out here by comparing them with the model's
+    answer, so no client has to know the rule. A field it leaves out keeps the
+    value the row already has.
+    """
+    if _blank(entry.get('decision')) == ClassificationReview.REJECTED:
+        return {'decision': ClassificationReview.REJECTED, 'note': entry.get('note')}
+
+    shown = final_verdict(classification, current)
+    if shown['decision'] == ClassificationReview.REJECTED:
+        # Nothing to fall back on once rejected: start from the model's answer.
+        shown = final_verdict(classification, None)
+    label = _blank(entry['label']) if 'label' in entry else shown['label']
+    type_key = _blank(entry['type']) if 'type' in entry else shown['type']
+    sub_type = _blank(entry['sub_type']) if 'sub_type' in entry else _blank(shown['sub_type'])
+    if label == ClassificationReview.NON_CLAUSE:
+        sub_type = None
+
+    model = (classification.label,
+             classification.canonical_type.key if classification.canonical_type else None,
+             _blank(classification.sub_type))
+    note = entry.get('note')
+    if (label, type_key, sub_type) == model:
+        return {'decision': ClassificationReview.ACCEPTED, 'note': note}
+    return {'decision': ClassificationReview.CORRECTED, 'label': label, 'type': type_key,
+            'sub_type': sub_type, 'note': note}
+
+
+def _same_as(review, fields):
+    """True when a fresh decision would store exactly what `review` holds."""
+    return (review is not None
+            and review.decision == fields['decision']
+            and review.label == fields['label']
+            and review.canonical_type_id == (fields['canonical_type'].id
+                                             if fields['canonical_type'] else None)
+            and review.sub_type == fields['sub_type']
+            and (review.note or '') == fields['note'])
+
+
+def _next_review_status(current, all_reviewed):
+    reopened = current in ('published', 'reopened_in_review', 'reopened_reviewed')
+    if all_reviewed:
+        return 'reopened_reviewed' if reopened else 'reviewed'
+    return 'reopened_in_review' if reopened else 'in_review'
+
+
+def _mirror(document, classification, verdict, user, now):
+    """Copy one saved verdict onto the document's paragraph record, the table
+    Update Vector DB reads. Created when finalize never materialised it, so a
+    Save never depends on which path classified the document."""
+    from document_pipeline.models import DocumentParagraphRecord
+
+    chunk = classification.chunk
+    record, _ = DocumentParagraphRecord.objects.get_or_create(
+        document_id=document.id, paragraph_id=chunk.local_id,
+        defaults={
+            'chunk': chunk, 'classification': classification,
+            'breadcrumb': chunk.breadcrumb.split(' > ') if chunk.breadcrumb else [],
+            'sequence_order': chunk.order_index,
+            'original_text': chunk.text, 'reviewed_text': chunk.text,
+            'confidence': classification.confidence,
+            'llm_issues': classification.review_reasons or [],
+        })
+    label = verdict['label'] or classification.label or DocumentParagraphRecord.CLAUSE
+    canonical_type = verdict['type'] or ''
+    sub_type = verdict['sub_type'] or ''
+    changed = ((record.label, record.canonical_type, record.sub_type)
+               != (label, canonical_type, sub_type))
+    record.chunk = chunk
+    record.classification = classification
+    record.label, record.canonical_type, record.sub_type = label, canonical_type, sub_type
+    record.is_reviewed = True
+    record.reviewed_by = user
+    # Pending for the vector DB when its values moved, or when it has never
+    # been synced at all. A verdict accepted unchanged after a sync is not.
+    record.is_modified = record.is_modified or changed or record.last_synced_at is None
+    if changed:
+        record.last_edited_by = user
+        record.last_edited_at = now
+    record.save()
+
+
+def _is_uuid(value):
+    try:
+        uuid.UUID(str(value))
+    except ValueError:
+        return False
+    return True
+
+
+@transaction.atomic
+def save_document(document, classification_run_id, items, user):
+    """The Save button: store what the reviewer did to one document.
+
+    Only the items sent are touched. Every entry is checked before anything is
+    written, so a Save lands whole or not at all. An entry identical to its
+    current decision is counted as unchanged and writes nothing, so pressing
+    Save twice leaves no trace. Nothing is sent to the vector DB: saved items
+    are marked pending, and Update Vector DB picks them up.
+
+    -> {'saved': {accepted, corrected, rejected, unchanged},
+        'classification_ids': [...], 'review_status': str}
+    """
+    from django.utils import timezone
+
+    from document_pipeline.activity import log_activity
+    from document_pipeline.models import Document, DocumentActivityLog
+    from document_pipeline.services.export_service import current_classification_run
+
+    # Two Saves on one document queue here rather than interleaving.
+    Document.objects.select_for_update().filter(pk=document.pk).first()
+
+    run = current_classification_run(document)
+    if run is None:
+        raise SaveError('This document has no classification to save.')
+    if not classification_run_id:
+        raise SaveError('classification_run_id is required: send the one '
+                        'GET /classification/ returned.')
+    if str(classification_run_id) != str(run.id):
+        raise SaveError('This document was re-classified after you opened it. Reload it '
+                        'and make your changes again.', status=409,
+                        extra={'classification_run_id': str(run.id)})
+    if not isinstance(items, list) or not items:
+        raise SaveError('items must be a non-empty list.')
+
+    errors, wanted = [], []
+    for index, entry in enumerate(items):
+        cid = entry.get('classification_id') if isinstance(entry, dict) else None
+        if not cid or not _is_uuid(cid):
+            errors.append({'index': index, 'classification_id': cid,
+                           'detail': 'Each item needs a classification_id (a UUID).'})
+            continue
+        wanted.append((str(cid), entry))
+    ids = [cid for cid, _ in wanted]
+    if len(set(ids)) != len(ids):
+        raise SaveError('The same classification appears twice in one Save.')
+
+    rows = {str(c.id): c for c in (Classification.objects
+                                   .filter(run=run, id__in=ids)
+                                   .select_related('chunk', 'canonical_type', 'run'))}
+    reviews = current_reviews_for_run(run)
+
+    changed, counts = [], {'accepted': 0, 'corrected': 0, 'rejected': 0, 'unchanged': 0}
+    for cid, entry in wanted:
+        classification = rows.get(cid)
+        if classification is None:
+            errors.append({'classification_id': cid,
+                           'detail': "Not part of this document's current classification."})
+            continue
+        current = reviews.get(classification.id)
+        try:
+            payload = _decision_for(classification, current, entry)
+            fields = validate(classification, payload)
+        except ReviewError as problem:
+            errors.append({'classification_id': cid, 'detail': str(problem)})
+            continue
+        if _same_as(current, fields):
+            counts['unchanged'] += 1
+        else:
+            counts[fields['decision']] += 1
+            changed.append(dict(payload, classification_id=cid))
+
+    if errors:
+        raise SaveError('%d item(s) could not be saved, so nothing was saved.' % len(errors),
+                        errors=errors)
+
+    if changed:
+        record_decisions(document, changed, (user.email, user.username))
+
+    now = timezone.now()
+    reviews = current_reviews_for_run(run)
+    for cid in ids:
+        classification = rows[cid]
+        _mirror(document, classification,
+                final_verdict(classification, reviews.get(classification.id)), user, now)
+
+    total = Classification.objects.filter(run=run).count()
+    document.refresh_from_db(fields=['review_status'])
+    status = _next_review_status(document.review_status, len(reviews) >= total)
+    if status != document.review_status:
+        Document.objects.filter(pk=document.pk).update(review_status=status)
+
+    written = counts['accepted'] + counts['corrected'] + counts['rejected']
+    if written:
+        parts = ['%d %s' % (counts[k], k) for k in ('accepted', 'corrected', 'rejected')
+                 if counts[k]]
+        log_activity(
+            document_id=document.id,
+            phase=DocumentActivityLog.USER_INTERACTION,
+            action=DocumentActivityLog.ACT_SAVED,
+            summary='%s saved %d item(s): %s.' % (user.username, written, ', '.join(parts)),
+            actor_user=user,
+            metadata=dict(counts, classification_run_id=str(run.id),
+                          classification_ids=[c['classification_id'] for c in changed],
+                          reviewed=len(reviews), total=total),
+        )
+
+    return {'saved': counts, 'classification_ids': ids, 'review_status': status}
+
+
+def vector_sync_state(document):
+    """-> what Update Vector DB would pick up now, for enabling its button.
+
+    pending_changes counts saved items the vector DB does not have yet: every
+    saved item before the first sync, then only the ones whose values changed.
+    """
+    from document_pipeline.models import DocumentParagraphRecord, VectorSyncRun
+
+    last = (VectorSyncRun.objects
+            .filter(document_id=document.id, status=VectorSyncRun.SUCCEEDED)
+            .order_by('-started_at').first())
+    return {
+        'pending_changes': DocumentParagraphRecord.objects.filter(
+            document_id=document.id, is_modified=True).count(),
+        'last_synced_at': (last.finished_at or last.started_at).isoformat() if last else None,
+    }

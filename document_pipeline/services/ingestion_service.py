@@ -13,6 +13,7 @@ any size while Celery handles the slow work in parsing workers.
 """
 import logging
 from dataclasses import dataclass, field
+from datetime import timedelta
 
 from django.conf import settings
 from django.db import transaction
@@ -20,6 +21,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from core.models import IngestionSource
+from document_pipeline.activity import log_drive_discovered, log_parsing_error, log_parsing_started
 from document_pipeline.models import Document
 from document_pipeline.parsing.result import SCHEMA_VERSION
 from document_pipeline.services.drive_service import (
@@ -142,6 +144,7 @@ def sync_drive_files(files, *, ingestion_source, folder_ids=()):
 
                 # Truly new file
                 new_doc = _create_document(ingestion_source, file_id, meta)
+                log_drive_discovered(new_doc)
                 outcome.created.append(new_doc)
                 existing[file_id] = new_doc
                 existing_by_name[(name, parent)] = new_doc
@@ -320,9 +323,45 @@ def record_rejection(document, rejection):
 @dataclass
 class DispatchPlan:
     """What a sync hands to Celery, and what it refused. `rejected` holds
-    (Document, DriveFileRejected) pairs."""
+    (Document, DriveFileRejected) pairs; `in_flight` the documents left alone
+    because a pipeline queued earlier is still running for them."""
     to_ingest: list = field(default_factory=list)
     rejected: list = field(default_factory=list)
+    in_flight: list = field(default_factory=list)
+
+
+# A queued pipeline that has reported no end within this long is taken to have
+# died with its worker, so the document may be queued again.
+IN_FLIGHT_WINDOW = timedelta(minutes=30)
+
+# Events that close a queued pipeline, whichever stage it stopped at.
+_PIPELINE_ENDS = ('parsing_failed', 'parsing_rejected', 'classified',
+                  'classification_failed', 'moved_to_review_queue')
+
+
+def pipeline_in_flight(document):
+    """True while a pipeline queued for this document has not finished.
+
+    A sync queues parse -> chunk -> classify and returns at once, and until the
+    worker parses the file the document still looks due. Without this, a second
+    sync in that window -- a double click, or a client that retries the same
+    request -- queues the whole pipeline again: the document is chunked and
+    classified twice, the model is paid twice, and whichever copy finishes last
+    wins.
+    """
+    from document_pipeline.models import DocumentActivityLog as A
+
+    queued = (A.objects
+              .filter(document=document, action=A.ACT_PIPELINE_QUEUED,
+                      created_at__gte=timezone.now() - IN_FLIGHT_WINDOW)
+              .order_by('-created_at').first())
+    if queued is None:
+        return False
+    ends = list(_PIPELINE_ENDS)
+    if not (queued.metadata or {}).get('classify', True):
+        ends.append('chunked')
+    return not A.objects.filter(document=document, action__in=ends,
+                                created_at__gte=queued.created_at).exists()
 
 
 def _due(document):
@@ -348,8 +387,13 @@ def plan_dispatch(documents, changed_ids):
         changed = document.id in changed_ids
         rejection = dispatch_rejection(document)
         if rejection is None:
-            if changed or _due(document):
+            if changed:
+                # A new version of the file: worth a fresh pass even while an
+                # older one is still being processed.
                 plan.to_ingest.append(document)
+            elif _due(document):
+                (plan.in_flight if pipeline_in_flight(document)
+                 else plan.to_ingest).append(document)
             continue
         if (changed or document.extraction_status != 'rejected'
                 or not document.extraction_runs.exists()):
@@ -363,9 +407,14 @@ def plan_dispatch(documents, changed_ids):
 def ingest_document(credentials, document, *, force=False):
     """Download, parse and persist one document. -> PersistOutcome"""
     print('[ingestion] downloading and parsing %s' % document.source_external_id, flush=True)
-    result = stream_and_parse(credentials, document.source_external_id)
-    outcome = persist_parse_result(result,
-                                   ingestion_source=document.ingestion_source,
-                                   force=force)
+    log_parsing_started(document)
+    try:
+        result = stream_and_parse(credentials, document.source_external_id)
+        outcome = persist_parse_result(result,
+                                       ingestion_source=document.ingestion_source,
+                                       force=force)
+    except Exception as exc:
+        log_parsing_error(document, exc)
+        raise
     print('[ingestion] persisted %s' % document.source_external_id, flush=True)
     return outcome

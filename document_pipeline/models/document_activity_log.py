@@ -36,11 +36,21 @@ class DocumentActivityLog(models.Model):
     ]
 
     # --- Actions (non-exhaustive; stored verbatim too) ---
-    # Pipeline actions
-    ACT_FETCHED = 'fetched_from_drive'
-    ACT_STAGED = 'staged'
+    # Pipeline actions, in the order a document meets them. Chunking has no
+    # phase of its own and is logged under data_parsing.
+    ACT_DRIVE_DISCOVERED = 'drive_discovered'            # data_ingestion
+    ACT_PIPELINE_QUEUED = 'pipeline_queued'
+    ACT_DOWNLOAD_STAGED = 'download_staged'              # data_staging
+    ACT_PARSING_STARTED = 'parsing_started'              # data_parsing
     ACT_PARSED = 'parsed'
+    ACT_PARSING_SKIPPED = 'parsing_skipped'
+    ACT_PARSING_REJECTED = 'parsing_rejected'
+    ACT_PARSING_FAILED = 'parsing_failed'
+    ACT_CHUNKING_STARTED = 'chunking_started'
+    ACT_CHUNKED = 'chunked'
+    ACT_CLASSIFYING_STARTED = 'classifying_started'      # data_classification
     ACT_CLASSIFIED = 'classified'
+    ACT_CLASSIFICATION_FAILED = 'classification_failed'
     ACT_NEEDS_REVIEW = 'moved_to_review_queue'
     # User actions
     ACT_OPENED = 'opened_workspace'

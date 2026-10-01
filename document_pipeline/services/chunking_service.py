@@ -17,6 +17,7 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
+from document_pipeline.activity import log_chunked, log_chunking_started
 from document_pipeline.chunking.builder import (
     CHUNK_SCHEMA_VERSION,
     build_chunks,
@@ -100,6 +101,27 @@ def _paragraphs_by_clause(run):
     return out
 
 
+def _table_cells_by_clause(run):
+    """clause local_id -> the table cells sitting under it, in reading order.
+
+    The parser keeps every table cell out of clause text and attaches it to the
+    clause it sits under by the paragraph edge alone, so this is the only place
+    the chunker can learn what a table said.
+    """
+    rows = (ExtractedParagraph.objects
+            .filter(run=run, clause__isnull=False, container='table')
+            .values_list('clause__local_id', 'table_position', 'text')
+            .order_by('sequence_order'))
+    out = {}
+    for local_id, position, text in rows:
+        position = position or {}
+        out.setdefault(local_id, []).append({
+            'table': position.get('table'), 'row': position.get('row'),
+            'col': position.get('col'), 'text': text,
+        })
+    return out
+
+
 def chunk_extraction_run(run, *, force=False, chunker_version=None):
     """Chunk one stored extraction run. -> ChunkOutcome
 
@@ -125,11 +147,15 @@ def chunk_extraction_run(run, *, force=False, chunker_version=None):
             return ChunkOutcome(extraction_run=run, chunk_run=current, skipped=True,
                                 chunk_count=current.chunk_count)
 
-        clauses, pk_by_local = _clause_dicts(run)
-        chunk_dicts, stats = build_chunks(clauses, _paragraphs_by_clause(run))
-
         previous = ChunkRun.objects.filter(extraction_run=run).order_by('-attempt').first()
         attempt = (previous.attempt + 1) if previous else 1
+        log_chunking_started(run, attempt, chunker_version)
+
+        clauses, pk_by_local = _clause_dicts(run)
+        chunk_dicts, stats = build_chunks(clauses, _paragraphs_by_clause(run),
+                                          _table_cells_by_clause(run),
+                                          parent_text_micros=True)
+
         ChunkRun.objects.filter(extraction_run=run, is_current=True).update(is_current=False)
 
         chunk_run = _create_chunk_run(run, stats, attempt, chunker_version)
@@ -141,6 +167,7 @@ def chunk_extraction_run(run, *, force=False, chunker_version=None):
                                                      stats, duration_ms))
         chunk_run.duration_ms = duration_ms
         chunk_run.save(update_fields=['duration_ms'])
+        log_chunked(chunk_run, rows, duration_ms)
 
     logger.info('chunked run %s: attempt %d, %d chunks (%d macro, %d micro, %d indexed)',
                 run.id, attempt, len(rows), stats['macro_chunks'],
@@ -176,7 +203,8 @@ def _create_chunk_run(run, stats, attempt, chunker_version):
         is_current=True,
         chunker_version=chunker_version,
         chunk_schema_version=CHUNK_SCHEMA_VERSION,
-        params={'paragraph_edge': 'extracted_paragraph.clause'},
+        params={'paragraph_edge': 'extracted_paragraph.clause',
+                'table_text': True, 'parent_text_micros': True},
         stats=stats,
         chunk_count=stats['chunk_count'],
         macro_count=stats['macro_chunks'],
@@ -224,6 +252,8 @@ def _build_chunks(chunk_run, chunk_dicts, pk_by_local, issues):
             paragraph_ids=data['paragraph_ids'],
             char_count=data['char_count'],
             word_count=data['word_count'],
+            # A micro holding a parent clause's own words rather than a leaf.
+            extra={'parent_text': True} if data.get('is_parent_text') else {},
         ))
     return rows
 

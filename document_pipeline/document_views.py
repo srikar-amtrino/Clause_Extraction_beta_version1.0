@@ -13,7 +13,7 @@ from .models import (
 )
 from .services import export_service, review_service
 from .services.ingestion_service import google_drive_source
-from .services.review_service import ReviewError
+from .services.review_service import ReviewError, SaveError
 
 # Read by a person as often as by a script: pretty-printed on purpose.
 PRETTY = {'indent': 2, 'ensure_ascii': False}
@@ -150,8 +150,11 @@ def _current_runs_by_document(document_ids):
     page, in two queries rather than two per row."""
     extraction = {r.document_id: r for r in ExtractionRun.objects.filter(
         document_id__in=document_ids, is_current=True)}
+    # The run of the current chunking of the current extraction: a re-chunked
+    # document keeps a current classification run for every chunk run it had.
     classification = {r.document_id: r for r in ClassificationRun.objects.filter(
-        document_id__in=document_ids, is_current=True)}
+        document_id__in=document_ids, is_current=True,
+        chunk_run__is_current=True, chunk_run__extraction_run__is_current=True)}
     return extraction, classification
 
 
@@ -294,10 +297,68 @@ def document_classification(request, document_id):
         'locked_by': lock.user.username if lock else None,
         'locked_by_id': str(lock.user_id) if lock else None,
     }
+    payload['document']['review_status'] = document.review_status
+    payload['vector_sync'] = review_service.vector_sync_state(document)
     if _bool_param(request, 'needs_review') is True:
         payload['items'] = [item for item in payload['items'] if item['needs_review']]
         payload['filtered'] = {'needs_review': True, 'returned': len(payload['items'])}
     return JsonResponse(payload, json_dumps_params=PRETTY)
+
+
+@require_POST
+@require_auth
+def classification_save(request, document_id):
+    """The Save button: store what the reviewer did to this document.
+
+      { "classification_run_id": "<from GET /classification/>",
+        "items": [ { "classification_id": "...", "label": "Clause",
+                     "type": "<taxonomy key>", "sub_type": "..." },
+                   { "classification_id": "...", "decision": "rejected",
+                     "note": "why" } ] }
+
+    Send every row the reviewer changed or verified, with the values it shows
+    now. Accepted or corrected is worked out here from those values. All or
+    nothing: one bad row and nothing is saved. Nothing goes to the vector DB.
+
+    -> 200 { "saved": {accepted, corrected, rejected, unchanged},
+             "review_status": "...", "items": [...the rows sent, fresh...],
+             "summary": {...}, "vector_sync": {...} }
+    -> 400 { "detail", "errors": [{classification_id, detail}] }
+    -> 403 / 423 without the workspace lock
+    -> 409 { "detail", "classification_run_id" } after a re-classification
+    """
+    document, error = _get_document(document_id)
+    if error:
+        return error
+    from .review_views import _check_editable
+    editable, response = _check_editable(document.id, request.user)
+    if not editable:
+        return response
+
+    payload, error = _json_body(request)
+    if error:
+        return error
+    if not isinstance(payload, dict):
+        return JsonResponse({'detail': 'Body must be a JSON object.'}, status=400)
+    try:
+        result = review_service.save_document(
+            document, payload.get('classification_run_id'), payload.get('items'),
+            request.user)
+    except SaveError as problem:
+        body = dict({'detail': str(problem)}, **problem.extra)
+        if problem.errors:
+            body['errors'] = problem.errors
+        return JsonResponse(body, status=problem.status)
+
+    saved = set(result['classification_ids'])
+    fresh = export_service.classification_json(document)
+    return JsonResponse({
+        'saved': result['saved'],
+        'review_status': result['review_status'],
+        'items': [item for item in fresh['items'] if item['classification_id'] in saved],
+        'summary': fresh['summary'],
+        'vector_sync': review_service.vector_sync_state(document),
+    }, json_dumps_params=PRETTY)
 
 
 def _json_body(request):
