@@ -184,4 +184,8 @@ export const documentService = {
   getDocumentActivity(documentId) {
     return get(`/api/documents/${documentId}/activity/`);
   },
+
+  taxonomy() {
+    return get('/api/taxonomy/');
+  },
 };
