@@ -27,6 +27,7 @@ from .review_views import (
 	paragraph_update,
 	workspace_detail,
 	workspace_publish,
+	workspace_publish_status,
 	workspace_save,
 )
 from .views import (
@@ -74,6 +75,7 @@ urlpatterns = [
 	path('documents/<uuid:document_id>/workspace/draft/discard/', draft_discard, name='workspace-draft-discard'),
 	path('documents/<uuid:document_id>/workspace/save/', workspace_save, name='workspace-save'),
 	path('documents/<uuid:document_id>/workspace/publish/', workspace_publish, name='workspace-publish'),
+	path('documents/<uuid:document_id>/workspace/publish/<uuid:task_id>/', workspace_publish_status, name='workspace-publish-status'),
 
 	# Activity log & contributions.
 	path('documents/<uuid:document_id>/activity/', document_activity, name='document-activity'),

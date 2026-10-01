@@ -227,6 +227,23 @@ export default function ReviewWorkspace({
   const [classificationSummary, setClassificationSummary] = useState(null);
   const [documentMeta, setDocumentMeta] = useState(null);
   const [isLoadingClauses, setIsLoadingClauses] = useState(false);
+  const [isPublishingToVectorDb, setIsPublishingToVectorDb] = useState(false);
+
+  const handlePublishToVectorDb = async () => {
+    if (!docId || isPublishingToVectorDb) return;
+    setIsPublishingToVectorDb(true);
+    try {
+      const result = await documentService.publishToVectorDb(docId);
+      showToast?.(result.message || 'Published to Vector DB.');
+    } catch (error) {
+      const blockers = error.data?.blockers;
+      showToast?.(blockers?.length
+        ? `Cannot publish: ${blockers.join(', ')}`
+        : (error.message || 'Could not publish to vector database.'));
+    } finally {
+      setIsPublishingToVectorDb(false);
+    }
+  };
 
   // Text expansion state for "Know more" / "Show less"
   const [expandedTextRows, setExpandedTextRows] = useState(() => new Set());
@@ -1069,9 +1086,9 @@ export default function ReviewWorkspace({
             <Button
               variant="contained"
               size="small"
-              disabled={!canEdit}
+              disabled={!canEdit || isPublishingToVectorDb}
               startIcon={<CloudUploadOutlinedIcon sx={{ fontSize: 16 }} />}
-              onClick={() => showToast?.(`Updating "${docName}" to vector database...`)}
+              onClick={handlePublishToVectorDb}
               sx={{
                 height: 32,
                 fontSize: '12px',
@@ -1085,7 +1102,7 @@ export default function ReviewWorkspace({
                 '&:hover': { bgcolor: '#152943', boxShadow: 'none' },
               }}
             >
-              Update to vector DB
+              {isPublishingToVectorDb ? 'Publishing...' : 'Update to vector DB'}
             </Button>
           </Box>
         </Box>

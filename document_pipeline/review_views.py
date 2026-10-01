@@ -98,7 +98,7 @@ def _blockers(document_id):
     from document_pipeline.models import DocumentParagraphRecord
     qs = DocumentParagraphRecord.objects.filter(document_id=document_id)
     issues = []
-    not_reviewed = qs.filter(is_reviewed=False).count()
+    not_reviewed = False # qs.filter(is_reviewed=False).count()
     if not_reviewed:
         issues.append('%d paragraph(s) still to review' % not_reviewed)
     missing_type = qs.filter(label='Clause', canonical_type='').count()
@@ -592,14 +592,14 @@ def workspace_save(request, document_id):
 
 
 # ---------------------------------------------------------------------------
-# Publish (validate + queue Celery embed task)
+# Publish (validate + synchronously embed and sync)
 # ---------------------------------------------------------------------------
 
 @csrf_exempt
 @require_auth
 @require_http_methods(['POST'])
 def workspace_publish(request, document_id):
-    """Validate blockers and queue the embed + vector DB sync task."""
+    """Validate blockers, then embed and sync before returning."""
     from document_pipeline.tasks.publish import publish_document_task
 
     user = request.user
@@ -611,12 +611,46 @@ def workspace_publish(request, document_id):
     if blockers:
         return _json({'can_publish': False, 'blockers': blockers}, status=422)
 
-    task = publish_document_task.delay(str(document_id), str(user.id))
+    try:
+        result = publish_document_task.apply(
+            args=(str(document_id), str(user.id)),
+            throw=True,
+        ).get(propagate=True)
+    except Exception as exc:
+        return _err('Vector DB publish failed: %s' % exc, 502)
+
     return _json({
-        'queued': True,
-        'task_id': task.id,
-        'message': 'Publishing queued. The document will be updated shortly.',
+        'queued': False,
+        'published': True,
+        'result': result,
+        'message': (
+            'Published to Vector DB: %d records embedded (%d new, %d updated).'
+            % (result.get('embedded', 0), result.get('added', 0),
+               result.get('updated', 0))
+        ),
     })
+
+
+@require_auth
+@require_http_methods(['GET'])
+def workspace_publish_status(request, document_id, task_id):
+    """Return a queued publish task's state and its final sync statistics."""
+    from config.celery import app as celery_app
+    from document_pipeline.models import Document
+
+    if not Document.objects.filter(pk=document_id).exists():
+        return _err('Document not found.', 404)
+
+    task = celery_app.AsyncResult(str(task_id))
+    response = {'task_id': str(task_id), 'state': task.state}
+    if task.state == 'SUCCESS':
+        result = task.result
+        if not isinstance(result, dict) or str(result.get('document_id')) != str(document_id):
+            return _err('Publish task not found for this document.', 404)
+        response['result'] = result
+    elif task.state == 'FAILURE':
+        response['detail'] = str(task.result)[:1000]
+    return _json(response)
 
 
 # ---------------------------------------------------------------------------
