@@ -4,6 +4,9 @@ First publish: embeds ALL paragraph records.
 Re-publish (differential): embeds only rows where is_modified=True,
 upserts them in the Vector DB, and updates the Postgres copies.
 
+Items a reviewer deleted are never embedded; one the Vector DB already holds
+from an earlier publish has its point deleted first.
+
 The task is triggered explicitly by a reviewer clicking Publish --
 never automatically after classification.
 """
@@ -37,8 +40,10 @@ def publish_document_task(self, document_id: str, user_id: str):
     )
     from document_pipeline.activity import log_activity
     from document_pipeline.services.embedding_service import (
+        delete_points,
         embed_and_upsert,
     )
+    from document_pipeline.services.review_service import deleted_paragraph_ids
 
     sync_run = None
     try:
@@ -50,8 +55,12 @@ def publish_document_task(self, document_id: str, user_id: str):
             .select_related('chunk', 'document')
             .order_by('sequence_order')
         )
-        total = len(all_records)
-        to_embed = all_records
+        deleted_ids = deleted_paragraph_ids(doc)
+        deleted = [r for r in all_records if r.paragraph_id in deleted_ids]
+        to_embed = [r for r in all_records if r.paragraph_id not in deleted_ids]
+        # Only what an earlier publish put in the Vector DB has a point to delete.
+        to_remove = [r for r in deleted if r.last_synced_at is not None or r.vector_id]
+        total = len(to_embed)
         unchanged = 0
 
         started_at = timezone.now()
@@ -65,7 +74,11 @@ def publish_document_task(self, document_id: str, user_id: str):
             status=VectorSyncRun.FAILED,
         )
 
-        # 2. Embed and upsert the selected paragraphs.
+        # 2. Remove deleted items first, so the before/after point count the
+        #    upsert reports is about the items that stay.
+        removed = delete_points([r.pk for r in to_remove])
+
+        # 3. Embed and upsert the selected paragraphs.
         embed_stats = embed_and_upsert(to_embed, document_id)
         failed = embed_stats.get('failed', 0)
         embedded = embed_stats.get('embedded', 0)
@@ -75,18 +88,23 @@ def publish_document_task(self, document_id: str, user_id: str):
                 % (embedded, len(to_embed), failed)
             )
 
-        # 3. Mark embedded records as synced and reset is_modified flag.
+        # 4. Mark embedded records as synced and reset is_modified flag;
+        #    deleted ones are no longer in the Vector DB.
         now = timezone.now()
         for record in to_embed:
             record.is_modified = False
             record.last_synced_at = now
             record.vector_id = str(record.pk)
-        if to_embed:
+        for record in deleted:
+            record.is_modified = False
+            record.last_synced_at = None
+            record.vector_id = ''
+        if to_embed or deleted:
             DocumentParagraphRecord.objects.bulk_update(
-                to_embed, ['is_modified', 'last_synced_at', 'vector_id']
+                to_embed + deleted, ['is_modified', 'last_synced_at', 'vector_id']
             )
 
-        # 4. Update sync run with final stats.
+        # 5. Update sync run with final stats.
         sync_run.records_failed = failed
         sync_run.status = VectorSyncRun.SUCCEEDED
         sync_run.finished_at = now
@@ -96,21 +114,22 @@ def publish_document_task(self, document_id: str, user_id: str):
             'records_failed', 'status', 'finished_at', 'duration_ms'
         ])
 
-        # 5. Update document review_status.
+        # 6. Update document review_status.
         new_status = 'published'
         doc.review_status = new_status
         doc.save(update_fields=['review_status'])
 
-        # 6. Log to activity timeline.
+        # 7. Log to activity timeline.
         kind = 'full'
         log_activity(
             document_id=document_id,
             phase=DocumentActivityLog.USER_INTERACTION,
             action=DocumentActivityLog.ACT_PUBLISHED,
             summary=(
-                     'Published to Vector DB (%s): %d records embedded (%d new, %d updated).'
+                     'Published to Vector DB (%s): %d records embedded (%d new, %d updated), '
+                     '%d deleted removed.'
                      % (kind, embedded, embed_stats.get('added', 0),
-                         embed_stats.get('updated', 0))
+                         embed_stats.get('updated', 0), removed)
             ),
             actor_user=reviewer,
             metadata={
@@ -120,6 +139,7 @@ def publish_document_task(self, document_id: str, user_id: str):
                 'failed': failed,
                 'added': embed_stats.get('added', 0),
                 'updated': embed_stats.get('updated', 0),
+                'removed': removed,
                 'sync_run_id': str(sync_run.id),
             },
         )
@@ -132,6 +152,7 @@ def publish_document_task(self, document_id: str, user_id: str):
             'failed': failed,
             'added': embed_stats.get('added', 0),
             'updated': embed_stats.get('updated', 0),
+            'removed': removed,
             'count_after': embed_stats.get('count_after', 0),
         }
 

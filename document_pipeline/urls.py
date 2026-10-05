@@ -1,6 +1,8 @@
 from django.urls import path
 
 from .document_views import (
+	classification_delete,
+	classification_restore,
 	classification_save,
 	document_classification,
 	document_classification_input,
@@ -11,7 +13,6 @@ from .document_views import (
 )
 from .review_views import (
 	activity_calendar,
-	bulk_update,
 	document_activity,
 	document_contributors,
 	document_note,
@@ -22,7 +23,6 @@ from .review_views import (
 	lock_acquire,
 	lock_heartbeat,
 	lock_release,
-	paragraph_update,
 	workspace_detail,
 	workspace_publish,
 	workspace_publish_status,
@@ -59,6 +59,12 @@ urlpatterns = [
 	# The review screen's Save button. Writes reviewer decisions; never the vector DB.
 	path('documents/<uuid:document_id>/classification/save/', classification_save,
 	     name='document-classification-save'),
+	# Delete an item from the review (optionally moving its text into the
+	# next one), and undo it. Postgres only; the vector DB follows on publish.
+	path('documents/<uuid:document_id>/classification/<uuid:classification_id>/delete/',
+	     classification_delete, name='document-classification-delete'),
+	path('documents/<uuid:document_id>/classification/<uuid:classification_id>/restore/',
+	     classification_restore, name='document-classification-restore'),
 	path('taxonomy/', taxonomy, name='taxonomy'),
 
 	# Review workspace -- overview helpers.
@@ -70,8 +76,6 @@ urlpatterns = [
 	path('documents/<uuid:document_id>/workspace/lock/', lock_acquire, name='workspace-lock-acquire'),
 	path('documents/<uuid:document_id>/workspace/lock/heartbeat/', lock_heartbeat, name='workspace-lock-heartbeat'),
 	path('documents/<uuid:document_id>/workspace/lock/release/', lock_release, name='workspace-lock-release'),
-	path('documents/<uuid:document_id>/workspace/paragraphs/<str:para_id>/', paragraph_update, name='workspace-paragraph-update'),
-	path('documents/<uuid:document_id>/workspace/bulk-update/', bulk_update, name='workspace-bulk-update'),
 	path('documents/<uuid:document_id>/workspace/draft/', draft_save, name='workspace-draft-save'),
 	path('documents/<uuid:document_id>/workspace/draft/discard/', draft_discard, name='workspace-draft-discard'),
 	path('documents/<uuid:document_id>/workspace/save/', workspace_save, name='workspace-save'),

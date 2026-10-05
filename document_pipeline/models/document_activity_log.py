@@ -64,6 +64,8 @@ class DocumentActivityLog(models.Model):
     ACT_DRAFT_DISCARDED = 'discarded_draft'
     ACT_DRAFT_EXPIRED = 'draft_expired'
     ACT_SAVED = 'saved_review'
+    ACT_DELETED_ITEM = 'deleted_item'
+    ACT_RESTORED_ITEM = 'restored_item'
     ACT_PUBLISHED = 'published_to_vector_db'
     ACT_REOPENED = 'reopened_published_document'
 
