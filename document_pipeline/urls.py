@@ -1,5 +1,7 @@
 from django.urls import path
 
+from .playground_views import playground_analyze, playground_stats
+
 from .document_views import (
 	classification_delete,
 	classification_restore,
@@ -87,4 +89,8 @@ urlpatterns = [
 	path('documents/<uuid:document_id>/contributors/', document_contributors, name='document-contributors'),
 	path('documents/<uuid:document_id>/note/', document_note, name='document-note'),
 	path('activity/calendar/', activity_calendar, name='activity-calendar'),
+
+	# Vector Playground -- read-only diagnostic endpoint.
+	path('playground/stats/', playground_stats, name='playground-stats'),
+	path('playground/', playground_analyze, name='playground-analyze'),
 ]

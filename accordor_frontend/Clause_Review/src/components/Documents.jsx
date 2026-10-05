@@ -27,6 +27,7 @@ import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import SyncIcon from '@mui/icons-material/Sync';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { useAuth } from '../context/AuthContext';
+import { documentService } from '../services/documentService';
 
 export default function Documents({
   documents = [],
@@ -166,6 +167,7 @@ export default function Documents({
 
   const [selectedDocId, setSelectedDocId] = useState(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(true);
+  const [isOpeningWorkspace, setIsOpeningWorkspace] = useState(false);
   const [typeMenuAnchor, setTypeMenuAnchor] = useState(null);
   const [reviewerMenuAnchor, setReviewerMenuAnchor] = useState(null);
 
@@ -231,6 +233,30 @@ export default function Documents({
   const handleSelectDoc = (doc) => {
     setSelectedDocId(doc.id || doc.documentId);
     setIsDrawerOpen(true);
+  };
+
+  // Open review workspace and call the classification endpoint for the document
+  const handleOpenWorkspace = async (docToOpen) => {
+    const targetDoc = docToOpen || selectedDoc;
+    if (!targetDoc) return;
+    const documentId = targetDoc.documentId || targetDoc.id;
+
+    setIsOpeningWorkspace(true);
+    let classData = null;
+    try {
+      if (documentId) {
+        // Call the classification API for this document
+        classData = await documentService.classification(documentId);
+      }
+    } catch (err) {
+      console.warn('Direct classification fetch on workspace open notice:', err);
+    } finally {
+      setIsOpeningWorkspace(false);
+      if (onOpenWorkspace) {
+        const enrichedDoc = classData ? { ...targetDoc, _initialClassification: classData } : targetDoc;
+        onOpenWorkspace(enrichedDoc);
+      }
+    }
   };
 
   // Extraction Status badge helper
@@ -825,7 +851,7 @@ export default function Documents({
                       key={doc.id}
                       hover
                       onClick={() => handleSelectDoc(doc)}
-                      onDoubleClick={() => onOpenWorkspace && onOpenWorkspace(doc)}
+                      onDoubleClick={() => handleOpenWorkspace(doc)}
                       sx={{
                         cursor: 'pointer',
                         bgcolor: isSelected ? '#f8fafc' : '#ffffff',
@@ -1218,7 +1244,9 @@ export default function Documents({
             <Button
               variant="contained"
               fullWidth
-              onClick={() => onOpenWorkspace && onOpenWorkspace(selectedDoc)}
+              disabled={isOpeningWorkspace || !selectedDoc}
+              onClick={() => handleOpenWorkspace(selectedDoc)}
+              startIcon={isOpeningWorkspace ? <CircularProgress size={16} sx={{ color: '#ffffff' }} /> : null}
               sx={{
                 bgcolor: '#1e3a5f',
                 color: '#ffffff',
@@ -1232,9 +1260,13 @@ export default function Documents({
                   bgcolor: '#152943',
                   boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
                 },
+                '&.Mui-disabled': {
+                  bgcolor: '#94a3b8',
+                  color: '#ffffff',
+                },
               }}
             >
-              Open review workspace
+              {isOpeningWorkspace ? 'Opening workspace...' : 'Open review workspace'}
             </Button>
           </Box>
         </Box>

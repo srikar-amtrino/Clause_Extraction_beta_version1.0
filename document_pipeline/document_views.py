@@ -132,6 +132,8 @@ def _document_row(document, extraction_run, classification_run, review_counts=No
         'document_id': str(document.id),
         'name': document.name,
         'title': document.document_title,
+        'agreement_type': document.agreement_type,
+        'sectorial_category': document.sectorial_category,
         'drive_file_id': document.source_external_id,
         'drive_folder_id': document.source_parent_id,
         'drive_web_link': document.drive_web_link or None,

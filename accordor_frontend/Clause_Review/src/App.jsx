@@ -8,7 +8,9 @@ import Overview from './components/Overview';
 import Documents from './components/Documents';
 import ReviewWorkspace from './components/ReviewWorkspace';
 import ActivityLog from './components/ActivityLog';
+import VectorPlayground from './components/VectorPlayground';
 import FolderMetadataModal from './components/FolderMetadataModal';
+import ErrorBoundary from './components/ErrorBoundary';
 import Login from './components/auth/Login';
 import Signup from './components/auth/Signup';
 import ProtectedRoute from './components/auth/ProtectedRoute';
@@ -109,6 +111,8 @@ function normalizeDoc(d, currentUser = null) {
     name: d.name || 'Untitled Document',
     fileName: d.name || 'document.docx',
     title: d.title || d.name,
+    agreementType: d.agreement_type || d.agreementType || '',
+    sectorial: d.sectorial_category || d.sectorial || '',
     pages,
     clauses,
     paragraphs,
@@ -161,6 +165,8 @@ function AppWorkspace() {
     ? 'documents'
     : location.pathname.includes('/activity-log')
     ? 'activity-log'
+    : location.pathname.includes('/vector-playground')
+    ? 'vector-playground'
     : 'overview';
 
   const [selectedReviewDoc, setSelectedReviewDoc] = useState(null);
@@ -207,7 +213,10 @@ function AppWorkspace() {
           if (syncResult && syncResult.folders) {
             driveFolders = syncResult.folders;
           } else if (driveState.folderIds && driveState.folderIds.length > 0) {
-            const fetchRes = await googleDriveService.fetchFiles(driveState.folderIds).catch(() => null);
+            const fetchRes = await googleDriveService.fetchFiles(driveState.folderIds, {
+              agreementType: driveState.agreementType,
+              sectorialCategory: driveState.sectorial,
+            }).catch(() => null);
             if (fetchRes && fetchRes.folders) driveFolders = fetchRes.folders;
           }
         }
@@ -352,13 +361,14 @@ function AppWorkspace() {
     if (nav === 'overview') navigate('/overview');
     else if (nav === 'documents') navigate('/documents');
     else if (nav === 'activity-log') navigate('/activity-log');
+    else if (nav === 'vector-playground') navigate('/vector-playground');
   };
 
   const handleOpenReviewWorkspace = (doc) => {
     const selected = doc || fetchedDocuments[0];
     if (selected) {
       setSelectedReviewDoc(selected);
-      navigate(`/review/${selected.id || selected.documentId || 'doc'}`);
+      navigate(`/review/${selected.documentId || selected.id || 'doc'}`);
     }
   };
 
@@ -427,7 +437,7 @@ function AppWorkspace() {
             folderPath: res.config?.folderPath || res.config?.folder_path || '',
             folderIds: res.config?.folderIds || res.config?.folder_ids || [],
             agreementType: res.config?.agreementType || res.config?.agreement_type || '',
-            sectorial: res.config?.sectorial || '',
+            sectorial: res.config?.sectorial || res.config?.sectorial_category || '',
             lastChecked: res.config?.lastChecked || 'just now',
             user: res.config?.user || { email: currentUser?.email || 'Google Account' },
           };
@@ -527,7 +537,10 @@ function AppWorkspace() {
       });
 
       // Fetch files from Google Drive
-      const data = await googleDriveService.fetchFiles([folder.id]);
+      const data = await googleDriveService.fetchFiles([folder.id], {
+        agreementType,
+        sectorialCategory: sectorial,
+      });
 
       // Check backend pipeline documents
       const pipelineRes = await documentService.list({ limit: 100 }).catch(() => null);
@@ -601,7 +614,10 @@ function AppWorkspace() {
       let driveFolders = syncResult?.folders || [];
 
       if (driveFolders.length === 0 && driveState.folderIds && driveState.folderIds.length > 0) {
-        const fetchRes = await googleDriveService.fetchFiles(driveState.folderIds).catch(() => null);
+        const fetchRes = await googleDriveService.fetchFiles(driveState.folderIds, {
+          agreementType: driveState.agreementType,
+          sectorialCategory: driveState.sectorial,
+        }).catch(() => null);
         if (fetchRes && fetchRes.folders) {
           driveFolders = fetchRes.folders;
         }
@@ -744,14 +760,16 @@ function AppWorkspace() {
         }}
       >
         {isReviewRoute ? (
-          <ReviewWorkspace
-            document={currentReviewDoc}
-            onBackToDocuments={handleBackToDocuments}
-            showToast={showToast}
-            isSidebarCollapsed={isSidebarCollapsed}
-            onToggleSidebar={() => setIsSidebarCollapsed((prev) => !prev)}
-            onUpdateDocument={handleUpdateDocument}
-          />
+          <ErrorBoundary onReset={handleBackToDocuments}>
+            <ReviewWorkspace
+              document={currentReviewDoc}
+              onBackToDocuments={handleBackToDocuments}
+              showToast={showToast}
+              isSidebarCollapsed={isSidebarCollapsed}
+              onToggleSidebar={() => setIsSidebarCollapsed((prev) => !prev)}
+              onUpdateDocument={handleUpdateDocument}
+            />
+          </ErrorBoundary>
         ) : (
           <>
             <TopNav
@@ -794,6 +812,8 @@ function AppWorkspace() {
               />
             ) : activeNav === 'activity-log' ? (
               <ActivityLog />
+            ) : activeNav === 'vector-playground' ? (
+              <VectorPlayground />
             ) : (
               <Overview
                 driveState={driveState}
@@ -908,6 +928,14 @@ export default function App() {
       />
       <Route
         path="/activity-log"
+        element={
+          <ProtectedRoute>
+            <AppWorkspace />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/vector-playground"
         element={
           <ProtectedRoute>
             <AppWorkspace />

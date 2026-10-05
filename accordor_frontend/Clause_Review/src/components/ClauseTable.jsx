@@ -27,6 +27,7 @@ import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import CheckCircleOutlinedIcon from '@mui/icons-material/CheckCircleOutlined';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
+import HistoryIcon from '@mui/icons-material/History';
 
 function formatBreadcrumbDisplay(text) {
   if (!text) return 'General';
@@ -59,6 +60,8 @@ export default function ClauseTable({
   isPreviewOpen,
   isContentsOpen,
   onToggleContents,
+  onTogglePreview,
+  onOpenHistory,
   onOpenPreview,
   onUpdateRow,
   availableCanonicalTypes = [],
@@ -120,11 +123,18 @@ export default function ClauseTable({
     return extractedClauses.filter((row) => {
       // 1. Tab filter
       if (activeFilter === 'to-review' && !row.needs_review) return false;
-      if (
-        activeFilter === 'needs-fix' &&
-        !(row.deviated || row.outcome === 'failed' || (row.review_reasons && row.review_reasons.length > 0))
-      )
-        return false;
+      if (activeFilter === 'needs-fix') {
+        const isNeedsReview =
+          !row.review?.decision &&
+          !row.isReviewed &&
+          (row.needs_review ||
+            row.needsReview ||
+            row.decision === 'needs_review' ||
+            row.deviated ||
+            row.outcome === 'failed' ||
+            (row.review_reasons && row.review_reasons.length > 0));
+        if (!isNeedsReview) return false;
+      }
       if (activeFilter === 'edited' && !row.review) return false;
       if (
         activeFilter === 'low-conf' &&
@@ -310,8 +320,53 @@ export default function ClauseTable({
           </Box>
         </Box>
 
-        {/* Right Buttons: Source document */}
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        {/* Right Buttons: Preview toggle, History, and Source document */}
+        <Box sx={{ display: 'flex' }}>
+          {/* {onTogglePreview && (
+            <Button
+              size="small"
+              startIcon={<VisibilityOutlinedIcon sx={{ fontSize: 16 }} />}
+              onClick={onTogglePreview}
+              sx={{
+                height: 28,
+                fontSize: '11.5px',
+                fontWeight: 500,
+                textTransform: 'none',
+                bgcolor: isPreviewOpen ? '#1e3a5f' : '#ffffff',
+                color: isPreviewOpen ? '#ffffff' : '#4a5159',
+                border: '1px solid',
+                borderColor: isPreviewOpen ? '#1e3a5f' : '#cfcfc8',
+                borderRadius: 1.5,
+                '&:hover': {
+                  bgcolor: isPreviewOpen ? '#152943' : '#f5f5f2',
+                },
+              }}
+            >
+              {isPreviewOpen ? 'Hide Preview' : 'Show Preview'}
+            </Button>
+          )}
+
+          {onOpenHistory && (
+            <Button
+              size="small"
+              startIcon={<HistoryIcon sx={{ fontSize: 16 }} />}
+              onClick={onOpenHistory}
+              sx={{
+                height: 28,
+                fontSize: '11.5px',
+                fontWeight: 500,
+                textTransform: 'none',
+                bgcolor: '#ffffff',
+                color: '#4a5159',
+                border: '1px solid #cfcfc8',
+                borderRadius: 1.5,
+                '&:hover': { bgcolor: '#f5f5f2' },
+              }}
+            >
+              History
+            </Button>
+          )} */}
+
           <Button
             size="small"
             startIcon={<ArticleOutlinedIcon sx={{ fontSize: 16 }} />}
@@ -363,14 +418,25 @@ export default function ClauseTable({
                   padding="checkbox"
                   sx={{ bgcolor: '#fafaf8', py: 1, borderBottom: '1px solid #e3e3de', width: 44, minWidth: 44, verticalAlign: 'middle' }}
                 >
-                  <Checkbox
-                    size="small"
-                    indeterminate={selectedRows.length > 0 && selectedRows.length < filteredClauses.length}
-                    checked={filteredClauses.length > 0 && selectedRows.length === filteredClauses.length}
-                    onChange={onSelectAll}
-                    disabled={filteredClauses.length === 0}
-                    sx={{ p: 0.5 }}
-                  />
+                  {(() => {
+                    const visibleKeys = filteredClauses
+                      .map((r) => String(r.classification_id || r.id || r.clause_id))
+                      .filter(Boolean);
+                    const selectedStrings = (selectedRows || []).map(String);
+                    const selectedVisibleCount = visibleKeys.filter((k) => selectedStrings.includes(k)).length;
+                    const isAllVisibleSelected = visibleKeys.length > 0 && selectedVisibleCount === visibleKeys.length;
+                    const isSomeVisibleSelected = selectedVisibleCount > 0 && selectedVisibleCount < visibleKeys.length;
+                    return (
+                      <Checkbox
+                        size="small"
+                        indeterminate={isSomeVisibleSelected}
+                        checked={isAllVisibleSelected}
+                        onChange={(e) => (onSelectAll ? onSelectAll(visibleKeys, e) : null)}
+                        disabled={filteredClauses.length === 0}
+                        sx={{ p: 0.5 }}
+                      />
+                    );
+                  })()}
                 </TableCell>
                 <TableCell
                   sx={{ bgcolor: '#fafaf8', py: 1, fontSize: '11.5px', fontWeight: 600, color: '#7b838c', borderBottom: '1px solid #e3e3de', width: 85, minWidth: 85, verticalAlign: 'middle' }}
@@ -468,13 +534,19 @@ export default function ClauseTable({
                 </TableRow>
               ) : (
                 filteredClauses.map((row, idx) => {
-                  const isSelected = selectedRows.includes(idx);
+                  const rowKey = String(row.classification_id || row.id || row.clause_id || idx);
+                  const selectedStrings = (selectedRows || []).map(String);
+                  const isSelected =
+                    selectedStrings.includes(rowKey) ||
+                    (row.id && selectedStrings.includes(String(row.id))) ||
+                    (row.classification_id && selectedStrings.includes(String(row.classification_id))) ||
+                    (row.clause_id && selectedStrings.includes(String(row.clause_id))) ||
+                    selectedStrings.includes(String(idx));
                   const isPreviewActive =
                     isPreviewOpen &&
                     ((previewClause?.id && previewClause.id === row.id) ||
                       (previewClause?.clause_id && previewClause.clause_id === row.clause_id) ||
                       (previewClause?.paraId && previewClause.paraId === row.paraId));
-                  const rowKey = row.id || row.clause_id || row.paraId || idx;
                   const isRowHighlighted =
                     isPreviewActive ||
                     (highlightedClauseId &&
@@ -521,7 +593,7 @@ export default function ClauseTable({
                         <Checkbox
                           size="small"
                           checked={isSelected}
-                          onChange={() => onToggleRow(idx)}
+                          onChange={() => onToggleRow(row.classification_id || row.id || row.clause_id || idx, row)}
                           onClick={(e) => e.stopPropagation()}
                           sx={{ p: 0.5 }}
                         />
@@ -530,13 +602,26 @@ export default function ClauseTable({
                       {/* Clause ID */}
                       <TableCell sx={{ py: 1.25, verticalAlign: 'middle' }}>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <Tooltip title={row.needs_review ? 'Needs review' : 'High confidence / Verified'}>
+                          <Tooltip
+                            title={
+                              row.isReviewed || row.review?.decision
+                                ? 'Reviewed / Verified'
+                                : row.needs_review || row.needsReview || row.decision === 'needs_review'
+                                  ? 'Needs review'
+                                  : 'High confidence / Verified'
+                            }
+                          >
                             <Box
                               sx={{
                                 width: 8,
                                 height: 8,
                                 borderRadius: '50%',
-                                bgcolor: row.needs_review ? '#f59e0b' : '#22c55e',
+                                bgcolor:
+                                  row.isReviewed || row.review?.decision
+                                    ? '#22c55e'
+                                    : row.needs_review || row.needsReview || row.decision === 'needs_review'
+                                      ? '#f59e0b'
+                                      : '#22c55e',
                                 flexShrink: 0,
                               }}
                             />
@@ -817,7 +902,11 @@ export default function ClauseTable({
                           disabled={!canEdit}
                           onClick={(e) => {
                             e.stopPropagation();
-                            setLabelAnchor({ el: e.currentTarget, rowId: row.id, current: row.label });
+                            setLabelAnchor({
+                              el: e.currentTarget,
+                              rowId: row.classification_id || row.id || row.clause_id,
+                              current: row.label,
+                            });
                           }}
                           sx={{
                             height: 26,
@@ -860,7 +949,7 @@ export default function ClauseTable({
                             value={row.sub_type || ''}
                             onClick={(e) => e.stopPropagation()}
                             onChange={(e) =>
-                              onUpdateRow(row.id, {
+                              onUpdateRow(row.classification_id || row.id || row.clause_id, {
                                 sub_type: e.target.value,
                                 subType: e.target.value,
                               })
@@ -892,7 +981,7 @@ export default function ClauseTable({
                               if (!canEdit) return;
                               setTypeAnchor({
                                 el: e.currentTarget,
-                                rowId: row.id,
+                                rowId: row.classification_id || row.id || row.clause_id,
                                 current: row.type_name || row.canonicalType,
                               });
                             }}
@@ -1069,7 +1158,14 @@ export default function ClauseTable({
                 onUpdateRow(typeAnchor.rowId, {
                   type_name: t,
                   canonicalType: t,
-                  type: t === 'Unassigned' ? null : t.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+                  type:
+                    t === 'Unassigned'
+                      ? null
+                      : t
+                          .toLowerCase()
+                          .replace(/\s*&\s*/g, '-and-')
+                          .replace(/[^a-z0-9]+/g, '-')
+                          .replace(/^-+|-+$/g, ''),
                 });
                 setTypeAnchor(null);
               }}
