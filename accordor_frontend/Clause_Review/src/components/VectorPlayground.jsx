@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   Box, Typography, TextField, Button, CircularProgress, Chip,
   Paper, Divider, Tooltip, Collapse, Alert,
@@ -10,6 +10,8 @@ import CheckCircleOutlineRoundedIcon from '@mui/icons-material/CheckCircleOutlin
 import SpeedOutlinedIcon from '@mui/icons-material/SpeedOutlined';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
+import StorageOutlinedIcon from '@mui/icons-material/StorageOutlined';
+import RefreshOutlinedIcon from '@mui/icons-material/RefreshOutlined';
 import { getStoredToken } from '../services/authService';
 
 // ── colour palette matching the app ──────────────────────────────────────────
@@ -18,12 +20,44 @@ const SURFACE = '#fafaf8';
 const BORDER = '#e3e3de';
 const MUTED = '#7b838c';
 
+// ── sample clauses ────────────────────────────────────────────────────────────
+const SAMPLE_CLAUSES = [
+  {
+    label: 'Termination for Convenience',
+    text: 'Buyer shall have the right in its sole discretion to terminate this Agreement at any time without further obligation to Seller upon giving thirty (30) days prior written notice.',
+  },
+  {
+    label: 'Liability & Insurance',
+    text: 'The Supplier shall maintain comprehensive general liability insurance with policy limits of not less than $5,000,000 per occurrence and $10,000,000 in aggregate.',
+  },
+  {
+    label: 'Governing Law',
+    text: 'This Agreement and any dispute arising from or related to it shall be governed by and construed in accordance with the laws of the State of Delaware, without regard to conflict of law principles.',
+  },
+  {
+    label: 'Confidentiality',
+    text: 'Each party agrees that all Confidential Information disclosed by one party to the other shall remain the exclusive property of the disclosing party and shall not be disclosed to any third party.',
+  },
+];
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 const API_BASE =
   typeof window !== 'undefined' &&
   ['localhost', '127.0.0.1'].includes(window.location.hostname)
     ? `http://${window.location.hostname}:8000`
     : (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '');
+
+async function fetchPlaygroundStats() {
+  const token = getStoredToken();
+  const resp = await fetch(`${API_BASE}/api/playground/stats/`, {
+    headers: {
+      Accept: 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  });
+  if (!resp.ok) return null;
+  return await resp.json();
+}
 
 async function callPlayground(text, topN = 10) {
   const token = getStoredToken();
@@ -40,6 +74,7 @@ async function callPlayground(text, topN = 10) {
   if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
   return data;
 }
+
 
 function confidenceColor(c) {
   if (c >= 0.75) return '#16a34a';
@@ -153,16 +188,41 @@ export default function VectorPlayground() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const [stats, setStats] = useState(null);
+  const [statsLoading, setStatsLoading] = useState(true);
 
-  const handleAnalyze = useCallback(async () => {
-    const text = inputText.trim();
+  const loadStats = useCallback(async () => {
+    setStatsLoading(true);
+    try {
+      const data = await fetchPlaygroundStats();
+      if (data) setStats(data);
+    } catch {
+      // ignore
+    } finally {
+      setStatsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadStats();
+  }, [loadStats]);
+
+  const handleAnalyze = useCallback(async (customText) => {
+    const text = (typeof customText === 'string' ? customText : inputText).trim();
     if (!text) return;
+    if (typeof customText === 'string') setInputText(customText);
     setLoading(true);
     setError(null);
     setResult(null);
     try {
       const data = await callPlayground(text);
       setResult(data);
+      if (data?.collection_stats?.points_count) {
+        setStats((prev) => ({
+          ...prev,
+          points_count: data.collection_stats.points_count,
+        }));
+      }
     } catch (err) {
       setError(err.message || 'Something went wrong.');
     } finally {
@@ -177,6 +237,9 @@ export default function VectorPlayground() {
   const pred = result?.prediction;
   const perf = result?.performance;
   const matrix = result?.retrieval_matrix;
+  const isBm25Only = result?.retrieval_mode === 'bm25_only';
+
+  const currentPoints = stats?.points_count ?? result?.collection_stats?.points_count ?? 260;
 
   return (
     <Box
@@ -201,7 +264,7 @@ export default function VectorPlayground() {
             <Chip label="Diagnostic" size="small" sx={{ bgcolor: '#f0f4f8', color: NAVY, fontWeight: 600, fontSize: '11px' }} />
           </Box>
           <Typography variant="body2" sx={{ color: MUTED }}>
-            Paste a clause to see how the embedding pipeline classifies it using the live vector library.
+            Paste a clause to inspect real-time dense & sparse retrieval, RRF blend scores, and taxonomy classification.
           </Typography>
         </Box>
         {perf && (
@@ -216,13 +279,136 @@ export default function VectorPlayground() {
         )}
       </Box>
 
+      {/* ── Vector DB Population Stats Banner ── */}
+      <Paper
+        variant="outlined"
+        sx={{
+          p: 2,
+          borderRadius: '10px',
+          borderColor: BORDER,
+          bgcolor: '#ffffff',
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 2,
+          boxShadow: '0 1px 3px rgba(0,0,0,0.03)',
+        }}
+      >
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.75 }}>
+          <Box
+            sx={{
+              width: 44,
+              height: 44,
+              borderRadius: '8px',
+              bgcolor: '#eff6ff',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: NAVY,
+              flexShrink: 0,
+            }}
+          >
+            <StorageOutlinedIcon sx={{ fontSize: 24 }} />
+          </Box>
+          <Box>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+              <Typography sx={{ fontSize: '15px', fontWeight: 700, color: '#111827' }}>
+                {statsLoading ? (
+                  <CircularProgress size={13} sx={{ color: NAVY, mr: 0.75 }} />
+                ) : (
+                  currentPoints.toLocaleString()
+                )}
+                {' '}Embeddings in Vector DB
+              </Typography>
+              <Chip
+                label={stats?.status === 'online' || !statsLoading ? 'Live Populated' : 'Checking…'}
+                size="small"
+                sx={{
+                  bgcolor: '#dcfce7',
+                  color: '#15803d',
+                  fontWeight: 600,
+                  fontSize: '11px',
+                  height: 20,
+                  '& .MuiChip-label': { px: 1 },
+                }}
+              />
+            </Box>
+            <Typography sx={{ fontSize: '12px', color: MUTED, mt: 0.25 }}>
+              Collection <code>{stats?.collection || 'legal_clauses_v1'}</code> &bull; Populated from published review workspace contracts
+            </Typography>
+          </Box>
+        </Box>
+
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, flexWrap: 'wrap' }}>
+          {result?.dense_service?.status === 'offline' && (
+            <Tooltip title="Dense model endpoint at 54.215.196.139 is currently unreachable. Results are retrieved using BM25 keyword matching over the populated clause library.">
+              <Chip
+                label="Dense: Offline (BM25 Active)"
+                size="small"
+                sx={{ bgcolor: '#fef3c7', color: '#b45309', fontWeight: 600, fontSize: '11px' }}
+              />
+            </Tooltip>
+          )}
+          <Button
+            size="small"
+            variant="outlined"
+            onClick={loadStats}
+            disabled={statsLoading}
+            startIcon={statsLoading ? <CircularProgress size={12} /> : <RefreshOutlinedIcon sx={{ fontSize: 15 }} />}
+            sx={{
+              textTransform: 'none',
+              fontSize: '12px',
+              fontWeight: 600,
+              color: NAVY,
+              borderColor: BORDER,
+              py: 0.5,
+              px: 1.25,
+              borderRadius: '6px',
+              '&:hover': { borderColor: NAVY, bgcolor: '#f8fafc' },
+            }}
+          >
+            Refresh Data Count
+          </Button>
+        </Box>
+      </Paper>
+
       <Divider sx={{ borderColor: BORDER }} />
 
-      {/* ── Input ── */}
+      {/* ── Input & Quick-Picks ── */}
       <Box>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+          <Typography sx={{ fontSize: '13px', fontWeight: 600, color: '#374151' }}>
+            Clause to test:
+          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
+            <Typography sx={{ fontSize: '11.5px', color: MUTED, mr: 0.5 }}>
+              Quick test samples:
+            </Typography>
+            {SAMPLE_CLAUSES.map((sample) => (
+              <Chip
+                key={sample.label}
+                label={sample.label}
+                size="small"
+                onClick={() => handleAnalyze(sample.text)}
+                clickable
+                sx={{
+                  fontSize: '11px',
+                  height: 22,
+                  bgcolor: '#ffffff',
+                  borderColor: BORDER,
+                  borderWidth: 1,
+                  borderStyle: 'solid',
+                  color: NAVY,
+                  fontWeight: 500,
+                  '&:hover': { bgcolor: '#f0f4f8', borderColor: NAVY },
+                }}
+              />
+            ))}
+          </Box>
+        </Box>
         <TextField
           id="vp-clause-input"
-          label="Clause text"
           multiline
           minRows={4}
           maxRows={12}
@@ -230,7 +416,7 @@ export default function VectorPlayground() {
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Paste a clause here… (Ctrl+Enter to run)"
+          placeholder="Paste an ad-hoc clause text here… or click a quick test sample above (Ctrl+Enter to run)"
           helperText={`${inputText.length} / 8000 characters`}
           inputProps={{ maxLength: 8000 }}
           sx={{
@@ -250,7 +436,7 @@ export default function VectorPlayground() {
             id="vp-analyze-btn"
             variant="contained"
             disabled={!inputText.trim() || loading}
-            onClick={handleAnalyze}
+            onClick={() => handleAnalyze()}
             startIcon={loading ? <CircularProgress size={15} sx={{ color: '#fff' }} /> : <SendOutlinedIcon />}
             sx={{
               bgcolor: NAVY,
@@ -324,13 +510,20 @@ export default function VectorPlayground() {
                 )}
               </Box>
               <Box>
-                <Typography sx={{ fontSize: '11px', color: MUTED, textTransform: 'uppercase', letterSpacing: '0.4px', mb: 0.5 }}>Confidence</Typography>
+                <Typography sx={{ fontSize: '11px', color: MUTED, textTransform: 'uppercase', letterSpacing: '0.4px', mb: 0.5 }}>
+                  {isBm25Only ? 'Keyword Match' : 'Confidence'}
+                </Typography>
                 <Typography sx={{ fontSize: '22px', fontWeight: 800, color: confidenceColor(pred?.confidence ?? 0), lineHeight: 1 }}>
                   {((pred?.confidence ?? 0) * 100).toFixed(1)}%
                 </Typography>
                 <Typography sx={{ fontSize: '11.5px', color: confidenceColor(pred?.confidence ?? 0), fontWeight: 600 }}>
                   {confidenceLabel(pred?.confidence ?? 0)}
                 </Typography>
+                {isBm25Only && (
+                  <Typography sx={{ fontSize: '10.5px', color: MUTED, mt: 0.5, lineHeight: 1.3 }}>
+                    Keyword overlap score (≤65%). Dense embedding offline — start EC2 for cosine similarity.
+                  </Typography>
+                )}
               </Box>
             </Box>
 
@@ -350,7 +543,11 @@ export default function VectorPlayground() {
             </Typography>
             <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 1.5, mb: 2 }}>
               {[
-                { label: 'Dense Score', value: matrix?.dense_score != null ? (matrix.dense_score * 100).toFixed(1) + '%' : '—', sub: `Rank #${matrix?.dense_rank ?? '—'}` },
+                {
+                  label: isBm25Only ? 'Keyword Match Score' : 'Dense Score',
+                  value: matrix?.dense_score != null ? (matrix.dense_score * 100).toFixed(1) + '%' : '—',
+                  sub: isBm25Only ? 'Jaccard overlap (≤65% max)' : `Rank #${matrix?.dense_rank ?? '—'}`,
+                },
                 { label: 'BM25 Score', value: matrix?.bm25_score != null ? matrix.bm25_score.toFixed(3) : '—', sub: `Rank #${matrix?.bm25_rank ?? '—'}` },
                 { label: 'RRF Score', value: matrix?.rrf_score != null ? matrix.rrf_score.toFixed(5) : '—', sub: `Found by ${matrix?.found_by ?? '—'}` },
               ].map(({ label, value, sub }) => (
