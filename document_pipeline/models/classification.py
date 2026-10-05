@@ -112,6 +112,17 @@ class Classification(models.Model):
                                     related_name='reviewed_classifications')
     reviewed_at = models.DateTimeField(null=True, blank=True)
 
+    # ---- Deleted by a reviewer ---------------------------------------------
+    # A clause legal decided should not stand on its own. The row is kept, so
+    # the delete can be undone and the run still covers every micro chunk;
+    # readers leave it out while deleted_at is set. merged_into is the clause
+    # its text was moved into, when the reviewer chose to keep the words.
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    deleted_by = models.ForeignKey('core.User', on_delete=models.SET_NULL, null=True, blank=True,
+                                   related_name='deleted_classifications')
+    merged_into = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True,
+                                    related_name='merged_from')
+
     class Meta:
         db_table = 'classifications'
         constraints = [

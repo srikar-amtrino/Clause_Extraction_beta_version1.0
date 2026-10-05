@@ -232,6 +232,7 @@ it stands now. Token required.
 - `model` is what the classifier answered, and never changes.
 - `original_text` is the document's own text, whatever edits were saved.
 - `review` is who saved the item and how, or `null` while nobody has.
+- `deleted_items` are the items a reviewer deleted. They are not in `items`.
 
 | parameter | notes |
 |---|---|
@@ -253,8 +254,8 @@ it stands now. Token required.
     "failed": 0, "needs_review": 97,
     "by_outcome": { "classified": 338 },
     "by_type": { "Clause: Payment Terms": 24, "Clause: Confidentiality": 18 },
-    "review": { "reviewed": 41, "pending": 297, "accepted": 30,
-                "corrected": 9, "rejected": 2 }
+    "review": { "reviewed": 41, "pending": 296, "accepted": 30,
+                "corrected": 9, "rejected": 2, "deleted": 1 }
   },
   "items": [
     {
@@ -285,6 +286,16 @@ it stands now. Token required.
       "review": null
     }
   ],
+  "deleted_items": [
+    {
+      "classification_id": "3b7e0c55-…", "clause_id": "c31", "number": "2.3",
+      "breadcrumb": "2 SCOPE OF SERVICES > 2.3 The Service Provider shall…",
+      "text": "The Service Provider shall install the System in Phases, and:",
+      "merged_into": { "classification_id": "8f2c1a94-…", "clause_id": "c32", "number": "(a)" },
+      "deleted_by": "legal@example.com", "deleted_by_name": "legal",
+      "deleted_at": "2026-10-05T07:30:00+00:00"
+    }
+  ],
   "access": { "user": { "id": "…", "username": "vamshi" }, "is_read_only": false,
               "locked_by": "vamshi", "locked_by_id": "…" },
   "vector_sync": { "pending_changes": 0, "last_synced_at": null },
@@ -311,13 +322,19 @@ it stands now. Token required.
 - `access.is_read_only` is `true` when you do not hold the lock: disable
   editing and Save.
 - `summary.review` counts decisions over the whole run and is **never null**,
-  only zeroed. A header can read "41 of 338 reviewed" straight from it, and it
-  is unaffected by `needs_review=true`.
+  only zeroed. A header can read "41 of 337 reviewed" straight from it, and it
+  is unaffected by `needs_review=true`. `deleted` items are outside `reviewed`
+  and `pending`.
+- `deleted_items` is in reading order, empty when nothing was deleted.
+  `merged_into` names the item the text was moved into, or is `null` for a
+  plain delete. Use it for a "Deleted" list with a Restore action.
 - `classification_run` is `null` when the document has not been classified.
   `summary` and `items` are then `null` / empty.
 - `filtered` is present **only** when `needs_review=true` was passed.
 - `items` is in reading order and has **one entry per micro chunk, always** —
   including the ones that failed. Coverage is provable; nothing drops silently.
+  The only exception is an item a reviewer deleted, which moves to
+  `deleted_items`.
 - **`clause_id` numbers skip, and that is expected.** A clause whose own words
   are only a section heading (`c3` "RECITALS", `c28` "PERSONAL DATA BREACHES")
   has nothing to classify, so it gets no item; it is in the `breadcrumb` of
@@ -410,7 +427,8 @@ What to send:
 
 ```json
 {
-  "saved": { "accepted": 1, "corrected": 2, "rejected": 1, "unchanged": 0 },
+  "saved": { "accepted": 1, "corrected": 2, "rejected": 1, "unchanged": 0,
+             "deleted_skipped": 0 },
   "review_status": "in_review",
   "items": [ "…every row you sent, in exactly the GET item shape…" ],
   "summary": { "…the GET summary, review counts updated…" },
@@ -433,6 +451,9 @@ DB button from `vector_sync`. No refetch needed.
   Highlight each row named in `errors` and show its `detail`.
 - **Saving twice is safe.** A row identical to its saved decision counts as
   `unchanged` and writes nothing.
+- **Deleted rows are skipped.** A row deleted since you loaded the list is not
+  saved and is counted as `deleted_skipped`. The rest of the Save still goes
+  through. Leave deleted rows out of `items` once you know about them.
 - **Saved in place.** Each item is one row in `classifications`; Save updates
   that row and never adds one. The model's answer stays in its own columns
   (`model` in the response). What changed, from what to what, is in the
@@ -441,7 +462,7 @@ DB button from `vector_sync`. No refetch needed.
   empty). `original_text` keeps the document's own words.
 - `review_status` becomes `reviewed` once every item in the document has been
   saved (`reopened_reviewed` for a document published before), otherwise
-  `in_review`.
+  `in_review`. Deleted items do not count.
 - One `saved_review` event goes to the document timeline per Save that wrote
   something. Its `metadata.items` lists every item that changed and how:
   `[{ classification_id, clause_id, changes: { type: { from, to }, text: { from, to }, … } }]`
@@ -456,6 +477,88 @@ DB button from `vector_sync`. No refetch needed.
 | `403` | you do not hold the lock |
 | `409` | the document was re-classified after you loaded it. Body carries the current `classification_run_id`: reload |
 | `423` | another reviewer holds the lock |
+
+## `POST /api/documents/<id>/classification/<classification_id>/delete/`
+
+**The Delete button.** Takes one item out of the review, for an item that
+should not stand on its own. Token and lock required. It changes Postgres only.
+The vector DB catches up on the next Update Vector DB.
+
+```json
+{ "classification_run_id": "5e60e15f-…", "merge_into_next": true,
+  "note": "Lead-in belongs with (a)." }
+```
+
+- **`merge_into_next`** (default `false`). With `true`, the item's text is put
+  at the start of the next item's text, on its own line, before the item is
+  deleted. The next item is the next one in reading order that is not deleted.
+  It then shows the combined text, with `original_text` unchanged. With
+  `false`, the item is just removed.
+- `note` is optional and goes into the activity log.
+
+`200`:
+
+```json
+{
+  "classification_id": "3b7e0c55-…",
+  "merged_into": "8f2c1a94-…",
+  "review_status": "in_review",
+  "items": [ "…the item the text was moved into, in the GET item shape; empty for a plain delete…" ],
+  "deleted_items": [ "…every deleted item, as in the GET…" ],
+  "summary": { "…the GET summary, counts updated…" },
+  "vector_sync": { "pending_changes": 1, "last_synced_at": "…" }
+}
+```
+
+Remove the item from your list, swap in `items` by `classification_id`, and
+re-render the header from `summary` and the Deleted list from `deleted_items`.
+No refetch is needed.
+
+- **Nothing is removed for good.** The row is kept and marked deleted. That is
+  how Restore can bring it back, and how the activity log keeps the full story.
+- **The vector DB.** If the document was never published, there is nothing to
+  remove there. If it was published, the item counts in
+  `vector_sync.pending_changes`, and the next Update Vector DB deletes its
+  vector. A merged-into item is re-embedded with its new text.
+- One `deleted_item` event goes to the timeline. Its metadata holds
+  `classification_id`, `clause_id`, `text`, `merged_into`,
+  `merged_into_clause_id` and `note`.
+- A delete belongs to the classification run, like a Save. A
+  re-classification starts from a full list again.
+
+| status | when |
+|---|---|
+| `400` | already deleted; `merge_into_next` on the last item (nothing follows it); a bad body |
+| `401` | no or expired token |
+| `403` / `423` | you do not hold the lock / another reviewer does |
+| `404` | the item is not in this document's current classification |
+| `409` | re-classified since you loaded it. Body carries the current `classification_run_id` |
+
+## `POST /api/documents/<id>/classification/<classification_id>/restore/`
+
+**Undo a delete.** Body: `{ "classification_run_id": "…" }`. The same rules
+apply: token, lock and the same error statuses. `400` here means the item is
+not deleted.
+
+```json
+{
+  "classification_id": "3b7e0c55-…",
+  "unmerged_from": "8f2c1a94-…",
+  "merged_text_kept_in": null,
+  "review_status": "in_review",
+  "items": [ "…the restored item, and the item its text came back out of…" ],
+  "deleted_items": [ "…" ], "summary": { "…" }, "vector_sync": { "…" }
+}
+```
+
+- The item goes back into `items` at its place in reading order.
+- If its text was merged into the next item and that text is still there
+  unchanged, the text is taken back out (`unmerged_from`). If the reviewer
+  edited the next item since, its text is left alone (`merged_text_kept_in`)
+  for the reviewer to tidy by hand. Tell them so.
+- After a publish, the restored item counts as pending again, and the next
+  Update Vector DB puts it back.
+- One `restored_item` event goes to the timeline.
 
 ## `GET /api/taxonomy/`
 
@@ -503,6 +606,8 @@ every write also needs the document's lock.
    The lock expires 120 s after the last renewal.
 5. Edits stay in the browser; remember which rows were changed or verified.
 6. Save → `POST .../classification/save/` with those rows.
+   Delete → `POST .../classification/<classification_id>/delete/`. It acts
+   at once, with no Save needed; Restore undoes it.
 7. Update Vector DB → only once Save has left something pending
    (`vector_sync.pending_changes > 0`).
 8. On leaving: `POST .../workspace/lock/release/`.
@@ -511,10 +616,13 @@ every write also needs the document's lock.
 
 ### The older workspace API
 
-The endpoints below edit a workspace copy of each verdict one paragraph at a
-time. **The review screen does not use them.** A Save through
-`/classification/save/` keeps those rows up to date itself, because Update
-Vector DB reads them. Their docs are kept for reference.
+The endpoints below read the workspace copy of each verdict. **The review
+screen does not use them.** A Save or Delete through `/classification/` keeps
+those rows up to date itself, because Update Vector DB reads them. The old
+per-paragraph and bulk edit endpoints (`workspace/paragraphs/<id>/`,
+`workspace/bulk-update/`) are gone: they wrote this copy alone, so the vector
+DB could get text the review screen never showed. Every edit goes through
+Save.
 
 ## `GET /api/documents/<id>/workspace/`
 
@@ -632,54 +740,6 @@ Taking the lock moves `needs_review` → `in_review`, and `published` →
 A write without the lock is refused with `403`; a write while someone else holds
 it with `423`.
 
-## `POST /api/documents/<id>/workspace/paragraphs/<paragraph_id>/`
-
-Edit one row. Send only the fields that changed:
-
-```json
-{
-  "reviewed_text": "…",
-  "label": "Clause",
-  "canonical_type": "fees-and-payment",
-  "sub_type": "Late Payment Interest",
-  "is_reviewed": true
-}
-```
-
-| field | effect |
-|---|---|
-| `reviewed_text` | replaces the editable text |
-| `label` | `Clause` or `Non-clause` |
-| `canonical_type` | a type `key`, or `""` to clear it |
-| `sub_type` | free text |
-| `is_reviewed` | `true` ticks the row and records you as reviewer; `false` unticks it |
-
-**→ `{ "paragraph_id": "chunk_c2_micro", "updated": true }`** — not the row.
-Apply what you sent to local state, or refetch the workspace.
-
-**The backend stores these values as sent, without checking them.** The
-frontend has to:
-
-- send a `canonical_type` that is a `key` from `/api/taxonomy/`: from
-  `clause_types` when the row's label is `Clause`, from `non_clause_types` when
-  it is `Non-clause`;
-- send `sub_type: ""` together with `label: "Non-clause"` — a Non-clause has no
-  sub-type;
-- send `label` as exactly `Clause` or `Non-clause`.
-
-## `POST /api/documents/<id>/workspace/bulk-update/`
-
-The same change on many rows — "mark all visible as reviewed".
-
-```json
-{ "paragraph_ids": ["chunk_c2_micro", "chunk_c3_micro"], "is_reviewed": true }
-```
-
-`paragraph_ids` is required. Also takes `is_reviewed`, `label` and
-`canonical_type` (not text or `sub_type`). **→ `{ "updated": 2 }`.** Ids that
-do not exist are skipped without an error, so compare `updated` with the number
-you sent.
-
 ## Draft (autosave)
 
 - `POST .../workspace/draft/` with `{ "payload": [ … ] }` →
@@ -689,8 +749,8 @@ you sent.
   there is no draft. Note the path ends in `discard/` and the method is `DELETE`.
 
 The workspace only reports that a draft **exists**; it does not return the
-payload, so a draft cannot be restored from the server today. Row edits are
-saved as they are made, so no edit depends on the draft.
+payload, so a draft cannot be restored from the server today. Edits are
+saved by Save, so no edit depends on the draft.
 
 ## `POST /api/documents/<id>/workspace/save/`
 
@@ -698,7 +758,7 @@ saved as they are made, so no edit depends on the draft.
 { "saved": true, "review_status": "reviewed", "progress": { "reviewed": 83, "total": 83 } }
 ```
 
-Writes no rows — they were saved as they were edited. It deletes your draft and
+Writes no rows; Save on `/classification/save/` does that. It deletes your draft and
 moves the status: `reviewed` when every row is reviewed, otherwise `in_review`
 (`reopened_reviewed` / `reopened_in_review` for a document that was published
 before).
@@ -714,9 +774,13 @@ Refused with `422` while anything blocks it:
 Otherwise queued: `{ "queued": true, "task_id": "…", "message": "…" }`. The
 background worker embeds the rows and sets the document `published`.
 
-A document is blocked while any row is not reviewed, any `Clause` row has no
-`canonical_type`, or any row's `reviewed_text` is empty. The workspace returns
+A document is blocked while any `Clause` row has no `canonical_type`, or any
+row's `reviewed_text` is empty. Deleted items never block. The workspace returns
 the same `blockers` list, so the publish button can be disabled up front.
+
+Deleted items are never embedded. One that an earlier publish put in the vector
+DB has its vector deleted first. The result's `removed` says how many, and the
+message reads "…, 2 deleted removed" when there were any.
 
 ## Review status
 
@@ -799,9 +863,11 @@ re-classified later gets a second set of these events; the ids in `metadata`
 tell the passes apart.
 
 `user_interaction` holds the reviewer's events: `acquired_lock`,
-`released_lock`, `modified_paragraph_text`, `changed_canonical_type`,
-`marked_paragraphs_reviewed`, `saved_draft`, `discarded_draft`,
-`draft_expired`, `saved_review`, `published_to_vector_db`.
+`released_lock`, `saved_draft`, `discarded_draft`, `draft_expired`,
+`saved_review`, `deleted_item`, `restored_item`, `published_to_vector_db`.
+Older timelines may also hold `modified_paragraph_text`,
+`changed_canonical_type` and `marked_paragraphs_reviewed`. Those came from the
+removed per-paragraph edit endpoints and are no longer written.
 
 ---
 
@@ -826,7 +892,10 @@ tell the passes apart.
    entry per changed id: `{ classification_id, label, type, sub_type }` from the
    row's current values, plus `text` when the text box was edited. Swap the returned `items` in and clear the set. On
    `400`, mark the rows in `errors`. On `409`, reload.
-9. Update Vector DB → enabled while `vector_sync.pending_changes > 0`.
+9. Delete on a row → confirm, with a "move its text into the next clause" checkbox
+   that sends `merge_into_next`. Drop the row, swap in the returned `items`, and
+   show `deleted_items` in a Deleted list with a Restore action.
+10. Update Vector DB → enabled while `vector_sync.pending_changes > 0`.
 
 ## What is not here yet
 
@@ -845,7 +914,9 @@ tell the passes apart.
 `POST /api/documents/<id>/workspace/publish/` validates the review workspace
 and queues a Celery task. The task sends reviewed paragraph text to the EC2
 endpoint at `http://54.215.196.139:8000/embed`, then upserts the returned vectors into the configured
-Qdrant collection. It returns `queued`, `task_id`, and a message; embedding is
+Qdrant collection. Items a reviewer deleted are skipped. Any that an earlier
+publish stored have their points deleted first (`POST
+/collections/<collection>/points/delete`). It returns `queued`, `task_id`, and a message; embedding is
 asynchronous. Failed upstream calls do not mark paragraphs as synced and are
 recorded on the vector sync run.
 
