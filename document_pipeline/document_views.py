@@ -1,6 +1,9 @@
+import hashlib
 import json
 
 from django.http import JsonResponse
+from django.utils.cache import get_conditional_response
+from django.utils.http import http_date
 from django.views.decorators.http import require_GET, require_POST
 
 from core.auth_helpers import require_auth
@@ -11,7 +14,7 @@ from .models import (
     ExtractionRun,
 )
 from .services import export_service, review_service
-from .services.ingestion_service import google_drive_source
+from .services.ingestion_service import GOOGLE_DRIVE
 from .services.review_service import SaveError
 
 # Read by a person as often as by a script: pretty-printed on purpose.
@@ -183,7 +186,10 @@ def document_list(request):
     if error:
         return JsonResponse({'detail': error}, status=400)
 
-    documents = Document.objects.filter(ingestion_source=google_drive_source(),
+    # Joined by name rather than through google_drive_source(): its
+    # get_or_create costs a round trip per call, and a source row that does not
+    # exist yet has no documents anyway.
+    documents = Document.objects.filter(ingestion_source__name=GOOGLE_DRIVE,
                                         deleted_at__isnull=True).select_related('current_reviewer')
 
     folder_ids = [f for f in request.GET.getlist('folder_id') if f]
@@ -282,16 +288,48 @@ def document_classification(request, document_id):
       needs_review=true   only the flagged items. The summary still counts the
                           whole run, so a queue can say "12 of 184".
 
-    `classification_run` is null when the document has not been classified."""
+    `classification_run` is null when the document has not been classified.
+
+    `publish` says whether Update Vector DB may run, from the saved review:
+    {can_publish, blockers, needs_review, rejected, missing_type, empty_text}.
+    Drive the button from it; publishing enforces the same rule.
+
+    Answers with an ETag; a request sending it back in If-None-Match gets a
+    304 without the classification rows being read at all."""
     document, error = _get_document(document_id)
     if error:
         return error
-    payload = export_service.classification_json(document)
     from .models import WorkspaceLock
     lock = (WorkspaceLock.objects.select_related('user')
             .filter(document_id=document_id).first())
     if lock and not lock.is_active:
         lock = None
+    run = export_service.current_classification_run(document)
+    vector_sync = review_service.vector_sync_state(document)
+    needs_review_only = _bool_param(request, 'needs_review') is True
+
+    # Everything the response depends on, read without touching the rows.
+    # Save, Delete and Restore move document.updated_at; a re-classification
+    # changes the run; the lock, the viewer and the sync state are per request.
+    fingerprint = '|'.join(str(part) for part in (
+        run.id if run else None, run.finished_at if run else None,
+        document.updated_at, document.review_status,
+        request.user.pk, lock.user_id if lock else None,
+        vector_sync['pending_changes'], vector_sync['last_synced_at'],
+        needs_review_only,
+    ))
+    etag = 'W/"%s"' % hashlib.sha1(fingerprint.encode()).hexdigest()
+    last_modified = document.updated_at
+    if run is not None:
+        last_modified = max(last_modified, run.finished_at or run.started_at)
+
+    # Only the ETag decides a 304: a lock or sync change moves no timestamp,
+    # so If-Modified-Since alone could answer "unchanged" when it is not.
+    not_modified = get_conditional_response(request, etag=etag)
+    if not_modified is not None:
+        return _cache_headers(not_modified, etag, last_modified)
+
+    payload = export_service.classification_json(document)
     payload['access'] = {
         'user': {
             'id': str(request.user.pk),
@@ -302,11 +340,22 @@ def document_classification(request, document_id):
         'locked_by_id': str(lock.user_id) if lock else None,
     }
     payload['document']['review_status'] = document.review_status
-    payload['vector_sync'] = review_service.vector_sync_state(document)
-    if _bool_param(request, 'needs_review') is True:
+    payload['vector_sync'] = vector_sync
+    payload['publish'] = review_service.publish_readiness(document)
+    if needs_review_only:
         payload['items'] = [item for item in payload['items'] if item['needs_review']]
         payload['filtered'] = {'needs_review': True, 'returned': len(payload['items'])}
-    return JsonResponse(payload, json_dumps_params=PRETTY)
+    return _cache_headers(JsonResponse(payload, json_dumps_params=PRETTY), etag, last_modified)
+
+
+def _cache_headers(response, etag, last_modified):
+    """Revalidate every time (no-cache), never share between users: the body
+    carries the viewer's own lock state, and auth is a Bearer header."""
+    response['ETag'] = etag
+    response['Last-Modified'] = http_date(last_modified.timestamp())
+    response['Cache-Control'] = 'private, no-cache'
+    response['Vary'] = 'Authorization'
+    return response
 
 
 @require_POST
@@ -326,7 +375,7 @@ def classification_save(request, document_id):
 
     -> 200 { "saved": {accepted, corrected, rejected, unchanged},
              "review_status": "...", "items": [...the rows sent, fresh...],
-             "summary": {...}, "vector_sync": {...} }
+             "summary": {...}, "vector_sync": {...}, "publish": {...} }
     -> 400 { "detail", "errors": [{classification_id, detail}] }
     -> 403 / 423 without the workspace lock
     -> 409 { "detail", "classification_run_id" } after a re-classification
@@ -362,6 +411,7 @@ def classification_save(request, document_id):
         'items': [item for item in fresh['items'] if item['classification_id'] in saved],
         'summary': fresh['summary'],
         'vector_sync': review_service.vector_sync_state(document),
+        'publish': review_service.publish_readiness(document),
     }, json_dumps_params=PRETTY)
 
 
@@ -395,6 +445,7 @@ def _item_write(request, document_id, write):
         deleted_items=fresh['deleted_items'],
         summary=fresh['summary'],
         vector_sync=review_service.vector_sync_state(document),
+        publish=review_service.publish_readiness(document),
     ), json_dumps_params=PRETTY)
 
 
@@ -412,7 +463,8 @@ def classification_delete(request, document_id, classification_id):
 
     -> 200 { "classification_id", "merged_into", "review_status",
              "items": [the next item, when text was moved into it],
-             "deleted_items": [...], "summary": {...}, "vector_sync": {...} }
+             "deleted_items": [...], "summary": {...}, "vector_sync": {...},
+             "publish": {...} }
     -> 400 { "detail" } already deleted, or nothing after it to merge into
     -> 403 / 423 without the workspace lock; 404 not in the current run
     -> 409 { "detail", "classification_run_id" } after a re-classification
@@ -440,7 +492,8 @@ def classification_restore(request, document_id, classification_id):
 
     -> 200 { "classification_id", "unmerged_from", "merged_text_kept_in",
              "review_status", "items": [the restored item, and the item its
-             text came back out of], "deleted_items", "summary", "vector_sync" }
+             text came back out of], "deleted_items", "summary", "vector_sync",
+             "publish" }
     -> 400 not deleted; 403 / 423 without the lock; 404; 409 as for delete
     """
     def write(document, payload):
