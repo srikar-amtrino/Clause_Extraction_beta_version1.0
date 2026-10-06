@@ -509,16 +509,23 @@ function AppWorkspace() {
   const stats = React.useMemo(() => {
     if (serverStats && serverStats.counts) {
       const c = serverStats.counts;
+      const reviewed = (c.reviewed || 0) + (c.published || 0) + (c.reopened_reviewed || 0);
+      const draft = (c.draft || 0);
       return {
         needsReview: (c.needs_review || 0),
         processing: (c.pending || 0) + (c.pending_classification || 0),
-        inReview: (c.in_review || 0),
-        draft: (c.draft || 0),
-        reviewed: (c.reviewed || 0) + (c.published || 0),
+        inReview: (c.in_review || 0) + (c.reopened_in_review || 0),
+        draft,
+        // Overview reads both .reviewed and .inreviewed — keep both in sync
+        reviewed,
+        inreviewed: reviewed,
+        indraft: draft,
         updatedToVector: (c.published || 0),
       };
     }
     // Fallback to local derivation while document list is loading
+    const reviewed = extractedDocuments.filter((d) => d.status === 'Reviewed' || (d.extractionStatus === 'classified' && d.needsReview === 0)).length;
+    const draft = queueDocuments.filter((d) => d.extractionStatus === 'rejected').length + extractedDocuments.filter((d) => d.status === 'Draft').length;
     return {
       needsReview: extractedDocuments.filter((d) => (d.needsReview > 0) || d.status === 'Needs review').length,
       processing: queueDocuments.filter((d) => {
@@ -526,8 +533,11 @@ function AppWorkspace() {
         return s === 'pending' || s === 'extracted' || s === 'extracted_with_warnings';
       }).length,
       inReview: extractedDocuments.filter((d) => d.status === 'In review' || Boolean(d.current_reviewer)).length,
-      draft: queueDocuments.filter((d) => d.extractionStatus === 'rejected').length + extractedDocuments.filter((d) => d.status === 'Draft').length,
-      reviewed: extractedDocuments.filter((d) => d.status === 'Reviewed' || (d.extractionStatus === 'classified' && d.needsReview === 0)).length,
+      draft,
+      reviewed,
+      // Overview reads both .reviewed and .inreviewed — keep both in sync
+      inreviewed: reviewed,
+      indraft: draft,
       updatedToVector: extractedDocuments.filter((d) => d.vectorDbStatus && d.vectorDbStatus.startsWith('Updated')).length,
     };
   }, [serverStats, extractedDocuments, queueDocuments]);
