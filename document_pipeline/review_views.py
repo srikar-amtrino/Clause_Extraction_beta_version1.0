@@ -61,13 +61,23 @@ def _err(msg, status=400):
 
 
 def _get_lock(document_id):
-    """Return active WorkspaceLock or None."""
-    from document_pipeline.models import WorkspaceLock
+    """Return active WorkspaceLock or None.
+
+    If a lock row exists but its TTL has expired, delete it and clear the
+    denormalised ``current_reviewer`` on the Document so the next caller
+    sees a clean state without waiting for the background cleaner task.
+    """
+    from document_pipeline.models import Document, WorkspaceLock
     try:
         lock = WorkspaceLock.objects.select_related('user').get(document_id=document_id)
-        return lock if lock.is_active else None
     except WorkspaceLock.DoesNotExist:
         return None
+    if lock.is_active:
+        return lock
+    # Expired — remove ghost lock atomically.
+    lock.delete()
+    Document.objects.filter(pk=document_id).update(current_reviewer=None)
+    return None
 
 
 def _check_editable(document_id, user):
@@ -743,3 +753,68 @@ def document_queue(request):
         'needs_review': needs_review,
         'unprocessable': unprocessable,
     })
+
+
+# ---------------------------------------------------------------------------
+# Global user-level activity feed  GET /api/activity/
+# ---------------------------------------------------------------------------
+
+@require_auth
+@require_http_methods(['GET'])
+def global_activity_feed(request):
+    """Recent activity events across all documents.
+
+    Query params (all optional):
+      limit=<n>           max events to return, default 50, cap 200
+      user=<username>     filter by actor username
+      document_id=<uuid>  filter to one document
+      action=<code>       filter by action code (repeatable)
+      phase=<code>        filter by phase code (repeatable)
+    """
+    from document_pipeline.models import DocumentActivityLog
+
+    limit_raw = request.GET.get('limit', '50')
+    try:
+        limit = min(int(limit_raw), 200)
+    except (ValueError, TypeError):
+        return _err('limit must be a whole number.')
+
+    qs = (
+        DocumentActivityLog.objects
+        .select_related('actor_user', 'document')
+        .order_by('-created_at')
+    )
+
+    if username := (request.GET.get('user') or '').strip():
+        qs = qs.filter(actor_user__username__iexact=username)
+
+    if doc_id := (request.GET.get('document_id') or '').strip():
+        qs = qs.filter(document_id=doc_id)
+
+    actions = [a for a in request.GET.getlist('action') if a]
+    if actions:
+        qs = qs.filter(action__in=actions)
+
+    phases = [p for p in request.GET.getlist('phase') if p]
+    if phases:
+        qs = qs.filter(phase__in=phases)
+
+    events = [
+        {
+            'id': str(entry.id),
+            'document_id': str(entry.document_id),
+            'document_name': entry.document.name if entry.document else None,
+            'phase': entry.phase,
+            'action': entry.action,
+            'summary': entry.summary,
+            'actor': (
+                entry.actor_user.username if entry.actor_user else entry.actor_system
+            ),
+            'metadata': entry.metadata,
+            'created_at': entry.created_at.isoformat(),
+        }
+        for entry in qs[:limit]
+    ]
+
+    return _json({'events': events, 'count': len(events)})
+

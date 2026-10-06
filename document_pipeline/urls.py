@@ -22,6 +22,7 @@ from .review_views import (
 	document_stats,
 	draft_discard,
 	draft_save,
+	global_activity_feed,
 	lock_acquire,
 	lock_heartbeat,
 	lock_release,
@@ -88,6 +89,7 @@ urlpatterns = [
 	path('documents/<uuid:document_id>/activity/', document_activity, name='document-activity'),
 	path('documents/<uuid:document_id>/contributors/', document_contributors, name='document-contributors'),
 	path('documents/<uuid:document_id>/note/', document_note, name='document-note'),
+	path('activity/', global_activity_feed, name='global-activity-feed'),
 	path('activity/calendar/', activity_calendar, name='activity-calendar'),
 
 	# Vector Playground -- read-only diagnostic endpoint.
