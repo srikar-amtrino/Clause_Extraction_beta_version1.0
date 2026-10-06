@@ -168,6 +168,7 @@ def classification_json(document):
             .order_by('chunk__order_index'))
     items, deleted_items = [], []
     by_type, by_outcome, by_decision = Counter(), Counter(), Counter()
+    live_needs_review = 0
     for c in rows:
         chunk = c.chunk
         if c.deleted_at is not None:
@@ -198,6 +199,8 @@ def classification_json(document):
                 ('rejected' if c.review_decision == 'rejected' else 'failed')] += 1
         if c.review_decision:
             by_decision[c.review_decision] += 1
+        elif c.needs_review:
+            live_needs_review += 1
         items.append({
             # The handle a review decision is posted against. Stable across
             # requests, unlike clause_id, which is local to an extraction run.

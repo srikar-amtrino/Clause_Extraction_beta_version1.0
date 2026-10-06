@@ -141,6 +141,60 @@ def review_counts_by_run(run_ids):
     return counts
 
 
+def live_needs_review_by_run(run_ids):
+    """-> {run_id: int}  live count of items still awaiting human review.
+
+    An item still needs review when ALL of:
+      - needs_review=True  (model flagged it)
+      - review_decision is NULL  (no human decision saved yet)
+      - deleted_at is NULL       (not deleted)
+
+    This is a single batched query across all run_ids on the page, so calling
+    it from the list endpoint costs one extra DB round-trip rather than N.
+    Use this instead of classification_run.review_count which is frozen at the
+    time the pipeline run finishes and never decremented by user Saves.
+    """
+    if not run_ids:
+        return {}
+    rows = (
+        Classification.objects
+        .filter(
+            run_id__in=run_ids,
+            needs_review=True,
+            review_decision__isnull=True,
+            deleted_at__isnull=True,
+        )
+        .values('run_id')
+        .annotate(cnt=Count('id'))
+    )
+    return {row['run_id']: row['cnt'] for row in rows}
+
+
+def reviewers_by_run(run_ids):
+    """-> {run_id: [username, ...]}  distinct users who saved edits or deletions
+    in this classification run.
+    """
+    if not run_ids:
+        return {}
+    qs = (
+        Classification.objects
+        .filter(run_id__in=run_ids)
+        .filter(Q(reviewed_by__isnull=False) | Q(deleted_by__isnull=False))
+        .values('run_id', 'reviewed_by__username', 'deleted_by__username')
+    )
+    result = {rid: set() for rid in run_ids}
+    for row in qs:
+        rid = row['run_id']
+        u1 = row['reviewed_by__username']
+        u2 = row['deleted_by__username']
+        if u1:
+            result[rid].add(u1)
+        if u2:
+            result[rid].add(u2)
+    return {rid: sorted(list(users)) for rid, users in result.items()}
+
+
+
 def deleted_paragraph_ids(document):
     """-> the paragraph record ids (chunk local ids) of the items deleted in
     the document's current classification run.
