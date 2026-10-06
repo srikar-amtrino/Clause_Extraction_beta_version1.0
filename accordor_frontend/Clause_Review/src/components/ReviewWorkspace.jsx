@@ -1247,20 +1247,15 @@ export default function ReviewWorkspace({
       // Re-fetch fresh classification from database to get the updated data immediately
       let freshRows = [];
       const freshClass = await documentService.classification(targetDocId).catch(() => null);
-      let remainingNeedsReview = 0;
       if (freshClass && Array.isArray(freshClass.items) && freshClass.items.length > 0) {
         freshRows = freshClass.items.map((item, i) => mapClassificationItem(item, i, doc, freshClass));
         setExtractedClauses(freshRows);
-        remainingNeedsReview = freshRows.filter((r) => !r.review?.decision && !r.isReviewed && (r.needs_review || r.needsReview || r.decision === 'needs_review')).length;
         if (Array.isArray(freshClass.deleted_items)) {
           setDeletedClauses(freshClass.deleted_items.map((item, i) => mapClassificationItem(item, i, doc, freshClass)));
         }
         setSelectedRows([]);
         if (freshClass.summary) {
           setClassificationSummary(freshClass.summary);
-          if (typeof freshClass.summary.needs_review === 'number') {
-            remainingNeedsReview = freshClass.summary.needs_review;
-          }
         }
         if (freshClass.document) {
           setDocumentMeta(freshClass.document);
