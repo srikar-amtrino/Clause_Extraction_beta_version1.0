@@ -173,6 +173,14 @@ export const documentService = {
     return post(`/api/documents/${documentId}/classification/save/`, data);
   },
 
+  deleteClassificationItem(documentId, classificationId, data = {}) {
+    return post(`/api/documents/${documentId}/classification/${classificationId}/delete/`, data);
+  },
+
+  restoreClassificationItem(documentId, classificationId, data = {}) {
+    return post(`/api/documents/${documentId}/classification/${classificationId}/restore/`, data);
+  },
+
   getDocumentNote(documentId) {
     return get(`/api/documents/${documentId}/note/`);
   },
