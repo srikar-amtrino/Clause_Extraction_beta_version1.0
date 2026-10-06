@@ -167,7 +167,6 @@ export default function Documents({
 
   const [selectedDocId, setSelectedDocId] = useState(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(true);
-  const [isOpeningWorkspace, setIsOpeningWorkspace] = useState(false);
   const [typeMenuAnchor, setTypeMenuAnchor] = useState(null);
   const [reviewerMenuAnchor, setReviewerMenuAnchor] = useState(null);
 
@@ -235,27 +234,12 @@ export default function Documents({
     setIsDrawerOpen(true);
   };
 
-  // Open review workspace and call the classification endpoint for the document
-  const handleOpenWorkspace = async (docToOpen) => {
+  // Open review workspace directly without api call
+  const handleOpenWorkspace = (docToOpen) => {
     const targetDoc = docToOpen || selectedDoc;
     if (!targetDoc) return;
-    const documentId = targetDoc.documentId || targetDoc.id;
-
-    setIsOpeningWorkspace(true);
-    let classData = null;
-    try {
-      if (documentId) {
-        // Call the classification API for this document
-        classData = await documentService.classification(documentId);
-      }
-    } catch (err) {
-      console.warn('Direct classification fetch on workspace open notice:', err);
-    } finally {
-      setIsOpeningWorkspace(false);
-      if (onOpenWorkspace) {
-        const enrichedDoc = classData ? { ...targetDoc, _initialClassification: classData } : targetDoc;
-        onOpenWorkspace(enrichedDoc);
-      }
+    if (onOpenWorkspace) {
+      onOpenWorkspace(targetDoc);
     }
   };
 
@@ -600,11 +584,11 @@ export default function Documents({
               { id: 'all', label: `All ${counts.all}` },
               { id: 'needs-review', label: `Needs review ${counts.needsReview}` },
               { id: 'in-review', label: `In review ${counts.inReview}` },
-              { id: 'draft', label: `Draft ${counts.indraft}` },
+              // { id: 'draft', label: `Draft ${counts.indraft}` },
               { id: 'saved', label: `Saved ${counts.saved}` },
               { id: 'reviewed', label: `Reviewed ${counts.inreviewed}` },
-              { id: 'updated', label: `Updated ${counts.updated}` },
-              { id: 'rejected', label: `Rejected ${counts.rejected}` },
+              // { id: 'updated', label: `Updated ${counts.updated}` },
+              // { id: 'rejected', label: `Rejected ${counts.rejected}` },
             ].map((tab) => {
               const isSelected = activeFilter === tab.id;
               return (
@@ -670,7 +654,7 @@ export default function Documents({
               <MenuItem onClick={() => setTypeMenuAnchor(null)}>General</MenuItem>
             </Menu>
 
-            <Button
+            {/* <Button
               size="small"
               endIcon={<KeyboardArrowDownIcon sx={{ fontSize: 14 }} />}
               onClick={(e) => setReviewerMenuAnchor(e.currentTarget)}
@@ -698,7 +682,7 @@ export default function Documents({
               <MenuItem onClick={() => setReviewerMenuAnchor(null)}>
                 {driveState.user?.name || driveState.user?.email || 'Current Reviewer'}
               </MenuItem>
-            </Menu>
+            </Menu> */}
           </Box>
         </Box>
 
@@ -1244,9 +1228,8 @@ export default function Documents({
             <Button
               variant="contained"
               fullWidth
-              disabled={isOpeningWorkspace || !selectedDoc}
+              disabled={!selectedDoc}
               onClick={() => handleOpenWorkspace(selectedDoc)}
-              startIcon={isOpeningWorkspace ? <CircularProgress size={16} sx={{ color: '#ffffff' }} /> : null}
               sx={{
                 bgcolor: '#1e3a5f',
                 color: '#ffffff',
@@ -1266,7 +1249,7 @@ export default function Documents({
                 },
               }}
             >
-              {isOpeningWorkspace ? 'Opening workspace...' : 'Open review workspace'}
+              Open review workspace
             </Button>
           </Box>
         </Box>
