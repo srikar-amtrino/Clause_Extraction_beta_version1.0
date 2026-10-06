@@ -8,6 +8,12 @@ import {
   Tooltip,
   TextField,
   CircularProgress,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  FormControlLabel,
+  Checkbox,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import UndoOutlinedIcon from '@mui/icons-material/UndoOutlined';
@@ -18,6 +24,8 @@ import HistoryIcon from '@mui/icons-material/History';
 import NoteAltOutlinedIcon from '@mui/icons-material/NoteAltOutlined';
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';
+import RestoreFromTrashIcon from '@mui/icons-material/RestoreFromTrash';
 
 import { documentService } from '../services/documentService';
 import { getStoredToken } from '../services/authService';
@@ -53,6 +61,48 @@ function resolveTaxonomyKey(typeOrName, taxonomyMap) {
     .replace(/\s*&\s*/g, '-and-')
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
+}
+
+function mapClassificationItem(item, i, doc, classRes) {
+  const clauseId = item.clause_id || (item.number ? `c${item.number}` : `c${i + 1}`);
+  const breadcrumb =
+    item.breadcrumb || item.heading_trail || item.heading || (item.number ? `Clause ${item.number}` : `Clause ${i + 1}`);
+  const reviewObj = item.review || null;
+  const isItemReviewed = Boolean(reviewObj?.decision);
+  const itemNeedsReview = isItemReviewed ? false : Boolean(item.needs_review);
+  return {
+    id: item.classification_id || item.id || `clause-${i}`,
+    classification_id: item.classification_id,
+    clause_id: clauseId,
+    paraId: clauseId,
+    number: item.number,
+    paragraph_ids: item.paragraph_ids || [],
+    heading_trail: breadcrumb,
+    breadcrumb: breadcrumb,
+    text: item.text || item.chunk_text || '',
+    reviewed_text: item.reviewed_text || item.text || item.chunk_text || '',
+    label: item.label || 'Clause',
+    type: item.type || 'unassigned',
+    type_name: item.type_name || item.type || 'Unassigned',
+    canonicalType: item.type_name || item.type || 'Unassigned',
+    sub_type: item.sub_type || null,
+    subType: item.sub_type || null,
+    preview: item.preview || doc?.webViewLink || classRes?.document?.drive_web_link || '',
+    confidence: item.confidence,
+    needs_review: itemNeedsReview,
+    needsReview: itemNeedsReview,
+    isReviewed: isItemReviewed,
+    review_reasons: isItemReviewed ? [] : (item.review_reasons || []),
+    deviated: isItemReviewed ? false : Boolean(item.deviated),
+    outcome: isItemReviewed ? 'reviewed' : item.outcome,
+    expected_types: item.expected_types || [],
+    review: reviewObj,
+    decision: reviewObj?.decision || (itemNeedsReview ? 'needs_review' : 'accepted'),
+    note: reviewObj?.note || '',
+    merged_into: item.merged_into || null,
+    deleted_at: item.deleted_at || null,
+    deleted_by: item.deleted_by || null,
+  };
 }
 
 export default function ReviewWorkspace({
@@ -293,6 +343,15 @@ export default function ReviewWorkspace({
 
   // Data states
   const [extractedClauses, setExtractedClauses] = useState([]);
+  const [deletedClauses, setDeletedClauses] = useState([]);
+  const [deleteModalState, setDeleteModalState] = useState({
+    open: false,
+    clause: null,
+    clauses: [],
+    mergeIntoNext: false,
+    note: '',
+    isDeleting: false,
+  });
   const [classificationSummary, setClassificationSummary] = useState(null);
   const [classificationRunId, setClassificationRunId] = useState(null);
   const [documentMeta, setDocumentMeta] = useState(null);
@@ -327,10 +386,6 @@ export default function ReviewWorkspace({
   const handlePublishToVectorDb = async () => {
     const targetDocId = doc?.documentId || doc?.id || docId;
     if (!targetDocId || isPublishingToVectorDb) return;
-    if (needsReviewCount > 0) {
-      showToast?.(`Cannot update to Vector DB: ${needsReviewCount} clause(s) still need review.`, 'warning');
-      return;
-    }
     setIsPublishingToVectorDb(true);
     try {
       const result = await documentService.publishToVectorDb(targetDocId);
@@ -361,10 +416,10 @@ export default function ReviewWorkspace({
   };
 
   // Contents Drawer & Preview State
-  const [isContentsOpen, setIsContentsOpen] = useState(true);
+  const [isContentsOpen, setIsContentsOpen] = useState(false);
   const [expandedSections, setExpandedSections] = useState(() => new Set([1, 2, 3]));
   const [highlightedClauseId, setHighlightedClauseId] = useState(null);
-  const [isPreviewOpen, setIsPreviewOpen] = useState(true);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [previewClause, setPreviewClause] = useState(null);
   const previewContainerRef = useRef(null);
 
@@ -426,44 +481,17 @@ export default function ReviewWorkspace({
   // Immediately initialize clauses if pre-fetched classification was provided from document click
   useEffect(() => {
     if (doc?._initialClassification && Array.isArray(doc._initialClassification.items) && doc._initialClassification.items.length > 0) {
-      const initRows = doc._initialClassification.items.map((item, i) => {
-        const clauseId = item.clause_id || (item.number ? `c${item.number}` : `c${i + 1}`);
-        const breadcrumb =
-          item.breadcrumb || item.heading_trail || item.heading || (item.number ? `Clause ${item.number}` : `Clause ${i + 1}`);
-        const reviewObj = item.review || null;
-        const isItemReviewed = Boolean(reviewObj?.decision);
-        const itemNeedsReview = isItemReviewed ? false : Boolean(item.needs_review);
-        return {
-          id: item.classification_id || item.id || `clause-${i}`,
-          classification_id: item.classification_id,
-          clause_id: clauseId,
-          paraId: clauseId,
-          number: item.number,
-          paragraph_ids: item.paragraph_ids || [],
-          heading_trail: breadcrumb,
-          breadcrumb: breadcrumb,
-          text: item.text || item.chunk_text || '',
-          label: item.label || 'Clause',
-          type: item.type || 'unassigned',
-          type_name: item.type_name || item.type || 'Unassigned',
-          canonicalType: item.type_name || item.type || 'Unassigned',
-          sub_type: item.sub_type || null,
-          subType: item.sub_type || null,
-          preview: item.preview || doc.webViewLink || '',
-          confidence: item.confidence,
-          needs_review: itemNeedsReview,
-          needsReview: itemNeedsReview,
-          isReviewed: isItemReviewed,
-          review_reasons: isItemReviewed ? [] : (item.review_reasons || []),
-          deviated: isItemReviewed ? false : Boolean(item.deviated),
-          outcome: isItemReviewed ? 'reviewed' : item.outcome,
-          expected_types: item.expected_types || [],
-          review: reviewObj,
-          decision: reviewObj?.decision || (itemNeedsReview ? 'needs_review' : 'accepted'),
-          note: reviewObj?.note || '',
-        };
-      });
+      const initRows = doc._initialClassification.items.map((item, i) =>
+        mapClassificationItem(item, i, doc, doc._initialClassification)
+      );
       setExtractedClauses(initRows);
+      if (Array.isArray(doc._initialClassification.deleted_items)) {
+        setDeletedClauses(
+          doc._initialClassification.deleted_items.map((item, i) =>
+            mapClassificationItem(item, i, doc, doc._initialClassification)
+          )
+        );
+      }
       if (initRows.length > 0) {
         setPreviewClause(initRows[0]);
         setHighlightedClauseId(initRows[0].id || initRows[0].clause_id);
@@ -535,46 +563,14 @@ export default function ReviewWorkspace({
             setClassificationRunId(runId);
           }
 
-          const rows = classRes.items.map((item, i) => {
-            const clauseId = item.clause_id || (item.number ? `c${item.number}` : `c${i + 1}`);
-            const breadcrumb =
-              item.breadcrumb || item.heading_trail || item.heading || (item.number ? `Clause ${item.number}` : `Clause ${i + 1}`);
-            const reviewObj = item.review || null;
-            const isItemReviewed = Boolean(reviewObj?.decision);
-            const itemNeedsReview = isItemReviewed ? false : Boolean(item.needs_review);
-            return {
-              id: item.classification_id || item.id || `clause-${i}`,
-              classification_id: item.classification_id,
-              clause_id: clauseId,
-              paraId: clauseId,
-              number: item.number,
-              paragraph_ids: item.paragraph_ids || [],
-              heading_trail: breadcrumb,
-              breadcrumb: breadcrumb,
-              text: item.text || item.chunk_text || '',
-              label: item.label || 'Clause',
-              type: item.type || 'unassigned',
-              type_name: item.type_name || item.type || 'Unassigned',
-              canonicalType: item.type_name || item.type || 'Unassigned',
-              sub_type: item.sub_type || null,
-              subType: item.sub_type || null,
-              preview: item.preview || doc.webViewLink || classRes.document?.drive_web_link || '',
-              confidence: item.confidence,
-              needs_review: itemNeedsReview,
-              needsReview: itemNeedsReview,
-              isReviewed: isItemReviewed,
-              review_reasons: isItemReviewed ? [] : (item.review_reasons || []),
-              deviated: isItemReviewed ? false : Boolean(item.deviated),
-              outcome: isItemReviewed ? 'reviewed' : item.outcome,
-              expected_types: item.expected_types || [],
-              review: reviewObj,
-              decision: reviewObj?.decision || (itemNeedsReview ? 'needs_review' : 'accepted'),
-              note: reviewObj?.note || '',
-            };
-          });
+          const rows = classRes.items.map((item, i) => mapClassificationItem(item, i, doc, classRes));
+          const deletedRows = Array.isArray(classRes.deleted_items)
+            ? classRes.deleted_items.map((item, i) => mapClassificationItem(item, i, doc, classRes))
+            : [];
 
           if (isMounted) {
             setExtractedClauses(rows);
+            setDeletedClauses(deletedRows);
             if (rows.length > 0 && !previewClause) {
               setPreviewClause(rows[0]);
               setHighlightedClauseId(rows[0].id || rows[0].clause_id);
@@ -655,9 +651,6 @@ export default function ReviewWorkspace({
           return {
             ...row,
             ...updates,
-            needs_review: false,
-            needsReview: false,
-            isReviewed: true,
             isLocallyEdited: true,
             decision: updates.decision || (row.decision === 'rejected' ? 'rejected' : 'corrected'),
           };
@@ -831,6 +824,10 @@ export default function ReviewWorkspace({
       else next.add(secNum);
       return next;
     });
+  };
+
+  const handleToggleContents = () => {
+    setIsContentsOpen((prev) => !prev);
   };
 
   const handleContentsClauseClick = (clause) => {
@@ -1017,44 +1014,11 @@ export default function ReviewWorkspace({
       // Re-fetch fresh classification from database to get the updated data immediately
       const freshClass = await documentService.classification(targetDocId).catch(() => null);
       if (freshClass && Array.isArray(freshClass.items) && freshClass.items.length > 0) {
-        const freshRows = freshClass.items.map((item, i) => {
-          const clauseId = item.clause_id || (item.number ? `c${item.number}` : `c${i + 1}`);
-          const breadcrumb =
-            item.breadcrumb || item.heading_trail || item.heading || (item.number ? `Clause ${item.number}` : `Clause ${i + 1}`);
-          const reviewObj = item.review || null;
-          const isItemReviewed = Boolean(reviewObj?.decision);
-          const itemNeedsReview = isItemReviewed ? false : Boolean(item.needs_review);
-          return {
-            id: item.classification_id || item.id || `clause-${i}`,
-            classification_id: item.classification_id,
-            clause_id: clauseId,
-            paraId: clauseId,
-            number: item.number,
-            paragraph_ids: item.paragraph_ids || [],
-            heading_trail: breadcrumb,
-            breadcrumb: breadcrumb,
-            text: item.text || item.chunk_text || '',
-            label: item.label || 'Clause',
-            type: item.type || 'unassigned',
-            type_name: item.type_name || item.type || 'Unassigned',
-            canonicalType: item.type_name || item.type || 'Unassigned',
-            sub_type: item.sub_type || null,
-            subType: item.sub_type || null,
-            preview: item.preview || doc?.webViewLink || freshClass.document?.drive_web_link || '',
-            confidence: item.confidence,
-            needs_review: itemNeedsReview,
-            needsReview: itemNeedsReview,
-            isReviewed: isItemReviewed,
-            review_reasons: isItemReviewed ? [] : (item.review_reasons || []),
-            deviated: isItemReviewed ? false : Boolean(item.deviated),
-            outcome: isItemReviewed ? 'reviewed' : item.outcome,
-            expected_types: item.expected_types || [],
-            review: reviewObj,
-            decision: reviewObj?.decision || (itemNeedsReview ? 'needs_review' : 'accepted'),
-            note: reviewObj?.note || '',
-          };
-        });
+        const freshRows = freshClass.items.map((item, i) => mapClassificationItem(item, i, doc, freshClass));
         setExtractedClauses(freshRows);
+        if (Array.isArray(freshClass.deleted_items)) {
+          setDeletedClauses(freshClass.deleted_items.map((item, i) => mapClassificationItem(item, i, doc, freshClass)));
+        }
         setSelectedRows([]);
         if (freshClass.summary) {
           setClassificationSummary(freshClass.summary);
@@ -1066,8 +1030,7 @@ export default function ReviewWorkspace({
 
       const nowFormatted = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       setLastSavedTimestamp(nowFormatted);
-      const backendStatus = saveResult?.review_status || 'reviewed';
-      const displayStatus = backendStatus === 'reviewed' ? 'Reviewed' : (backendStatus === 'pending_review' ? 'Pending Review' : 'Saved');
+      const displayStatus = 'Saved';
       setDocumentStatus(displayStatus);
       setHasUnsavedChanges(false);
 
@@ -1108,6 +1071,233 @@ export default function ReviewWorkspace({
       }
     } finally {
       setIsSavingClassification(false);
+    }
+  };
+
+  const handleOpenDeleteModal = (targetClauses) => {
+    const list = Array.isArray(targetClauses) ? targetClauses : (targetClauses ? [targetClauses] : []);
+    if (list.length === 0) return;
+    setDeleteModalState({
+      open: true,
+      clause: list[0] || null,
+      clauses: list,
+      mergeIntoNext: false,
+      note: '',
+      isDeleting: false,
+    });
+  };
+
+  const handleConfirmDelete = async () => {
+    const targetDocId = doc?.documentId || doc?.id || docId;
+    if (!targetDocId) return;
+
+    let runId = classificationRunId;
+    if (!runId) {
+      const classInfo = await documentService.classification(targetDocId).catch(() => null);
+      runId =
+        classInfo?.classification_run?.classification_run_id ||
+        classInfo?.classification_run?.id ||
+        classInfo?.classification_run_id ||
+        classInfo?.summary?.classification_run_id;
+      if (runId) setClassificationRunId(runId);
+    }
+
+    setDeleteModalState((prev) => ({ ...prev, isDeleting: true }));
+
+    try {
+      const toDelete = deleteModalState.clauses;
+      let lastRes = null;
+      const deletedIds = new Set();
+      const updatedItemsMap = new Map();
+
+      for (const item of toDelete) {
+        const classId = item.classification_id || item.id;
+        if (!classId) continue;
+        const res = await documentService.deleteClassificationItem(targetDocId, classId, {
+          classification_run_id: runId,
+          merge_into_next: deleteModalState.mergeIntoNext,
+          note: deleteModalState.note || undefined,
+        });
+        lastRes = res;
+        deletedIds.add(String(classId));
+        deletedIds.add(String(item.clause_id));
+        deletedIds.add(String(item.id));
+
+        if (res?.items && Array.isArray(res.items)) {
+          res.items.forEach((it) => {
+            updatedItemsMap.set(String(it.classification_id), it);
+          });
+        }
+      }
+
+      // 1. Remove deleted from extractedClauses and update any merged next item
+      setExtractedClauses((prev) =>
+        prev
+          .filter(
+            (c) =>
+              !deletedIds.has(String(c.classification_id)) &&
+              !deletedIds.has(String(c.id)) &&
+              !deletedIds.has(String(c.clause_id))
+          )
+          .map((c) => {
+            const updated = updatedItemsMap.get(String(c.classification_id));
+            if (updated) {
+              return {
+                ...c,
+                text: updated.text || updated.chunk_text || c.text,
+                reviewed_text: updated.reviewed_text || updated.text || c.reviewed_text,
+                label: updated.label || c.label,
+                type: updated.type || c.type,
+                type_name: updated.type_name || c.type_name,
+              };
+            }
+            return c;
+          })
+      );
+
+      // 2. Update deletedClauses
+      if (lastRes?.deleted_items && Array.isArray(lastRes.deleted_items)) {
+        setDeletedClauses(lastRes.deleted_items.map((it, i) => mapClassificationItem(it, i, doc, lastRes)));
+      } else {
+        const newlyDeleted = toDelete.map((it) => ({
+          ...it,
+          merged_into: deleteModalState.mergeIntoNext ? { note: deleteModalState.note } : null,
+          deleted_at: new Date().toISOString(),
+        }));
+        setDeletedClauses((prev) => [...newlyDeleted, ...prev]);
+      }
+
+      // 3. Clear selected rows that were deleted
+      setSelectedRows((prev) => prev.filter((k) => !deletedIds.has(String(k))));
+
+      const count = toDelete.length;
+      const clauseName = toDelete[0]?.clause_id || '';
+      setDeleteModalState({ open: false, clause: null, clauses: [], mergeIntoNext: false, note: '', isDeleting: false });
+      showToast?.(
+        count > 1 ? `Deleted ${count} clauses.` : `Clause ${clauseName} deleted successfully.`,
+        'success'
+      );
+    } catch (err) {
+      console.error('Delete clause error:', err);
+      showToast?.(err?.data?.detail || err?.message || err?.detail || 'Failed to delete clause', 'error');
+      setDeleteModalState((prev) => ({ ...prev, isDeleting: false }));
+    }
+  };
+
+  const handleRestoreClause = async (clauseOrList) => {
+    const list = Array.isArray(clauseOrList) ? clauseOrList : (clauseOrList ? [clauseOrList] : []);
+    if (list.length === 0) return;
+
+    const targetDocId = doc?.documentId || doc?.id || docId;
+    if (!targetDocId) return;
+
+    let runId = classificationRunId;
+    if (!runId) {
+      const classInfo = await documentService.classification(targetDocId).catch(() => null);
+      runId =
+        classInfo?.classification_run?.classification_run_id ||
+        classInfo?.classification_run?.id ||
+        classInfo?.classification_run_id ||
+        classInfo?.summary?.classification_run_id;
+      if (runId) setClassificationRunId(runId);
+    }
+
+    try {
+      const restoredItems = [];
+      const restoredIds = new Set();
+      const updatedItemsMap = new Map();
+      let lastRes = null;
+      let hasKeptMergedText = false;
+      let hasUnmergedText = false;
+
+      for (const item of list) {
+        const classId = item.classification_id || item.id;
+        if (!classId) continue;
+
+        const res = await documentService.restoreClassificationItem(targetDocId, classId, {
+          classification_run_id: runId,
+        });
+        lastRes = res;
+        restoredIds.add(String(classId));
+        restoredIds.add(String(item.clause_id));
+
+        if (res?.merged_text_kept_in) hasKeptMergedText = true;
+        if (res?.unmerged_from) hasUnmergedText = true;
+
+        if (res?.items && Array.isArray(res.items)) {
+          res.items.forEach((it) => {
+            updatedItemsMap.set(String(it.classification_id), it);
+          });
+        }
+
+        if (updatedItemsMap.has(String(classId))) {
+          restoredItems.push(mapClassificationItem(updatedItemsMap.get(String(classId)), 0, doc, res));
+        } else {
+          restoredItems.push({ ...item, merged_into: null, deleted_at: null });
+        }
+      }
+
+      // 1. Update deletedClauses
+      if (lastRes?.deleted_items && Array.isArray(lastRes.deleted_items)) {
+        setDeletedClauses(lastRes.deleted_items.map((it, i) => mapClassificationItem(it, i, doc, lastRes)));
+      } else {
+        setDeletedClauses((prev) =>
+          prev.filter(
+            (c) =>
+              !restoredIds.has(String(c.classification_id)) &&
+              !restoredIds.has(String(c.id)) &&
+              !restoredIds.has(String(c.clause_id))
+          )
+        );
+      }
+
+      // 2. Put restored items back in extractedClauses and unmerge next clause if applicable
+      setExtractedClauses((prev) => {
+        const updatedPrev = prev.map((c) => {
+          const updated = updatedItemsMap.get(String(c.classification_id));
+          if (updated && !restoredIds.has(String(c.classification_id))) {
+            return {
+              ...c,
+              text: updated.text || updated.chunk_text || c.text,
+              reviewed_text: updated.reviewed_text || updated.text || c.reviewed_text,
+            };
+          }
+          return c;
+        });
+
+        const nextList = [...updatedPrev, ...restoredItems];
+        nextList.sort((a, b) => {
+          const numA = typeof a.number === 'number' ? a.number : parseInt(String(a.clause_id).replace(/\D/g, ''), 10) || 0;
+          const numB = typeof b.number === 'number' ? b.number : parseInt(String(b.clause_id).replace(/\D/g, ''), 10) || 0;
+          return numA - numB;
+        });
+        return nextList;
+      });
+
+      // Clear from selectedRows if selected
+      setSelectedRows((prev) => prev.filter((k) => !restoredIds.has(String(k))));
+
+      if (hasKeptMergedText) {
+        showToast?.(
+          `Clause restored. Note: The next clause was edited post-merge, so its text was left untouched. Please review and tidy by hand if needed.`,
+          'warning'
+        );
+      } else if (hasUnmergedText) {
+        showToast?.(
+          `Clause restored and text unmerged from the next clause.`,
+          'success'
+        );
+      } else {
+        showToast?.(
+          list.length > 1
+            ? `Restored ${list.length} clauses directly to active clauses.`
+            : `Clause ${list[0]?.clause_id || ''} restored directly to clauses.`,
+          'success'
+        );
+      }
+    } catch (err) {
+      console.error('Restore clause error:', err);
+      showToast?.(err?.data?.detail || err?.message || err?.detail || 'Failed to restore clause', 'error');
     }
   };
 
@@ -1265,34 +1455,6 @@ export default function ReviewWorkspace({
               }}
             />
 
-            {/* Needs Review Remaining Badge */}
-            {needsReviewCount > 0 ? (
-              <Chip
-                label={`${needsReviewCount} needs review`}
-                size="small"
-                sx={{
-                  height: 22,
-                  fontSize: '11px',
-                  fontWeight: 600,
-                  bgcolor: '#fef3c7',
-                  color: '#b45309',
-                  border: '1px solid #fde68a',
-                }}
-              />
-            ) : (
-              <Chip
-                label="All reviewed"
-                size="small"
-                sx={{
-                  height: 22,
-                  fontSize: '11px',
-                  fontWeight: 600,
-                  bgcolor: '#dcfce7',
-                  color: '#15803d',
-                  border: '1px solid #bbf7d0',
-                }}
-              />
-            )}
           </Box>
 
           {/* Action Buttons */}
@@ -1303,7 +1465,7 @@ export default function ReviewWorkspace({
               </Typography>
             )}
 
-            <Button
+            {/* <Button
               variant="outlined"
               size="small"
               startIcon={<UndoOutlinedIcon sx={{ fontSize: 15 }} />}
@@ -1318,7 +1480,7 @@ export default function ReviewWorkspace({
               }}
             >
               Undo
-            </Button>
+            </Button> */}
 
             <Button
               variant="contained"
@@ -1342,11 +1504,9 @@ export default function ReviewWorkspace({
 
             <Tooltip
               title={
-                needsReviewCount > 0
-                  ? `All clauses must be reviewed before updating to Vector DB (${needsReviewCount} remaining)`
-                  : !canEdit
-                    ? 'Document is read-only. Editing access required.'
-                    : 'Publish verified document data to Vector DB'
+                !canEdit
+                  ? 'Document is read-only. Editing access required.'
+                  : 'Publish verified document data to Vector DB'
               }
               arrow
             >
@@ -1361,18 +1521,18 @@ export default function ReviewWorkspace({
                       <CloudUploadOutlinedIcon sx={{ fontSize: 15 }} />
                     )
                   }
-                  disabled={needsReviewCount > 0 || !canEdit || isPublishingToVectorDb}
+                  disabled={!canEdit || isPublishingToVectorDb}
                   onClick={handlePublishToVectorDb}
                   sx={{
                     height: 30,
                     fontSize: '12px',
                     textTransform: 'none',
-                    bgcolor: needsReviewCount === 0 && canEdit ? '#059669' : '#94a3b8',
+                    bgcolor: canEdit ? '#059669' : '#94a3b8',
                     color: '#ffffff',
                     boxShadow: 'none',
                     fontWeight: 600,
                     '&:hover': {
-                      bgcolor: needsReviewCount === 0 && canEdit ? '#047857' : '#94a3b8',
+                      bgcolor: canEdit ? '#047857' : '#94a3b8',
                       boxShadow: 'none',
                     },
                     '&.Mui-disabled': {
@@ -1447,17 +1607,6 @@ export default function ReviewWorkspace({
             <span>
               Current reviewer <strong style={{ color: '#1b1f24' }}>{currentUserName}</strong>
             </span>
-          </Box>
-
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.75 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, fontSize: '11.5px', color: '#374151' }}>
-              <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: '#16a34a' }} />
-              <span>Reviewed {reviewedCount}</span>
-            </Box>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, fontSize: '11.5px', color: '#374151' }}>
-              <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: '#f59e0b' }} />
-              <span>Needs review {needsFixCount}</span>
-            </Box>
           </Box>
         </Box>
       </Box>
@@ -1571,7 +1720,7 @@ export default function ReviewWorkspace({
             previewClause={previewClause}
             isPreviewOpen={isPreviewOpen}
             isContentsOpen={isContentsOpen}
-            onToggleContents={() => setIsContentsOpen((prev) => !prev)}
+            onToggleContents={handleToggleContents}
             onTogglePreview={() => setIsPreviewOpen((prev) => !prev)}
             onOpenHistory={() => setActiveTab('history')}
             onOpenPreview={handleOpenPreview}
@@ -1585,6 +1734,9 @@ export default function ReviewWorkspace({
             typeFilter={typeFilter}
             onTypeFilterChange={setTypeFilter}
             needsFixCount={needsReviewCount}
+            deletedClauses={deletedClauses}
+            onDeleteClause={handleOpenDeleteModal}
+            onRestoreClause={handleRestoreClause}
           />
 
           {/* Right: Document Preview Panel */}
@@ -1750,6 +1902,108 @@ export default function ReviewWorkspace({
           </Box>
         </Box>
       )}
+
+      {/* Delete Clause Confirmation Dialog */}
+      <Dialog
+        open={deleteModalState.open}
+        onClose={() => !deleteModalState.isDeleting && setDeleteModalState((prev) => ({ ...prev, open: false }))}
+        maxWidth="sm"
+        fullWidth
+        slotProps={{
+          paper: {
+            sx: { borderRadius: 2, p: 1 },
+          },
+        }}
+      >
+        <DialogTitle sx={{ fontWeight: 600, fontSize: '16px', color: '#0f172a', pb: 1 }}>
+          {deleteModalState.clauses.length > 1
+            ? `Delete ${deleteModalState.clauses.length} Clauses`
+            : `Delete Clause ${deleteModalState.clause?.clause_id || ''}`}
+        </DialogTitle>
+        <DialogContent sx={{ pt: 1 }}>
+          <Typography sx={{ fontSize: '13px', color: '#475569', mb: 2 }}>
+            {deleteModalState.clauses.length > 1
+              ? `Are you sure you want to delete these ${deleteModalState.clauses.length} clauses? They will be moved to the Deleted filter where they can be restored at any time.`
+              : 'Are you sure you want to delete this clause? It will be moved to the Deleted filter where it can be restored at any time.'}
+          </Typography>
+
+          {deleteModalState.clause && (
+            <Box sx={{ p: 1.5, bgcolor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 1.5, mb: 2 }}>
+              <Typography sx={{ fontSize: '12px', fontWeight: 600, color: '#1e293b', mb: 0.5 }}>
+                {deleteModalState.clause.clause_id} · {deleteModalState.clause.breadcrumb || 'General'}
+              </Typography>
+              <Typography
+                sx={{
+                  fontSize: '12px',
+                  color: '#64748b',
+                  display: '-webkit-box',
+                  WebkitLineClamp: 3,
+                  WebkitBoxOrient: 'vertical',
+                  overflow: 'hidden',
+                }}
+              >
+                {deleteModalState.clause.text}
+              </Typography>
+            </Box>
+          )}
+
+          {/* <FormControlLabel
+            control={
+              <Checkbox
+                checked={deleteModalState.mergeIntoNext}
+                onChange={(e) => setDeleteModalState((prev) => ({ ...prev, mergeIntoNext: e.target.checked }))}
+                size="small"
+              />
+            }
+            label={
+              <Box>
+                <Typography sx={{ fontSize: '13px', fontWeight: 500, color: '#1e293b' }}>
+                  Merge text into next clause before deletion
+                </Typography>
+                <Typography sx={{ fontSize: '11px', color: '#64748b' }}>
+                  Prepends this clause's text to the next clause in reading order before deleting.
+                </Typography>
+              </Box>
+            }
+            sx={{ alignItems: 'flex-start', mb: 2, ml: 0 }}
+          /> */}
+
+          <TextField
+            fullWidth
+            size="small"
+            label="Reason / Note (optional)"
+            placeholder="e.g. Lead-in belongs with next clause"
+            value={deleteModalState.note}
+            onChange={(e) => setDeleteModalState((prev) => ({ ...prev, note: e.target.value }))}
+            sx={{ mt: 1 }}
+          />
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button
+            onClick={() => setDeleteModalState((prev) => ({ ...prev, open: false }))}
+            disabled={deleteModalState.isDeleting}
+            sx={{ textTransform: 'none', color: '#64748b', fontSize: '13px' }}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            color="error"
+            onClick={handleConfirmDelete}
+            disabled={deleteModalState.isDeleting}
+            startIcon={
+              deleteModalState.isDeleting ? (
+                <CircularProgress size={16} sx={{ color: '#ffffff' }} />
+              ) : (
+                <DeleteOutlinedIcon sx={{ fontSize: 16 }} />
+              )
+            }
+            sx={{ textTransform: 'none', fontWeight: 600, fontSize: '13px', px: 2 }}
+          >
+            {deleteModalState.isDeleting ? 'Deleting...' : 'Delete'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }
