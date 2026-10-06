@@ -147,20 +147,8 @@ export const documentService = {
     return post(`/api/documents/${documentId}/workspace/lock/release/`, {}, options);
   },
 
-  requestWorkspaceAccess(documentId) {
-    return post(`/api/documents/${documentId}/workspace/lock/request/`, {});
-  },
-
-  respondWorkspaceAccess(documentId, action, targetUserId, targetUsername) {
-    return post(`/api/documents/${documentId}/workspace/lock/respond/`, {
-      action,
-      target_user_id: targetUserId,
-      target_username: targetUsername,
-    });
-  },
-
-  publishToVectorDb(documentId) {
-    return post(`/api/documents/${documentId}/workspace/publish/`, {});
+  publishToVectorDb(documentId, data = {}) {
+    return post(`/api/documents/${documentId}/workspace/publish/`, data);
   },
 
   /**

@@ -15,7 +15,7 @@ import {
 import CloseIcon from '@mui/icons-material/Close';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 
-const AGREEMENT_TYPES = [
+export const AGREEMENT_TYPES = [
   'Master Services Agreement (MSA)',
   'Non-Disclosure Agreement (NDA)',
   'Service Level Agreement (SLA)',
@@ -28,7 +28,7 @@ const AGREEMENT_TYPES = [
   'General Commercial Contract',
 ];
 
-const SECTORIAL_OPTIONS = [
+export const SECTORIAL_OPTIONS = [
   'Information Technology & Software',
   'Banking, Financial Services & Insurance (BFSI)',
   'Healthcare & Life Sciences',
@@ -174,7 +174,7 @@ export default function FolderMetadataModal({
           {/* Sectorial Classification Dropdown */}
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
             <Typography variant="body2" sx={{ fontWeight: 600, color: '#1b1f24' }}>
-              Sectorial Classification
+              Sectorial Category
             </Typography>
             <TextField
               select
