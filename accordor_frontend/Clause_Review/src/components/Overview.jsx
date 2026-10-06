@@ -285,7 +285,7 @@ export default function Overview({
             </Typography>
           </Box>
           <Typography sx={{ fontSize: '26px', fontWeight: 700, color: '#1b1f24', lineHeight: 1.2, mt: 0.25 }}>
-            {isEmptyData ? 0 : safeStats.needsReview}
+            {safeStats.needsReview}
           </Typography>
           <Typography sx={{ fontSize: '11.5px', color: '#7b838c' }}>
             waiting for reviewer
@@ -300,7 +300,7 @@ export default function Overview({
             </Typography>
           </Box>
           <Typography sx={{ fontSize: '26px', fontWeight: 700, color: '#1b1f24', lineHeight: 1.2, mt: 0.25 }}>
-            {isEmptyData ? 0 : safeStats.processing}
+            {safeStats.processing}
           </Typography>
           <Typography sx={{ fontSize: '11.5px', color: '#7b838c' }}>
             in progress
@@ -316,7 +316,7 @@ export default function Overview({
             </Typography>
           </Box>
           <Typography sx={{ fontSize: '26px', fontWeight: 700, color: '#1b1f24', lineHeight: 1.2, mt: 0.25 }}>
-            {isEmptyData ? 0 : safeStats.inReview}
+            {safeStats.inReview}
           </Typography>
           <Typography sx={{ fontSize: '11.5px', color: '#7b838c' }}>
             actively being reviewed
@@ -348,7 +348,7 @@ export default function Overview({
             </Typography>
           </Box>
           <Typography sx={{ fontSize: '26px', fontWeight: 700, color: '#1b1f24', lineHeight: 1.2, mt: 0.25 }}>
-            {isEmptyData ? 0 : safeStats.inreviewed}
+            {safeStats.inreviewed}
           </Typography>
           <Typography sx={{ fontSize: '11.5px', color: '#7b838c' }}>
             ready to extract & export
@@ -364,7 +364,7 @@ export default function Overview({
             </Typography>
           </Box>
           <Typography sx={{ fontSize: '26px', fontWeight: 700, color: '#1b1f24', lineHeight: 1.2, mt: 0.25 }}>
-            {isEmptyData ? 0 : safeStats.updatedToVector}
+            {safeStats.updatedToVector}
           </Typography>
           <Typography sx={{ fontSize: '11.5px', color: '#7b838c' }}>
             live in retrieval index

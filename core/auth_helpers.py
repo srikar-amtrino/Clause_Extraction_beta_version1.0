@@ -131,17 +131,27 @@ def require_auth(view_func):
 
     Returns HTTP 401 when the header is absent, the token is
     unknown, or the session has expired.
+
+    Token resolution order:
+      1. ``Authorization: Bearer <token>`` header  (normal requests)
+      2. ``?token=<token>`` query parameter          (sendBeacon fallback —
+         cannot set custom headers)
     """
     @functools.wraps(view_func)
     def _wrapped(request, *args, **kwargs):
         from core.models import UserSession  # local to avoid circular import
 
         auth_header = request.headers.get('Authorization', '')
-        if not auth_header.startswith('Bearer '):
-            return JsonResponse(
-                {'detail': 'Authorization header missing or malformed.'}, status=401)
+        if auth_header.startswith('Bearer '):
+            token = auth_header[len('Bearer '):].strip()
+        else:
+            # Fallback: sendBeacon requests cannot carry custom headers, so the
+            # frontend appends the token as a query parameter.
+            token = (request.GET.get('token') or '').strip()
+            if not token:
+                return JsonResponse(
+                    {'detail': 'Authorization header missing or malformed.'}, status=401)
 
-        token = auth_header[len('Bearer '):].strip()
         try:
             session = UserSession.objects.select_related('user').get(token=token)
         except UserSession.DoesNotExist:
@@ -157,3 +167,4 @@ def require_auth(view_func):
         return view_func(request, *args, **kwargs)
 
     return _wrapped
+

@@ -61,13 +61,23 @@ def _err(msg, status=400):
 
 
 def _get_lock(document_id):
-    """Return active WorkspaceLock or None."""
-    from document_pipeline.models import WorkspaceLock
+    """Return active WorkspaceLock or None.
+
+    If a lock row exists but its TTL has expired, delete it and clear the
+    denormalised ``current_reviewer`` on the Document so the next caller
+    sees a clean state without waiting for the background cleaner task.
+    """
+    from document_pipeline.models import Document, WorkspaceLock
     try:
         lock = WorkspaceLock.objects.select_related('user').get(document_id=document_id)
-        return lock if lock.is_active else None
     except WorkspaceLock.DoesNotExist:
         return None
+    if lock.is_active:
+        return lock
+    # Expired — remove ghost lock atomically.
+    lock.delete()
+    Document.objects.filter(pk=document_id).update(current_reviewer=None)
+    return None
 
 
 def _check_editable(document_id, user):
@@ -317,6 +327,111 @@ def lock_release(request, document_id):
     from realtime.events import publish_document_lock
     publish_document_lock(document_id, event='document_closed', user=user)
     return _json({'released': True})
+
+
+@csrf_exempt
+@require_auth
+@require_http_methods(['POST'])
+def lock_request_access(request, document_id):
+    """A user requests editing access from the active lock holder."""
+    from document_pipeline.models import DocumentActivityLog
+    from document_pipeline.activity import log_activity
+    from realtime.events import publish_access_event
+
+    user = request.user
+    lock = _get_lock(document_id)
+    if not lock:
+        return _json({'status': 'available', 'message': 'No active lock. You can take editing access directly.'})
+    if lock.user_id == user.id:
+        return _json({'status': 'editing', 'message': 'You already hold the edit lock.'})
+
+    log_activity(
+        document_id=document_id,
+        phase=DocumentActivityLog.USER_INTERACTION,
+        action='requested_lock',
+        summary=f'{user.username} requested editing access from {lock.user.username}.',
+        actor_user=user,
+    )
+    publish_access_event(
+        document_id,
+        event='access_requested',
+        user=user,
+        target_user=lock.user,
+    )
+    return _json({
+        'status': 'requested',
+        'requested_by': user.username,
+        'locked_by': lock.user.username,
+    })
+
+
+@csrf_exempt
+@require_auth
+@require_http_methods(['POST'])
+def lock_respond_access(request, document_id):
+    """The active lock holder grants or denies the access request."""
+    import json
+    from core.models import User
+    from document_pipeline.models import Document, DocumentActivityLog, WorkspaceLock
+    from document_pipeline.activity import log_activity
+    from realtime.events import publish_access_event, publish_document_lock
+
+    user = request.user
+    try:
+        body = json.loads(request.body)
+    except (ValueError, TypeError):
+        body = {}
+
+    action = body.get('action')  # 'grant' or 'deny'
+    target_username = body.get('target_username')
+    target_user_id = body.get('target_user_id')
+
+    target_user = None
+    if target_user_id:
+        target_user = User.objects.filter(pk=target_user_id).first()
+    elif target_username:
+        target_user = User.objects.filter(username=target_username).first()
+
+    lock = _get_lock(document_id)
+    if action == 'grant':
+        if lock and lock.user_id == user.id:
+            WorkspaceLock.objects.filter(document_id=document_id, user_id=user.id).delete()
+            Document.objects.filter(pk=document_id).update(current_reviewer=None)
+            log_activity(
+                document_id=document_id,
+                phase=DocumentActivityLog.USER_INTERACTION,
+                action='granted_lock',
+                summary=f'{user.username} granted editing access to {target_username or "requester"}.',
+                actor_user=user,
+            )
+            publish_access_event(
+                document_id,
+                event='access_granted',
+                user=user,
+                target_user=target_user,
+            )
+            publish_document_lock(document_id, event='document_closed', user=user)
+            return _json({'status': 'granted'})
+        return _err('You do not hold the active lock.', 403)
+
+    elif action == 'deny':
+        log_activity(
+            document_id=document_id,
+            phase=DocumentActivityLog.USER_INTERACTION,
+            action='denied_lock',
+            summary=f'{user.username} declined editing access request from {target_username or "requester"}.',
+            actor_user=user,
+        )
+        publish_access_event(
+            document_id,
+            event='access_denied',
+            user=user,
+            target_user=target_user,
+        )
+        return _json({'status': 'denied'})
+
+    return _err('Invalid action. Use "grant" or "deny".', 400)
+
 
 
 # ---------------------------------------------------------------------------
@@ -743,3 +858,68 @@ def document_queue(request):
         'needs_review': needs_review,
         'unprocessable': unprocessable,
     })
+
+
+# ---------------------------------------------------------------------------
+# Global user-level activity feed  GET /api/activity/
+# ---------------------------------------------------------------------------
+
+@require_auth
+@require_http_methods(['GET'])
+def global_activity_feed(request):
+    """Recent activity events across all documents.
+
+    Query params (all optional):
+      limit=<n>           max events to return, default 50, cap 200
+      user=<username>     filter by actor username
+      document_id=<uuid>  filter to one document
+      action=<code>       filter by action code (repeatable)
+      phase=<code>        filter by phase code (repeatable)
+    """
+    from document_pipeline.models import DocumentActivityLog
+
+    limit_raw = request.GET.get('limit', '50')
+    try:
+        limit = min(int(limit_raw), 200)
+    except (ValueError, TypeError):
+        return _err('limit must be a whole number.')
+
+    qs = (
+        DocumentActivityLog.objects
+        .select_related('actor_user', 'document')
+        .order_by('-created_at')
+    )
+
+    if username := (request.GET.get('user') or '').strip():
+        qs = qs.filter(actor_user__username__iexact=username)
+
+    if doc_id := (request.GET.get('document_id') or '').strip():
+        qs = qs.filter(document_id=doc_id)
+
+    actions = [a for a in request.GET.getlist('action') if a]
+    if actions:
+        qs = qs.filter(action__in=actions)
+
+    phases = [p for p in request.GET.getlist('phase') if p]
+    if phases:
+        qs = qs.filter(phase__in=phases)
+
+    events = [
+        {
+            'id': str(entry.id),
+            'document_id': str(entry.document_id),
+            'document_name': entry.document.name if entry.document else None,
+            'phase': entry.phase,
+            'action': entry.action,
+            'summary': entry.summary,
+            'actor': (
+                entry.actor_user.username if entry.actor_user else entry.actor_system
+            ),
+            'metadata': entry.metadata,
+            'created_at': entry.created_at.isoformat(),
+        }
+        for entry in qs[:limit]
+    ]
+
+    return _json({'events': events, 'count': len(events)})
+

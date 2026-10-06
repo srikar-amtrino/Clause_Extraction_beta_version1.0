@@ -62,7 +62,7 @@ def _get_document(document_id):
     return document, None
 
 
-def _stage_summary(extraction_run, classification_run, review_counts=None):
+def _stage_summary(extraction_run, classification_run, review_counts=None, live_needs_review=None):
     """What a list row shows about how far the document got. A stage that has
     not run is null, not an empty object: the frontend tests one thing."""
     extraction = None
@@ -80,6 +80,19 @@ def _stage_summary(extraction_run, classification_run, review_counts=None):
         }
     classification = None
     if classification_run is not None:
+        if live_needs_review is not None:
+            if isinstance(live_needs_review, dict):
+                nr = live_needs_review.get(classification_run.id, 0)
+            else:
+                nr = live_needs_review
+        else:
+            from .models import Classification
+            nr = Classification.objects.filter(
+                run=classification_run,
+                needs_review=True,
+                review_decision__isnull=True,
+                deleted_at__isnull=True,
+            ).count()
         classification = {
             'run_id': str(classification_run.id),
             'status': classification_run.status,
@@ -89,7 +102,7 @@ def _stage_summary(extraction_run, classification_run, review_counts=None):
             'classified': classification_run.classified_count,
             'unclassified': classification_run.unclassified_count,
             'failed': classification_run.failed_count,
-            'needs_review': classification_run.review_count,
+            'needs_review': nr,
             'classified_at': (classification_run.finished_at.isoformat()
                               if classification_run.finished_at else None),
             # How far the human pass has got on this document, so the table can
@@ -97,6 +110,7 @@ def _stage_summary(extraction_run, classification_run, review_counts=None):
             'review': _review_progress(classification_run, review_counts or {}),
         }
     return {'extraction': extraction, 'classification': classification}
+
 
 
 def _review_progress(classification_run, counts):
@@ -130,7 +144,49 @@ def _document_links(document):
     }
 
 
-def _document_row(document, extraction_run, classification_run, review_counts=None):
+def _document_row(document, extraction_run, classification_run, review_counts=None,
+                  reviewers_by_doc=None, live_needs_review=None):
+    """Build the serialised document row.
+
+    ``reviewers_by_doc`` is an optional dict keyed by document_id containing
+    a list of usernames who have **saved** review decisions on this document.
+    When absent the field is computed inline (one extra query — acceptable for
+    single-document detail views).
+    """
+    from django.utils import timezone
+
+    # Auto-clear expired WorkspaceLock so the list view never shows a ghost
+    # reviewer whose session died before the cleaner ran.
+    current_reviewer = None
+    raw_reviewer = getattr(document, 'current_reviewer', None)
+    if raw_reviewer is not None:
+        try:
+            lock = getattr(document, 'workspace_lock', None)
+            if lock and lock.expires_at < timezone.now():
+                lock.delete()
+                Document.objects.filter(pk=document.id).update(current_reviewer=None)
+                raw_reviewer = None
+        except Exception:
+            pass
+        current_reviewer = raw_reviewer.username if raw_reviewer else None
+
+    # Reviewers who actually clicked Save (distinct, ordered alphabetically).
+    if reviewers_by_doc is not None:
+        reviewers = reviewers_by_doc.get(document.id, [])
+    else:
+        from .models import Classification
+        reviewers = list(
+            Classification.objects
+            .filter(
+                run__document_id=document.id,
+                run__is_current=True,
+                reviewed_by__isnull=False,
+            )
+            .values_list('reviewed_by__username', flat=True)
+            .distinct()
+            .order_by('reviewed_by__username')
+        )
+
     return {
         'document_id': str(document.id),
         'name': document.name,
@@ -143,11 +199,14 @@ def _document_row(document, extraction_run, classification_run, review_counts=No
         'mime_type': document.mime_type,
         'extraction_status': document.extraction_status,
         'review_status': getattr(document, 'review_status', 'needs_review'),
-        'current_reviewer': (document.current_reviewer.username
-                             if getattr(document, 'current_reviewer', None) else None),
+        # Who currently holds the editing lock (may be None after expiry cleanup).
+        'current_reviewer': current_reviewer,
+        # All distinct users who clicked Save at least once — the persistent
+        # contributor list shown in the Documents table Reviewer column.
+        'reviewers': reviewers,
         'last_extracted_at': (document.last_extracted_at.isoformat()
                               if document.last_extracted_at else None),
-        'stages': _stage_summary(extraction_run, classification_run, review_counts),
+        'stages': _stage_summary(extraction_run, classification_run, review_counts, live_needs_review),
         'links': _document_links(document),
     }
 
@@ -163,6 +222,36 @@ def _current_runs_by_document(document_ids):
         document_id__in=document_ids, is_current=True,
         chunk_run__is_current=True, chunk_run__extraction_run__is_current=True)}
     return extraction, classification
+
+
+def _reviewers_by_document(document_ids):
+    """Return a dict { document_id: [username, ...] } of distinct users who
+    have clicked Save (i.e. set reviewed_by) on any classification in the
+    current run for each document, in a single aggregated query.
+
+    Read-only visitors who never saved are deliberately excluded.
+    """
+    from django.db.models import Prefetch
+    from .models import Classification
+    rows = (
+        Classification.objects
+        .filter(
+            run__document_id__in=document_ids,
+            run__is_current=True,
+            run__chunk_run__is_current=True,
+            run__chunk_run__extraction_run__is_current=True,
+            reviewed_by__isnull=False,
+        )
+        .values('run__document_id', 'reviewed_by__username')
+        .distinct()
+        .order_by('reviewed_by__username')
+    )
+    result = {}
+    for row in rows:
+        doc_id = row['run__document_id']
+        username = row['reviewed_by__username']
+        result.setdefault(doc_id, []).append(username)
+    return result
 
 
 @require_GET
@@ -228,12 +317,18 @@ def document_list(request):
     documents = documents.distinct()
     total = documents.count()
     page = list(documents.order_by('-created_at')[offset:offset + limit])
-    extraction, classification = _current_runs_by_document([d.id for d in page])
-    review_counts = review_service.review_counts_by_run([r.id for r in classification.values()])
+    doc_ids = [d.id for d in page]
+    extraction, classification = _current_runs_by_document(doc_ids)
+    run_ids = [r.id for r in classification.values()]
+    review_counts = review_service.review_counts_by_run(run_ids)
+    # Live count of items still flagged as needs_review with no saved decision.
+    # One extra batch query per page — correct even after user Saves.
+    live_needs_review = review_service.live_needs_review_by_run(run_ids)
+    reviewers_by_doc = _reviewers_by_document(doc_ids)
 
     return JsonResponse({
         'documents': [_document_row(d, extraction.get(d.id), classification.get(d.id),
-                                    review_counts)
+                                    review_counts, reviewers_by_doc, live_needs_review)
                       for d in page],
         'page': {'total': total, 'limit': limit, 'offset': offset,
                  'returned': len(page), 'has_more': offset + len(page) < total},
@@ -249,10 +344,15 @@ def document_detail(request, document_id):
     if error:
         return error
     extraction, classification = _current_runs_by_document([document.id])
-    review_counts = review_service.review_counts_by_run([r.id for r in classification.values()])
+    c_run = classification.get(document.id)
+    c_run_id = c_run.id if c_run else None
+    run_ids = [c_run_id] if c_run_id else []
+    review_counts = review_service.review_counts_by_run(run_ids)
+    live_needs_review = review_service.live_needs_review_by_run(run_ids)
+    reviewers_by_doc = _reviewers_by_document([document.id])
     return JsonResponse(
-        _document_row(document, extraction.get(document.id), classification.get(document.id),
-                      review_counts),
+        _document_row(document, extraction.get(document.id), c_run,
+                      review_counts, reviewers_by_doc, live_needs_review),
         json_dumps_params=PRETTY)
 
 
