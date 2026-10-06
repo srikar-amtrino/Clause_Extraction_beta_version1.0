@@ -98,15 +98,18 @@ def _stage_summary(extraction_run, classification_run, review_counts=None):
 
 def _review_progress(classification_run, counts):
     """Decisions made against this run. Zeroed, never null: a run that exists
-    always has a reviewable population, even if nobody has touched it."""
+    always has a reviewable population, even if nobody has touched it.
+    Deleted items are outside it."""
     by_decision = counts.get(classification_run.id, {})
-    reviewed = sum(by_decision.values())
+    deleted = by_decision.get('deleted', 0)
+    reviewed = sum(by_decision.values()) - deleted
     return {
         'reviewed': reviewed,
-        'pending': max(classification_run.micro_count - reviewed, 0),
+        'pending': max(classification_run.micro_count - deleted - reviewed, 0),
         'accepted': by_decision.get('accepted', 0),
         'corrected': by_decision.get('corrected', 0),
         'rejected': by_decision.get('rejected', 0),
+        'deleted': deleted,
     }
 
 
@@ -360,6 +363,92 @@ def classification_save(request, document_id):
         'summary': fresh['summary'],
         'vector_sync': review_service.vector_sync_state(document),
     }, json_dumps_params=PRETTY)
+
+
+def _item_write(request, document_id, write):
+    """Shared body of Delete and Restore: lock check, JSON body, the service
+    call, then the rows it touched read back fresh. write(document, payload)
+    -> (result, the classification ids whose rows changed)."""
+    document, error = _get_document(document_id)
+    if error:
+        return error
+    from .review_views import _check_editable
+    editable, response = _check_editable(document.id, request.user)
+    if not editable:
+        return response
+
+    payload, error = _json_body(request)
+    if error:
+        return error
+    if not isinstance(payload, dict):
+        return JsonResponse({'detail': 'Body must be a JSON object.'}, status=400)
+    try:
+        result, touched = write(document, payload)
+    except SaveError as problem:
+        return JsonResponse(dict({'detail': str(problem)}, **problem.extra),
+                            status=problem.status)
+
+    fresh = export_service.classification_json(document)
+    return JsonResponse(dict(
+        result,
+        items=[item for item in fresh['items'] if item['classification_id'] in touched],
+        deleted_items=fresh['deleted_items'],
+        summary=fresh['summary'],
+        vector_sync=review_service.vector_sync_state(document),
+    ), json_dumps_params=PRETTY)
+
+
+@require_POST
+@require_auth
+def classification_delete(request, document_id, classification_id):
+    """Delete one item from the review.
+
+      { "classification_run_id": "<from GET /classification/>",
+        "merge_into_next": false, "note": "optional" }
+
+    With merge_into_next the item's text is first put at the start of the
+    next item's text. The row is kept, so Restore can undo it. Nothing goes to
+    the vector DB until Update Vector DB, which then removes the item.
+
+    -> 200 { "classification_id", "merged_into", "review_status",
+             "items": [the next item, when text was moved into it],
+             "deleted_items": [...], "summary": {...}, "vector_sync": {...} }
+    -> 400 { "detail" } already deleted, or nothing after it to merge into
+    -> 403 / 423 without the workspace lock; 404 not in the current run
+    -> 409 { "detail", "classification_run_id" } after a re-classification
+    """
+    def write(document, payload):
+        result = review_service.delete_item(
+            document, payload.get('classification_run_id'), str(classification_id),
+            request.user, merge_into_next=payload.get('merge_into_next', False),
+            note=payload.get('note'))
+        return result, {result['merged_into']}
+    return _item_write(request, document_id, write)
+
+
+@require_POST
+@require_auth
+def classification_restore(request, document_id, classification_id):
+    """Undo a delete.
+
+      { "classification_run_id": "<from GET /classification/>" }
+
+    If the item's text was moved into the next item and is still there
+    unchanged, it is taken back out (unmerged_from). If that item was edited
+    since, its text is left alone (merged_text_kept_in) for the reviewer to
+    tidy by hand.
+
+    -> 200 { "classification_id", "unmerged_from", "merged_text_kept_in",
+             "review_status", "items": [the restored item, and the item its
+             text came back out of], "deleted_items", "summary", "vector_sync" }
+    -> 400 not deleted; 403 / 423 without the lock; 404; 409 as for delete
+    """
+    def write(document, payload):
+        result = review_service.restore_item(
+            document, payload.get('classification_run_id'), str(classification_id),
+            request.user)
+        return result, {result['classification_id'], result['unmerged_from']}
+    return _item_write(request, document_id, write)
 
 
 def _json_body(request):

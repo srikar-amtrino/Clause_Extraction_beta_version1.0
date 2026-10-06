@@ -158,15 +158,37 @@ def classification_json(document):
     classification_run = current_classification_run(document)
     header = _document_header(document, run)
     if classification_run is None:
-        return {'document': header, 'classification_run': None, 'summary': None, 'items': []}
+        return {'document': header, 'classification_run': None, 'summary': None, 'items': [],
+                'deleted_items': []}
 
     rows = (Classification.objects.filter(run=classification_run)
             .select_related('chunk', 'chunk__clause', 'canonical_type',
-                            'reviewed_canonical_type', 'reviewed_by')
+                            'reviewed_canonical_type', 'reviewed_by', 'deleted_by',
+                            'merged_into__chunk__clause')
             .order_by('chunk__order_index'))
-    items, by_type, by_outcome, by_decision = [], Counter(), Counter(), Counter()
+    items, deleted_items = [], []
+    by_type, by_outcome, by_decision = Counter(), Counter(), Counter()
     for c in rows:
         chunk = c.chunk
+        if c.deleted_at is not None:
+            # Out of the review and out of every count; listed on its own so
+            # the reviewer can see what was deleted and restore it.
+            merged = c.merged_into
+            deleted_items.append({
+                'classification_id': str(c.id),
+                'clause_id': chunk.clause.local_id,
+                'number': chunk.clause_identifier,
+                'breadcrumb': chunk.breadcrumb,
+                'text': current_text(c),
+                'merged_into': ({'classification_id': str(merged.id),
+                                 'clause_id': merged.chunk.clause.local_id,
+                                 'number': merged.chunk.clause_identifier}
+                                if merged else None),
+                'deleted_by': c.deleted_by.email if c.deleted_by else None,
+                'deleted_by_name': c.deleted_by.username if c.deleted_by else None,
+                'deleted_at': c.deleted_at.isoformat(),
+            })
+            continue
         # The item as it stands: the reviewer's saved verdict and text once
         # there are any, the model's until then. `model` keeps the model's.
         label, canonical_type, sub_type = current_verdict(c)
@@ -242,16 +264,17 @@ def classification_json(document):
             'by_type': dict(by_type.most_common()),
             # Review progress over the whole run, so a header can read
             # "41 of 338 reviewed" without the client counting items itself.
-            'review': _review_progress(by_decision, len(items)),
+            'review': _review_progress(by_decision, len(items), len(deleted_items)),
         },
         'items': items,
+        'deleted_items': deleted_items,
     }
 
 
-def _review_progress(by_decision, total):
+def _review_progress(by_decision, total, deleted=0):
     """How far the human pass has got. Always present, zeroed when nobody has
     decided anything yet -- a count of zero is a fact, unlike a stage that has
-    not run, so this is never null."""
+    not run, so this is never null. Deleted items are outside the total."""
     reviewed = sum(by_decision.values())
     return {
         'reviewed': reviewed,
@@ -259,6 +282,7 @@ def _review_progress(by_decision, total):
         'accepted': by_decision.get('accepted', 0),
         'corrected': by_decision.get('corrected', 0),
         'rejected': by_decision.get('rejected', 0),
+        'deleted': deleted,
     }
 
 
