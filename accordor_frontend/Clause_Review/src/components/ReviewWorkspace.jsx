@@ -125,6 +125,9 @@ export default function ReviewWorkspace({
   const lockOwnedRef = useRef(false);
   const heartbeatRef = useRef(null);
   const lockEffectGenerationRef = useRef(0);
+  const socketRef = useRef(null);
+  const [isRequestingAccess, setIsRequestingAccess] = useState(false);
+  const [incomingAccessRequest, setIncomingAccessRequest] = useState(null);
 
   const handleHeartbeatFailure = useCallback(
     (error) => {
@@ -175,6 +178,7 @@ export default function ReviewWorkspace({
     const connectSocket = () => {
       if (!active || !token) return;
       socket = new WebSocket(documentService.websocketUrl(docId), ['bearer', token]);
+      socketRef.current = socket;
       socket.onopen = () => {
         reconnectAttempts = 0;
       };
@@ -183,6 +187,46 @@ export default function ReviewWorkspace({
         try {
           update = JSON.parse(message.data);
         } catch {
+          return;
+        }
+
+        // Access handover events
+        if (update.event === 'access_requested') {
+          // If I am the active editor and someone else requested access
+          const requester = update.requested_by;
+          if (
+            lockOwnedRef.current &&
+            requester &&
+            String(requester).toLowerCase() !== String(currentUserName).toLowerCase()
+          ) {
+            setIncomingAccessRequest({
+              requestedBy: requester,
+              requestedById: update.requested_by_id,
+            });
+          }
+          return;
+        }
+
+        if (update.event === 'access_granted') {
+          const isTargetedToMe =
+            String(update.target_user_id) === String(currentUserIdRef.current) ||
+            (update.target_user && String(update.target_user).toLowerCase() === String(currentUserName).toLowerCase());
+          if (isTargetedToMe) {
+            setIsRequestingAccess(false);
+            showToast?.(`${update.granted_by || 'The editor'} granted editing access! Taking over…`, 'success');
+            handleTakeEditingAccess();
+          }
+          return;
+        }
+
+        if (update.event === 'access_denied') {
+          const isTargetedToMe =
+            String(update.target_user_id) === String(currentUserIdRef.current) ||
+            (update.target_user && String(update.target_user).toLowerCase() === String(currentUserName).toLowerCase());
+          if (isTargetedToMe) {
+            setIsRequestingAccess(false);
+            showToast?.(`${update.denied_by || 'The editor'} is currently editing and declined the handover request.`, 'warning');
+          }
           return;
         }
 
@@ -213,6 +257,7 @@ export default function ReviewWorkspace({
         }
       };
       socket.onclose = () => {
+        if (socketRef.current === socket) socketRef.current = null;
         if (active) {
           const delay = Math.min(2000 * 2 ** reconnectAttempts, 30000);
           reconnectAttempts += 1;
@@ -317,6 +362,68 @@ export default function ReviewWorkspace({
       showToast?.('Editing access acquired.', 'success');
     } catch (err) {
       showToast?.(err.message || 'Could not take editing access.', 'error');
+    }
+  };
+
+  const handleRequestEditingAccess = async () => {
+    setIsRequestingAccess(true);
+    try {
+      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+        socketRef.current.send(JSON.stringify({ event: 'request_access' }));
+      }
+      const res = await documentService.requestWorkspaceAccess(docId);
+      if (res?.status === 'available') {
+        showToast?.('Document is now available. Acquiring editing access…', 'success');
+        handleTakeEditingAccess();
+        setIsRequestingAccess(false);
+        return;
+      }
+      showToast?.(`Access request sent to ${workspaceLock.lockedBy || 'the reviewer'}. Waiting for response…`, 'info');
+    } catch (err) {
+      setIsRequestingAccess(false);
+      showToast?.(err.message || 'Could not send access request.', 'error');
+    }
+  };
+
+  const handleGrantAccessToRequester = async () => {
+    if (!incomingAccessRequest) return;
+    const { requestedBy, requestedById } = incomingAccessRequest;
+    try {
+      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+        socketRef.current.send(JSON.stringify({
+          event: 'grant_access',
+          target_user: requestedBy,
+          target_user_id: requestedById,
+        }));
+      }
+      await documentService.respondWorkspaceAccess(docId, 'grant', requestedById, requestedBy);
+      lockOwnedRef.current = false;
+      if (heartbeatRef.current) window.clearInterval(heartbeatRef.current);
+      heartbeatRef.current = null;
+      setWorkspaceLock({ status: 'read-only', lockedBy: requestedBy, documentId: docId });
+      setIncomingAccessRequest(null);
+      showToast?.(`Editing access granted to ${requestedBy}. Document is now read-only.`, 'success');
+    } catch (err) {
+      showToast?.(err.message || 'Could not grant editing access.', 'error');
+    }
+  };
+
+  const handleDeclineAccessRequest = async () => {
+    if (!incomingAccessRequest) return;
+    const { requestedBy, requestedById } = incomingAccessRequest;
+    try {
+      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+        socketRef.current.send(JSON.stringify({
+          event: 'deny_access',
+          target_user: requestedBy,
+          target_user_id: requestedById,
+        }));
+      }
+      await documentService.respondWorkspaceAccess(docId, 'deny', requestedById, requestedBy);
+      setIncomingAccessRequest(null);
+      showToast?.(`Declined access request from ${requestedBy}.`, 'info');
+    } catch {
+      setIncomingAccessRequest(null);
     }
   };
 
@@ -1036,20 +1143,28 @@ export default function ReviewWorkspace({
 
       // Re-fetch fresh classification from database to get the updated data immediately
       const freshClass = await documentService.classification(targetDocId).catch(() => null);
+      let remainingNeedsReview = 0;
       if (freshClass && Array.isArray(freshClass.items) && freshClass.items.length > 0) {
         const freshRows = freshClass.items.map((item, i) => mapClassificationItem(item, i, doc, freshClass));
         setExtractedClauses(freshRows);
+        remainingNeedsReview = freshRows.filter((r) => !r.review?.decision && !r.isReviewed && (r.needs_review || r.needsReview || r.decision === 'needs_review')).length;
         if (Array.isArray(freshClass.deleted_items)) {
           setDeletedClauses(freshClass.deleted_items.map((item, i) => mapClassificationItem(item, i, doc, freshClass)));
         }
         setSelectedRows([]);
         if (freshClass.summary) {
           setClassificationSummary(freshClass.summary);
+          if (typeof freshClass.summary.needs_review === 'number') {
+            remainingNeedsReview = freshClass.summary.needs_review;
+          }
         }
         if (freshClass.document) {
           setDocumentMeta(freshClass.document);
         }
       }
+
+      // Fetch fresh document detail row from backend to get live reviewers and stages
+      const freshDocRow = await documentService.get(targetDocId).catch(() => null);
 
       const nowFormatted = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       setLastSavedTimestamp(nowFormatted);
@@ -1057,10 +1172,26 @@ export default function ReviewWorkspace({
       setDocumentStatus(displayStatus);
       setHasUnsavedChanges(false);
 
+      const liveNeedsReviewCount = (freshDocRow?.stages?.classification?.needs_review !== undefined && freshDocRow?.stages?.classification?.needs_review !== null)
+        ? freshDocRow.stages.classification.needs_review
+        : remainingNeedsReview;
+
       const updatedDoc = {
         ...doc,
+        ...(freshDocRow || {}),
         status: displayStatus,
         review_status: backendStatus,
+        needsReview: liveNeedsReviewCount,
+        stages: {
+          ...(doc?.stages || {}),
+          ...(freshDocRow?.stages || {}),
+          classification: {
+            ...(doc?.stages?.classification || {}),
+            ...(freshDocRow?.stages?.classification || {}),
+            needs_review: liveNeedsReviewCount,
+          },
+        },
+        reviewers: freshDocRow?.reviewers || (currentUserName && !(doc?.reviewers || []).includes(currentUserName) ? [...(doc?.reviewers || []), currentUserName] : doc?.reviewers || []),
         lastSaved: 'Today',
         modifiedTime: nowFormatted,
         isSaved: true,
@@ -1600,9 +1731,46 @@ export default function ReviewWorkspace({
                       ? 'Document access could not be confirmed. Editing is disabled.'
                       : `Read-only while ${workspaceLock.lockedBy || 'another reviewer'} has the document open.`}
             </span>
-            {(workspaceLock.status === 'available' || workspaceLock.status === 'read-only') && (
-              <Button size="small" variant="outlined" onClick={handleTakeEditingAccess}>
+            {workspaceLock.status === 'available' && (
+              <Button
+                size="small"
+                variant="contained"
+                onClick={handleTakeEditingAccess}
+                sx={{
+                  bgcolor: '#16a34a',
+                  '&:hover': { bgcolor: '#15803d' },
+                  fontSize: '12px',
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  boxShadow: 'none',
+                }}
+              >
                 Take editing access
+              </Button>
+            )}
+            {workspaceLock.status === 'read-only' && (
+              <Button
+                size="small"
+                variant="contained"
+                disabled={isRequestingAccess}
+                onClick={handleRequestEditingAccess}
+                sx={{
+                  bgcolor: isRequestingAccess ? '#94a3b8' : '#0284c7',
+                  '&:hover': { bgcolor: '#0369a1' },
+                  fontSize: '12px',
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  boxShadow: 'none',
+                }}
+              >
+                {isRequestingAccess ? (
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
+                    <CircularProgress size={13} sx={{ color: '#ffffff' }} />
+                    <span>Request Sent…</span>
+                  </Box>
+                ) : (
+                  'Request Access'
+                )}
               </Button>
             )}
           </Box>
@@ -2024,6 +2192,56 @@ export default function ReviewWorkspace({
             sx={{ textTransform: 'none', fontWeight: 600, fontSize: '13px', px: 2 }}
           >
             {deleteModalState.isDeleting ? 'Deleting...' : 'Delete'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Handover / Access Request Modal for Active Editor */}
+      <Dialog
+        open={Boolean(incomingAccessRequest)}
+        onClose={handleDeclineAccessRequest}
+        maxWidth="xs"
+        fullWidth
+        PaperProps={{
+          sx: { borderRadius: 2, p: 0.5 },
+        }}
+      >
+        <DialogTitle sx={{ fontWeight: 700, fontSize: '16px', color: '#0f172a', pb: 1 }}>
+          Editing Access Requested
+        </DialogTitle>
+        <DialogContent sx={{ pt: 0.5 }}>
+          <Typography sx={{ fontSize: '13.5px', color: '#334151', lineHeight: 1.5 }}>
+            <strong>{incomingAccessRequest?.requestedBy}</strong> is requesting editing access to this document.
+          </Typography>
+          <Typography sx={{ fontSize: '12px', color: '#64748b', mt: 1.2 }}>
+            {hasUnsavedChanges
+              ? 'Your pending unsaved changes will be saved to the database before handing over.'
+              : 'Granting access will transfer the edit lock and switch your view to read-only.'}
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5, gap: 1 }}>
+          <Button
+            onClick={handleDeclineAccessRequest}
+            variant="outlined"
+            size="small"
+            sx={{ textTransform: 'none', color: '#64748b', borderColor: '#cbd5e1', fontWeight: 600 }}
+          >
+            Decline
+          </Button>
+          <Button
+            variant="contained"
+            size="small"
+            onClick={handleGrantAccessToRequester}
+            sx={{
+              textTransform: 'none',
+              bgcolor: '#16a34a',
+              '&:hover': { bgcolor: '#15803d' },
+              fontWeight: 600,
+              boxShadow: 'none',
+              px: 2,
+            }}
+          >
+            Grant Access
           </Button>
         </DialogActions>
       </Dialog>

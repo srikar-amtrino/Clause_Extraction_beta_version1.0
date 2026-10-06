@@ -407,6 +407,20 @@ function AppWorkspace() {
   };
 
   const handleBackToDocuments = () => {
+    // Refresh document list from backend so table reflects latest live state
+    documentService.list({ limit: 100 }).then((res) => {
+      if (res && res.documents) {
+        setFetchedDocuments((prev) => {
+          const updated = prev.map((doc) => {
+            const match = res.documents.find(
+              (p) => (p.document_id || p.id) === (doc.documentId || doc.id) || (p.name || '').toLowerCase() === (doc.name || '').toLowerCase()
+            );
+            return match ? normalizeDoc({ ...doc, ...match }, currentUser) : doc;
+          });
+          return deduplicateDocs(updated);
+        });
+      }
+    }).catch(() => {});
     navigate('/documents');
   };
 
