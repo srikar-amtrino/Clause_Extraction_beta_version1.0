@@ -1276,17 +1276,14 @@ export default function ReviewWorkspace({
               (r) => !r.isReviewed && !r.review?.decision && (r.needs_review || r.needsReview)
             ).length;
 
-      const liveNeedsReviewCount = (freshDocRow?.stages?.classification?.needs_review !== undefined && freshDocRow?.stages?.classification?.needs_review !== null)
-        ? freshDocRow.stages.classification.needs_review
-        : remainingNeedsReview;
+      const liveNeedsReviewCount = remainingNeedsReview;
 
       const updatedDoc = {
         ...doc,
-        ...(freshDocRow || {}),
         status: displayStatus,
         review_status: backendStatus,
-        needsReview: remainingNeedsReview,
-        needs_review: remainingNeedsReview,
+        needsReview: liveNeedsReviewCount,
+        needs_review: liveNeedsReviewCount,
         lastSaved: 'Today',
         modifiedTime: nowFormatted,
         isSaved: true,
