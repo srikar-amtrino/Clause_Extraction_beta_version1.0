@@ -78,6 +78,7 @@ export default function ClauseTable({
   typeFilter,
   onTypeFilterChange,
   needsFixCount = 0,
+  reviewedCount = 0,
 }) {
   // Inline text editing state
   const [editingTextRowId, setEditingTextRowId] = useState(null);
@@ -130,8 +131,8 @@ export default function ClauseTable({
       // 1. Tab filter
       if (activeFilter === 'deleted') {
         // Already scoped to deletedClauses
-      } else if (activeFilter === 'to-review' && !row.needs_review) {
-        return false;
+      } else if (activeFilter === 'to-review') {
+        return Boolean(row.needs_review || row.needsReview || !row.isReviewed);
       } else if (activeFilter === 'needs-fix') {
         const isNeedsReview =
           !row.review?.decision &&
@@ -143,6 +144,9 @@ export default function ClauseTable({
             row.outcome === 'failed' ||
             (row.review_reasons && row.review_reasons.length > 0));
         if (!isNeedsReview) return false;
+      } else if (activeFilter === 'reviewed') {
+        const isReviewed = Boolean(row.isReviewed || row.review?.decision || (!row.needs_review && !row.needsReview));
+        if (!isReviewed) return false;
       } else if (activeFilter === 'edited' && !row.review) {
         return false;
       } else if (
@@ -251,6 +255,7 @@ export default function ClauseTable({
             {[
               { id: 'all', label: `All ${extractedClauses.length}` },
               { id: 'needs-fix', label: `Needs review ${needsFixCount > 0 ? `(${needsFixCount})` : ''}` },
+              { id: 'reviewed', label: `Reviewed ${reviewedCount > 0 ? `(${reviewedCount})` : ''}` },
               { id: 'deleted', label: `Deleted ${deletedClauses.length > 0 ? `(${deletedClauses.length})` : ''}` },
             ].map((f) => (
               <Button
