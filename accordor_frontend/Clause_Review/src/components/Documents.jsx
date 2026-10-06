@@ -112,6 +112,9 @@ export default function Documents({
         ? d.current_reviewer
         : (d.rawDoc?.current_reviewer !== undefined ? d.rawDoc.current_reviewer : null);
 
+      // Persistent list of all users who saved edits (from API's reviewers field)
+      const reviewers = d.reviewers || d.rawDoc?.reviewers || [];
+
       return {
         id: d.id || d.document_id || `doc-${i}`,
         documentId: d.document_id || d.id || `doc-${i}`,
@@ -128,6 +131,8 @@ export default function Documents({
         stages: d.stages || {},
         current_reviewer: currentReviewer,
         currentReviewer: currentReviewer,
+        // All distinct users who clicked Save (the persistent reviewer list)
+        reviewers,
         status: (d.status === 'Saved' || d.isSaved) ? 'Saved' : (d.status || (currentReviewer ? 'In review' : (isClassified ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted' ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted_with_warnings' ? 'Needs review' : extractionStatus === 'rejected' ? 'Draft' : 'Needs review'))),
         statusTag: d.statusTag || (warnings.length > 0 ? `${warnings.length} warning${warnings.length > 1 ? 's' : ''}` : null),
         vectorDbStatus: d.vectorDbStatus || 'Not sent yet',
@@ -896,26 +901,50 @@ export default function Documents({
                         {renderNeedsReviewBadge(doc.needsReview)}
                       </TableCell>
 
-                      {/* Reviewer */}
+                      {/* Reviewer — shows the active lock holder (if any) and all
+                          contributors who clicked Save at least once */}
                       <TableCell sx={{ py: 1.4 }}>
-                        {doc.current_reviewer ? (
-                          <Chip
-                            size="small"
-                            label={`${doc.current_reviewer}`}
-                            sx={{
-                              height: 20,
-                              fontSize: '11px',
-                              bgcolor: '#e0f2fe',
-                              color: '#0369a1',
-                              fontWeight: 600,
-                              border: '1px solid #bae6fd',
-                            }}
-                          />
-                        ) : (
-                          <Typography sx={{ fontSize: '12px', color: '#64748b' }}>
-                            Not assigned
-                          </Typography>
-                        )}
+                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.4 }}>
+                          {doc.current_reviewer && (
+                            <Chip
+                              size="small"
+                              label={`✏ ${doc.current_reviewer}`}
+                              title="Currently editing"
+                              sx={{
+                                height: 20,
+                                fontSize: '11px',
+                                bgcolor: '#e0f2fe',
+                                color: '#0369a1',
+                                fontWeight: 600,
+                                border: '1px solid #bae6fd',
+                                maxWidth: 155,
+                              }}
+                            />
+                          )}
+                          {(doc.reviewers || []).length > 0 ? (
+                            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.3 }}>
+                              {(doc.reviewers || []).map((r) => (
+                                <Chip
+                                  key={r}
+                                  size="small"
+                                  label={r}
+                                  title="Has saved edits"
+                                  sx={{
+                                    height: 18,
+                                    fontSize: '10px',
+                                    bgcolor: '#f0fdf4',
+                                    color: '#166534',
+                                    border: '1px solid #bbf7d0',
+                                    fontWeight: 500,
+                                    maxWidth: 145,
+                                  }}
+                                />
+                              ))}
+                            </Box>
+                          ) : !doc.current_reviewer ? (
+                            <Typography sx={{ fontSize: '12px', color: '#64748b' }}>Not assigned</Typography>
+                          ) : null}
+                        </Box>
                       </TableCell>
 
                       {/* Vector DB */}
@@ -1167,12 +1196,37 @@ export default function Documents({
 
               <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
                 <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 110 }}>
-                  Current reviewer
+                  Active editor
                 </Typography>
                 <Typography sx={{ fontSize: '12px', fontWeight: 600, color: selectedDoc.current_reviewer ? '#0f172a' : '#64748b', textAlign: 'right' }}>
-                  {selectedDoc.current_reviewer ? selectedDoc.current_reviewer : 'null'}
+                  {selectedDoc.current_reviewer || '—'}
                 </Typography>
               </Box>
+
+              {(selectedDoc.reviewers || []).length > 0 && (
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5, alignItems: 'flex-start' }}>
+                  <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 110, pt: 0.3 }}>
+                    Reviewers
+                  </Typography>
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.4, justifyContent: 'flex-end' }}>
+                    {(selectedDoc.reviewers || []).map((r) => (
+                      <Chip
+                        key={r}
+                        label={r}
+                        size="small"
+                        sx={{
+                          height: 18,
+                          fontSize: '10px',
+                          bgcolor: '#f0fdf4',
+                          color: '#166534',
+                          border: '1px solid #bbf7d0',
+                          fontWeight: 500,
+                        }}
+                      />
+                    ))}
+                  </Box>
+                </Box>
+              )}
 
               <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
                 <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 100 }}>

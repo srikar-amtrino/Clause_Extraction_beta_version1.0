@@ -193,6 +193,29 @@ export const documentService = {
     return get(`/api/documents/${documentId}/activity/`);
   },
 
+  /**
+   * Status counts across all documents.
+   * -> { counts: { needs_review: n, in_review: n, reviewed: n, draft: n, ... } }
+   * Intentionally tiny and fast — call independently of the full document list.
+   */
+  stats() {
+    return get('/api/documents/stats/');
+  },
+
+  /**
+   * Global user-level activity feed.
+   * -> { events: [...], count: n }
+   * Filters: limit, user, document_id, action (repeatable), phase (repeatable)
+   */
+  globalActivity({ limit, user, documentId, action, phase } = {}) {
+    return get('/api/activity/', toQuery({ limit, user, document_id: documentId, action, phase }));
+  },
+
+  /** Current workspace state (lock, reviewers, publish readiness) for one document. */
+  workspace(documentId) {
+    return get(`/api/documents/${documentId}/workspace/`);
+  },
+
   taxonomy() {
     return get('/api/taxonomy/');
   },

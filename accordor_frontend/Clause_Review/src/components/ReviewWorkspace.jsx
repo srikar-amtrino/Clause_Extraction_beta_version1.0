@@ -276,6 +276,29 @@ export default function ReviewWorkspace({
     };
   }, [docId, handleHeartbeatFailure, showToast, currentUserName]);
 
+  // Fire a lock-release beacon on hard page unload (tab close, browser close,
+  // direct URL navigation). navigator.sendBeacon is queued by the browser and
+  // survives page teardown; keepalive fetch above covers React unmount.
+  useEffect(() => {
+    if (!docId) return undefined;
+
+    const handleUnload = () => {
+      if (!lockOwnedRef.current) return; // read-only visitor — nothing to release
+      const token = getStoredToken();
+      const url = `/api/documents/${docId}/workspace/lock/release/`;
+      // sendBeacon ignores the response; the backend is idempotent on 403.
+      if (navigator.sendBeacon) {
+        const blob = new Blob(['{}'], { type: 'application/json' });
+        // Attach auth token as a query param so the Django backend can auth the
+        // beacon request (sendBeacon cannot set custom headers).
+        navigator.sendBeacon(`${url}?token=${encodeURIComponent(token || '')}`, blob);
+      }
+    };
+
+    window.addEventListener('beforeunload', handleUnload);
+    return () => window.removeEventListener('beforeunload', handleUnload);
+  }, [docId]);
+
   const handleTakeEditingAccess = async () => {
     try {
       const result = await documentService.acquireWorkspaceLock(docId, { takeOver: true });
