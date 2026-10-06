@@ -101,20 +101,17 @@ def _compute_progress(document_id):
     return reviewed, total
 
 
+def _publish_readiness(document_id):
+    """review_service.publish_readiness for a document id."""
+    from document_pipeline.models import Document
+    from document_pipeline.services.review_service import publish_readiness
+
+    return publish_readiness(Document.objects.filter(pk=document_id).first())
+
+
 def _blockers(document_id):
     """Return list of blocker strings that prevent publishing."""
-    qs = _live_records(document_id)
-    issues = []
-    not_reviewed = False # qs.filter(is_reviewed=False).count()
-    if not_reviewed:
-        issues.append('%d paragraph(s) still to review' % not_reviewed)
-    missing_type = qs.filter(label='Clause', canonical_type='').count()
-    if missing_type:
-        issues.append('%d paragraph(s) missing canonical type' % missing_type)
-    empty_text = qs.filter(reviewed_text='').count()
-    if empty_text:
-        issues.append('%d paragraph(s) have empty text' % empty_text)
-    return issues
+    return _publish_readiness(document_id)['blockers']
 
 
 # ---------------------------------------------------------------------------
@@ -476,9 +473,10 @@ def workspace_publish(request, document_id):
     if not ok:
         return resp
 
-    blockers = _blockers(document_id)
-    if blockers:
-        return _json({'can_publish': False, 'blockers': blockers}, status=422)
+    # The rule the screen shows, enforced here: the button is only a hint.
+    readiness = _publish_readiness(document_id)
+    if not readiness['can_publish']:
+        return _json(readiness, status=422)
 
     try:
         result = publish_document_task.apply(
