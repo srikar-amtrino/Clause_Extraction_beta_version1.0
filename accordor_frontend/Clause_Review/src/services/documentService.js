@@ -147,8 +147,8 @@ export const documentService = {
     return post(`/api/documents/${documentId}/workspace/lock/release/`, {}, options);
   },
 
-  publishToVectorDb(documentId) {
-    return post(`/api/documents/${documentId}/workspace/publish/`, {});
+  publishToVectorDb(documentId, data = {}) {
+    return post(`/api/documents/${documentId}/workspace/publish/`, data);
   },
 
   /**

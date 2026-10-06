@@ -105,30 +105,40 @@ function normalizeDoc(d, currentUser = null) {
     ? d.current_reviewer
     : (d.rawDoc?.current_reviewer !== undefined ? d.rawDoc.current_reviewer : null);
 
-  return {
-    id: d.document_id || d.id,
-    documentId: d.document_id || d.id,
-    name: d.name || 'Untitled Document',
-    fileName: d.name || 'document.docx',
-    title: d.title || d.name,
-    agreementType: d.agreement_type || d.agreementType || '',
-    sectorial: d.sectorial_category || d.sectorial || '',
-    pages,
-    clauses,
-    paragraphs,
-    size,
-    extraction_status: extractionStatus,
-    extractionStatus,
-    isClassified,
-    needsReview,
-    warnings,
-    stages: d.stages || {},
-    current_reviewer: currentReviewer,
-    currentReviewer: currentReviewer,
-    status: d.status || (currentReviewer ? 'In review' : (isClassified ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted' ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'rejected' ? 'Draft' : 'Needs review')),
-    statusTag: d.statusTag || (warnings.length > 0 ? `${warnings.length} warning${warnings.length > 1 ? 's' : ''}` : null),
-    vectorDbStatus: d.vectorDbStatus || 'Not sent yet',
-    vectorDbDetail: d.vectorDbDetail || '',
+    const isPublished = Boolean(
+      d.isPublished ||
+      d.status === 'Published' ||
+      d.status === 'Updated to vector DB' ||
+      d.review_status === 'published' ||
+      (d.vectorDbStatus && (d.vectorDbStatus.startsWith('Updated') || d.vectorDbStatus === 'Published'))
+    );
+    return {
+      id: d.document_id || d.id,
+      documentId: d.document_id || d.id,
+      name: d.name || 'Untitled Document',
+      fileName: d.name || 'document.docx',
+      title: d.title || d.name,
+      agreement_type: d.agreement_type || d.agreementType || d.metadata?.agreement_type || '',
+      sectorial_category: d.sectorial_category || d.sectorial || d.metadata?.sectorial_category || '',
+      agreementType: d.agreement_type || d.agreementType || d.metadata?.agreement_type || '',
+      sectorial: d.sectorial_category || d.sectorial || d.metadata?.sectorial_category || '',
+      pages,
+      clauses,
+      paragraphs,
+      size,
+      extraction_status: extractionStatus,
+      extractionStatus,
+      isClassified,
+      needsReview,
+      warnings,
+      stages: d.stages || {},
+      current_reviewer: currentReviewer,
+      currentReviewer: currentReviewer,
+      status: d.status || (isPublished ? 'Published' : currentReviewer ? 'In review' : (isClassified ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted' ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'rejected' ? 'Draft' : 'Needs review')),
+      statusTag: d.statusTag || (warnings.length > 0 ? `${warnings.length} warning${warnings.length > 1 ? 's' : ''}` : null),
+      vectorDbStatus: d.vectorDbStatus || (isPublished ? 'Updated to vector DB' : 'Not sent yet'),
+      isPublished,
+      vectorDbDetail: d.vectorDbDetail || '',
     folder: d.folder || d.drive_folder_name || 'Google Drive',
     inDriveSince: d.inDriveSince || (d.last_extracted_at ? new Date(d.last_extracted_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : 'Recently'),
     reviewer: currentReviewer || d.reviewer || currentUser?.username || currentUser?.name || (currentUser?.email ? currentUser.email.split('@')[0] : 'User'),
@@ -184,18 +194,26 @@ function AppWorkspace() {
     user: null,
   });
 
-  // Real Documents loaded directly from API
-  const [fetchedDocuments, setFetchedDocuments] = useState([]);
+  // Real Documents loaded directly from API (cached in sessionStorage for 0ms load on reopen/reload)
+  const [fetchedDocuments, setFetchedDocuments] = useState(() => {
+    try {
+      const cached = sessionStorage.getItem('accordor_cached_documents');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (_) {}
+    return [];
+  });
   const [_isLoadingDocs, setIsLoadingDocs] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
-  // Clear any legacy cache keys from localStorage and sessionStorage
+  // Clear legacy cache keys
   useEffect(() => {
     try {
       localStorage.removeItem('clausewright_cached_drivestate');
       localStorage.removeItem('clausewright_cached_documents');
       localStorage.removeItem('accordor_cached_documents_v1');
-      sessionStorage.clear();
     } catch (_) {}
   }, []);
 
@@ -243,6 +261,8 @@ function AppWorkspace() {
                 document_id: file.id,
                 name: file.name,
                 folder: f.name || driveState.folderPath || 'Google Drive',
+                agreement_type: file.agreement_type || file.agreementType || f.agreement_type || driveState.agreementType || '',
+                sectorial_category: file.sectorial_category || file.sectorial || f.sectorial_category || driveState.sectorial || '',
                 extraction_status: 'pending',
                 extractionStatus: 'pending',
                 size: file.size ? `${Math.round(file.size / 1024)} KB` : '24 KB',
@@ -256,6 +276,9 @@ function AppWorkspace() {
         const deduped = deduplicateDocs(mergedDocs);
         if (isMounted && deduped.length > 0) {
           setFetchedDocuments(deduped);
+          try {
+            sessionStorage.setItem('accordor_cached_documents', JSON.stringify(deduped));
+          } catch (_) {}
         }
       } catch (err) {
         console.warn('Initial document fetch notice:', err);
@@ -329,6 +352,9 @@ function AppWorkspace() {
           });
           if (hasChange) {
             const deduped = deduplicateDocs(updated);
+            try {
+              sessionStorage.setItem('accordor_cached_documents', JSON.stringify(deduped));
+            } catch (_) {}
             return deduped;
           }
           return prev;
@@ -378,8 +404,15 @@ function AppWorkspace() {
 
   const handleUpdateDocument = (updatedDoc) => {
     if (!updatedDoc) return;
-    const targetId = updatedDoc.id || updatedDoc.documentId;
+    const targetId = updatedDoc.id || updatedDoc.documentId || updatedDoc.document_id;
     const targetName = (updatedDoc.name || updatedDoc.fileName || '').trim().toLowerCase();
+    const isPublished = Boolean(
+      updatedDoc.isPublished ||
+      updatedDoc.status === 'Published' ||
+      updatedDoc.status === 'Updated to vector DB' ||
+      updatedDoc.review_status === 'published' ||
+      (updatedDoc.vectorDbStatus && (updatedDoc.vectorDbStatus.startsWith('Updated') || updatedDoc.vectorDbStatus === 'Published'))
+    );
 
     setSelectedReviewDoc((prev) => (prev && (prev.id === targetId || prev.documentId === targetId) ? { ...prev, ...updatedDoc } : updatedDoc));
     setFetchedDocuments((prev) => {
@@ -389,16 +422,41 @@ function AppWorkspace() {
         const matchesName = targetName && (d.name || d.fileName || '').trim().toLowerCase() === targetName;
         if (matchesId || matchesName) {
           matched = true;
-          return { ...d, ...updatedDoc };
+          return {
+            ...d,
+            ...updatedDoc,
+            needsReview: updatedDoc.needsReview !== undefined ? updatedDoc.needsReview : (updatedDoc.needs_review !== undefined ? updatedDoc.needs_review : d.needsReview),
+            status: updatedDoc.status || (isPublished ? 'Published' : d.status),
+            vectorDbStatus: updatedDoc.vectorDbStatus || (isPublished ? 'Updated to vector DB' : d.vectorDbStatus),
+            isPublished,
+          };
         }
         return d;
       });
       if (!matched) {
-        updated.unshift(updatedDoc);
+        updated.unshift({
+          ...updatedDoc,
+          status: updatedDoc.status || (isPublished ? 'Published' : 'Needs review'),
+          vectorDbStatus: updatedDoc.vectorDbStatus || (isPublished ? 'Updated to vector DB' : 'Not sent yet'),
+          isPublished,
+        });
       }
+      try {
+        sessionStorage.setItem('accordor_cached_documents', JSON.stringify(updated));
+      } catch (_) {}
       return updated;
     });
   };
+
+  useEffect(() => {
+    const handleDocumentSavedEvent = (event) => {
+      if (event?.detail?.doc) {
+        handleUpdateDocument(event.detail.doc);
+      }
+    };
+    window.addEventListener('document_saved', handleDocumentSavedEvent);
+    return () => window.removeEventListener('document_saved', handleDocumentSavedEvent);
+  }, []);
 
   // Second modal state (after selecting folder in Google Picker)
   const [selectedFolderForConfig, setSelectedFolderForConfig] = useState(null);
@@ -680,6 +738,37 @@ function AppWorkspace() {
       }));
     }
   };
+
+
+  useEffect(() => {
+    const onDocSaved = (e) => {
+      if (e.detail?.doc) {
+        handleUpdateDocument(e.detail.doc);
+      } else if (e.detail?.documentId) {
+        const docId = String(e.detail.documentId);
+        setFetchedDocuments((prev) => {
+          const next = prev.map((d) => {
+            const id = String(d.id || d.documentId || d.document_id);
+            if (id === docId) {
+              const isPub = e.detail.status === 'Updated to vector DB' || e.detail.status === 'Published';
+              return {
+                ...d,
+                status: e.detail.status || d.status,
+                ...(isPub ? { vectorDbStatus: 'Updated to vector DB', isPublished: true } : {}),
+              };
+            }
+            return d;
+          });
+          try {
+            sessionStorage.setItem('accordor_cached_documents', JSON.stringify(next));
+          } catch (_) {}
+          return next;
+        });
+      }
+    };
+    window.addEventListener('document_saved', onDocSaved);
+    return () => window.removeEventListener('document_saved', onDocSaved);
+  }, [handleUpdateDocument]);
 
   const handleViewDocument = (doc) => {
     showToast(`Opening "${doc.name}" for clause review...`);

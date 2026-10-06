@@ -68,8 +68,8 @@ function mapClassificationItem(item, i, doc, classRes) {
   const breadcrumb =
     item.breadcrumb || item.heading_trail || item.heading || (item.number ? `Clause ${item.number}` : `Clause ${i + 1}`);
   const reviewObj = item.review || null;
-  const isItemReviewed = Boolean(reviewObj?.decision);
-  const itemNeedsReview = isItemReviewed ? false : Boolean(item.needs_review);
+  const isItemReviewed = Boolean(reviewObj?.decision || item.needs_review === false || item.isReviewed);
+  const itemNeedsReview = isItemReviewed ? false : Boolean(item.needs_review !== false && (item.needs_review || item.needsReview));
   return {
     id: item.classification_id || item.id || `clause-${i}`,
     classification_id: item.classification_id,
@@ -370,7 +370,7 @@ export default function ReviewWorkspace({
 
   const reviewedCount = useMemo(() => {
     return extractedClauses.filter(
-      (r) => Boolean(r.review?.decision || r.isReviewed)
+      (r) => Boolean(r.review?.decision || r.isReviewed || (!r.needs_review && !r.needsReview))
     ).length;
   }, [extractedClauses]);
 
@@ -388,16 +388,60 @@ export default function ReviewWorkspace({
     if (!targetDocId || isPublishingToVectorDb) return;
     setIsPublishingToVectorDb(true);
     try {
-      const result = await documentService.publishToVectorDb(targetDocId);
-      const msg = result?.message || `Published "${docName}" to Vector DB successfully.`;
+      const deletedIds = new Set(
+        (deletedClauses || []).map((d) => String(d.classification_id || d.id || d.clause_id))
+      );
+
+      const activeClauses = extractedClauses
+        .filter((c) => !deletedIds.has(String(c.classification_id || c.id || c.clause_id)))
+        .map((c, idx) => ({
+          classification_id: c.classification_id || c.id,
+          clause_id: c.clause_id || (c.number ? `c${c.number}` : `c${idx + 1}`),
+          number: c.number,
+          paragraph_ids: c.paragraph_ids || [],
+          breadcrumb: c.breadcrumb || c.heading_trail || '',
+          heading_trail: c.heading_trail || c.breadcrumb || '',
+          text: (c.reviewed_text || c.text || '').trim(),
+          reviewed_text: (c.reviewed_text || c.text || '').trim(),
+          label: c.label || 'Clause',
+          type: c.type || null,
+          type_name: c.type_name || c.canonicalType || 'Unassigned',
+          sub_type: c.sub_type || null,
+          decision: c.review?.decision || c.decision || 'accepted',
+        }));
+
+      const activeAgreementType = doc?.agreement_type || doc?.agreementType || documentMeta?.agreement_type || documentMeta?.agreementType || '';
+      const activeSectorialCategory = doc?.sectorial_category || doc?.sectorial || documentMeta?.sectorial_category || documentMeta?.sectorial || '';
+
+      const publishPayload = {
+        classification_run_id: classificationRunId,
+        agreement_type: activeAgreementType,
+        sectorial_category: activeSectorialCategory,
+        clauses: activeClauses,
+        items: activeClauses,
+      };
+
+      const result = await documentService.publishToVectorDb(targetDocId, publishPayload);
+      const msg = result?.message || `Published "${docName}" (${activeClauses.length} clauses) to Vector DB successfully.`;
       showToast?.(msg, 'success');
-      setDocumentStatus('Updated to vector DB');
+      const updatedPublishDoc = {
+        ...doc,
+        status: 'Updated to vector DB',
+        review_status: 'published',
+        vectorDbStatus: 'Updated to vector DB',
+        isPublished: true,
+        agreement_type: activeAgreementType,
+        sectorial_category: activeSectorialCategory,
+      };
+      if (onUpdateDocument) {
+        onUpdateDocument(updatedPublishDoc);
+      }
       window.dispatchEvent(
         new CustomEvent('document_saved', {
           detail: {
             documentId: targetDocId,
             status: 'Updated to vector DB',
-            doc: { ...doc, status: 'Updated to vector DB' },
+            doc: updatedPublishDoc,
           },
         })
       );
@@ -478,17 +522,33 @@ export default function ReviewWorkspace({
     };
   }, []);
 
-  // Immediately initialize clauses if pre-fetched classification was provided from document click
+  // Immediately initialize clauses if pre-fetched classification or sessionStorage cache is available (0ms buffering)
   useEffect(() => {
-    if (doc?._initialClassification && Array.isArray(doc._initialClassification.items) && doc._initialClassification.items.length > 0) {
-      const initRows = doc._initialClassification.items.map((item, i) =>
-        mapClassificationItem(item, i, doc, doc._initialClassification)
+    const targetDocId = docId || doc?.documentId || doc?.id;
+    if (!targetDocId) return;
+
+    let initialData = doc?._initialClassification;
+    if (!initialData || !Array.isArray(initialData.items) || initialData.items.length === 0) {
+      try {
+        const cached = sessionStorage.getItem('accordor_class_cache_' + targetDocId);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (parsed && Array.isArray(parsed.items) && parsed.items.length > 0) {
+            initialData = parsed;
+          }
+        }
+      } catch (_) {}
+    }
+
+    if (initialData && Array.isArray(initialData.items) && initialData.items.length > 0) {
+      const initRows = initialData.items.map((item, i) =>
+        mapClassificationItem(item, i, doc, initialData)
       );
       setExtractedClauses(initRows);
-      if (Array.isArray(doc._initialClassification.deleted_items)) {
+      if (Array.isArray(initialData.deleted_items)) {
         setDeletedClauses(
-          doc._initialClassification.deleted_items.map((item, i) =>
-            mapClassificationItem(item, i, doc, doc._initialClassification)
+          initialData.deleted_items.map((item, i) =>
+            mapClassificationItem(item, i, doc, initialData)
           )
         );
       }
@@ -496,14 +556,21 @@ export default function ReviewWorkspace({
         setPreviewClause(initRows[0]);
         setHighlightedClauseId(initRows[0].id || initRows[0].clause_id);
       }
-      if (doc._initialClassification.summary) {
-        setClassificationSummary(doc._initialClassification.summary);
+      if (initialData.summary) {
+        setClassificationSummary(initialData.summary);
       }
-      if (doc._initialClassification.document) {
-        setDocumentMeta(doc._initialClassification.document);
+      if (initialData.document) {
+        setDocumentMeta(initialData.document);
       }
+      const runId =
+        initialData.classification_run?.classification_run_id ||
+        initialData.classification_run?.id ||
+        initialData.classification_run_id ||
+        initialData.summary?.classification_run_id;
+      if (runId) setClassificationRunId(runId);
+      setIsLoadingClauses(false);
     }
-  }, [doc]);
+  }, [docId, doc]);
 
   // Keep first clause selected and highlighted in preview when clauses are ready
   useEffect(() => {
@@ -513,12 +580,27 @@ export default function ReviewWorkspace({
     }
   }, [extractedClauses, previewClause]);
 
-  // Load classification items directly from backend API (no local storage cache)
+  // Load classification items directly from backend API (revalidates in background without blocking if cached)
   useEffect(() => {
     let isMounted = true;
     if (!docId) return;
 
-    setIsLoadingClauses(true);
+    // Check if we already have cached data in sessionStorage
+    let hasCachedData = false;
+    try {
+      const cached = sessionStorage.getItem('accordor_class_cache_' + docId);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed && Array.isArray(parsed.items) && parsed.items.length > 0) {
+          hasCachedData = true;
+        }
+      }
+    } catch (_) {}
+
+    if (!hasCachedData && extractedClauses.length === 0) {
+      setIsLoadingClauses(true);
+    }
+
     async function fetchClassification() {
       try {
         // Fetch full document metadata if doc is loading or missing attributes
@@ -553,6 +635,11 @@ export default function ReviewWorkspace({
         }
 
         if (classRes && Array.isArray(classRes.items) && classRes.items.length > 0) {
+          // Store in sessionStorage cache for instant reload / reopen
+          try {
+            sessionStorage.setItem('accordor_class_cache_' + docId, JSON.stringify(classRes));
+          } catch (_) {}
+
           const runId =
             classRes.classification_run?.classification_run_id ||
             classRes.classification_run?.id ||
@@ -582,7 +669,7 @@ export default function ReviewWorkspace({
               setDocumentMeta(classRes.document);
             }
           }
-        } else if (isMounted) {
+        } else if (isMounted && extractedClauses.length === 0) {
           setExtractedClauses([]);
         }
       } catch (err) {
@@ -930,42 +1017,52 @@ export default function ReviewWorkspace({
             selectedKeySet.has(String(row.paraId)) ||
             selectedKeySet.has(String(idx))
           )
-        : extractedClauses;
+        : extractedClauses.filter((row) => row.isLocallyEdited || row.is_text_modified);
 
-      const validItems = rowsToSave
+      const itemsToProcess = rowsToSave.length > 0 ? rowsToSave : extractedClauses;
+
+      const validItems = itemsToProcess
         .filter((row) => {
           const cid = row.classification_id || row.id;
-          return cid && uuidRegex.test(cid);
+          return Boolean(cid);
         })
         .map((row) => {
           const cid = row.classification_id || row.id;
           const label = row.label === 'Non-clause' ? 'Non-clause' : 'Clause';
           let typeKey = resolveTaxonomyKey(row.type, taxonomyMapRef.current);
-          if (!typeKey && row.canonicalType) {
-            typeKey = resolveTaxonomyKey(row.canonicalType, taxonomyMapRef.current);
+          if (!typeKey && (row.type_name || row.canonicalType)) {
+            typeKey = resolveTaxonomyKey(row.type_name || row.canonicalType, taxonomyMapRef.current);
           }
+          const textVal = (row.reviewed_text || row.text || '').trim();
+          const origText = (row.text || '').trim();
+
+          const isModified = Boolean(
+            row.isLocallyEdited ||
+            row.is_text_modified ||
+            (row.reviewed_text && row.text && row.reviewed_text.trim() !== row.text.trim())
+          );
+          let decision = 'accepted';
+          if (row.decision === 'rejected') {
+            decision = 'rejected';
+          } else if (isModified || row.decision === 'corrected') {
+            decision = 'corrected';
+          } else {
+            decision = 'accepted';
+          }
+
           const itemPayload = {
             classification_id: cid,
             label,
+            type: typeKey || row.type || 'unassigned',
+            sub_type: label !== 'Non-clause' && row.sub_type && row.sub_type !== 'null' ? row.sub_type : null,
+            text: origText || textVal,
+            reviewed_text: textVal || origText,
+            decision: decision,
           };
-          if (typeKey) itemPayload.type = typeKey;
-          if (label !== 'Non-clause' && row.sub_type && row.sub_type !== 'null') {
-            itemPayload.sub_type = row.sub_type;
-          }
-          if (row.text && typeof row.text === 'string' && row.text.trim()) {
-            itemPayload.text = row.text.trim();
-          }
-          if (row.decision === 'rejected') {
-            itemPayload.decision = 'rejected';
-            itemPayload.note = row.note?.trim() || 'Rejected during review';
-          } else if (row.decision === 'corrected' || row.isLocallyEdited) {
-            itemPayload.decision = 'corrected';
-            if (row.note && row.note.trim()) itemPayload.note = row.note.trim();
-          } else if (row.decision === 'accepted' || row.isReviewed) {
-            itemPayload.decision = 'accepted';
-            if (row.note && row.note.trim()) itemPayload.note = row.note.trim();
-          } else if (row.note && row.note.trim()) {
+          if (row.note && row.note.trim()) {
             itemPayload.note = row.note.trim();
+          } else if (decision === 'rejected') {
+            itemPayload.note = 'Rejected during review';
           }
           return itemPayload;
         });
@@ -992,15 +1089,20 @@ export default function ReviewWorkspace({
         prev.map((row) => {
           const cid = String(row.classification_id || row.id);
           if (savedIds.has(cid)) {
+            const dec = row.decision === 'rejected' ? 'rejected' : (row.isLocallyEdited || row.is_text_modified ? 'corrected' : 'accepted');
             return {
               ...row,
               needs_review: false,
               needsReview: false,
               isReviewed: true,
               isLocallyEdited: false,
-              decision: row.decision === 'rejected' ? 'rejected' : (row.decision === 'corrected' ? 'corrected' : 'accepted'),
-              review: row.review || {
-                decision: row.decision || 'accepted',
+              is_text_modified: false,
+              outcome: 'reviewed',
+              deviated: false,
+              review_reasons: [],
+              decision: dec,
+              review: {
+                decision: dec,
                 reviewed_by_name: currentUserName,
                 reviewed_at: new Date().toISOString(),
               },
@@ -1010,11 +1112,13 @@ export default function ReviewWorkspace({
         })
       );
       setSelectedRows([]);
+      setHasUnsavedChanges(false);
 
       // Re-fetch fresh classification from database to get the updated data immediately
+      let freshRows = [];
       const freshClass = await documentService.classification(targetDocId).catch(() => null);
       if (freshClass && Array.isArray(freshClass.items) && freshClass.items.length > 0) {
-        const freshRows = freshClass.items.map((item, i) => mapClassificationItem(item, i, doc, freshClass));
+        freshRows = freshClass.items.map((item, i) => mapClassificationItem(item, i, doc, freshClass));
         setExtractedClauses(freshRows);
         if (Array.isArray(freshClass.deleted_items)) {
           setDeletedClauses(freshClass.deleted_items.map((item, i) => mapClassificationItem(item, i, doc, freshClass)));
@@ -1028,16 +1132,26 @@ export default function ReviewWorkspace({
         }
       }
 
+      const backendStatus = saveResult?.review_status || freshClass?.document?.review_status || 'in_progress';
       const nowFormatted = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       setLastSavedTimestamp(nowFormatted);
       const displayStatus = 'Saved';
       setDocumentStatus(displayStatus);
-      setHasUnsavedChanges(false);
+
+      const finalClauses = freshRows.length > 0 ? freshRows : extractedClauses;
+      const remainingNeedsReview =
+        freshClass?.summary?.needs_review !== undefined
+          ? freshClass.summary.needs_review
+          : finalClauses.filter(
+              (r) => !r.isReviewed && !r.review?.decision && (r.needs_review || r.needsReview)
+            ).length;
 
       const updatedDoc = {
         ...doc,
         status: displayStatus,
         review_status: backendStatus,
+        needsReview: remainingNeedsReview,
+        needs_review: remainingNeedsReview,
         lastSaved: 'Today',
         modifiedTime: nowFormatted,
         isSaved: true,
@@ -1056,6 +1170,32 @@ export default function ReviewWorkspace({
       const savedCount = saveResult?.saved
         ? (saveResult.saved.accepted + saveResult.saved.corrected + saveResult.saved.rejected + saveResult.saved.unchanged)
         : validItems.length;
+
+      // Update sessionStorage cache
+      try {
+        const currentClauses = freshRows.length > 0 ? freshRows : extractedClauses;
+        sessionStorage.setItem('accordor_class_cache_' + targetDocId, JSON.stringify({
+          items: currentClauses.map((c) => ({
+            classification_id: c.classification_id,
+            clause_id: c.clause_id,
+            number: c.number,
+            breadcrumb: c.breadcrumb,
+            text: c.reviewed_text || c.text,
+            reviewed_text: c.reviewed_text || c.text,
+            label: c.label,
+            type: c.type,
+            type_name: c.type_name,
+            sub_type: c.sub_type,
+            needs_review: c.needs_review,
+            review: c.review,
+          })),
+          deleted_items: deletedClauses,
+          summary: classificationSummary,
+          document: documentMeta,
+          classification_run: { classification_run_id: runId },
+        }));
+      } catch (_) {}
+
       showToast?.(`Saved ${savedCount} clause decisions to database. Updated data loaded!`, 'success');
     } catch (err) {
       console.error('Error saving classification:', err);
@@ -1170,6 +1310,25 @@ export default function ReviewWorkspace({
       // 3. Clear selected rows that were deleted
       setSelectedRows((prev) => prev.filter((k) => !deletedIds.has(String(k))));
 
+      // Update sessionStorage cache
+      try {
+        const cacheKey = 'accordor_class_cache_' + targetDocId;
+        const currentCached = sessionStorage.getItem(cacheKey);
+        if (currentCached) {
+          const parsed = JSON.parse(currentCached);
+          parsed.items = (parsed.items || []).filter(
+            (c) =>
+              !deletedIds.has(String(c.classification_id)) &&
+              !deletedIds.has(String(c.id)) &&
+              !deletedIds.has(String(c.clause_id))
+          );
+          if (lastRes?.deleted_items) {
+            parsed.deleted_items = lastRes.deleted_items;
+          }
+          sessionStorage.setItem(cacheKey, JSON.stringify(parsed));
+        }
+      } catch (_) {}
+
       const count = toDelete.length;
       const clauseName = toDelete[0]?.clause_id || '';
       setDeleteModalState({ open: false, clause: null, clauses: [], mergeIntoNext: false, note: '', isDeleting: false });
@@ -1277,6 +1436,22 @@ export default function ReviewWorkspace({
       // Clear from selectedRows if selected
       setSelectedRows((prev) => prev.filter((k) => !restoredIds.has(String(k))));
 
+      // Update sessionStorage cache
+      try {
+        const cacheKey = 'accordor_class_cache_' + targetDocId;
+        const currentCached = sessionStorage.getItem(cacheKey);
+        if (currentCached) {
+          const parsed = JSON.parse(currentCached);
+          if (lastRes?.deleted_items) {
+            parsed.deleted_items = lastRes.deleted_items;
+          }
+          if (lastRes?.items) {
+            parsed.items = lastRes.items;
+          }
+          sessionStorage.setItem(cacheKey, JSON.stringify(parsed));
+        }
+      } catch (_) {}
+
       if (hasKeptMergedText) {
         showToast?.(
           `Clause restored. Note: The next clause was edited post-merge, so its text was left untouched. Please review and tidy by hand if needed.`,
@@ -1307,6 +1482,8 @@ export default function ReviewWorkspace({
   const docName = doc?.name || doc?.fileName || 'Document';
   const docTitle = documentMeta?.title || doc?.title || docName;
   const webViewLink = doc?.webViewLink || documentMeta?.drive_web_link || '';
+  const agreementType = doc?.agreement_type || doc?.agreementType || documentMeta?.agreement_type || documentMeta?.agreementType || '';
+  const sectorialCategory = doc?.sectorial_category || doc?.sectorial || documentMeta?.sectorial_category || documentMeta?.sectorial || '';
 
   const getStatusBadgeStyle = (status) => {
     switch (status) {
@@ -1435,32 +1612,70 @@ export default function ReviewWorkspace({
             gap: 2,
           }}
         >
-          {/* Document Title, Status */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+          {/* Document Title, Status, Agreement Type & Sectorial Category */}
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
               <Typography variant="h6" sx={{ fontWeight: 700, fontSize: '17px', color: '#1b1f24' }}>
                 {docName}
               </Typography>
+
+              {/* Status Badge */}
+              <Chip
+                label={documentStatus}
+                size="small"
+                sx={{
+                  height: 22,
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  ...getStatusBadgeStyle(documentStatus),
+                }}
+              />
             </Box>
 
-            {/* Status Badge */}
+            {/* Agreement Type and Sectorial Category */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+              <Typography sx={{ fontSize: '11.5px', color: '#475569', fontWeight: 500 }}>
+                <Box component="span" sx={{ color: '#64748b', fontWeight: 400 }}>Agreement: </Box>
+                {agreementType || '—'}
+              </Typography>
+              <Box component="span" sx={{ color: '#cbd5e1' }}>•</Box>
+              <Typography sx={{ fontSize: '11.5px', color: '#475569', fontWeight: 500 }}>
+                <Box component="span" sx={{ color: '#64748b', fontWeight: 400 }}>Sector: </Box>
+                {sectorialCategory || '—'}
+              </Typography>
+            </Box>
+          </Box>
+
+          {/* Action Buttons & Review Counters on Right Side */}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+            {/* Color-coded Review Stats Counters */}
             <Chip
-              label={documentStatus}
+              label={`${reviewedCount} Reviewed`}
               size="small"
               sx={{
-                height: 22,
+                height: 24,
                 fontSize: '11px',
                 fontWeight: 600,
-                ...getStatusBadgeStyle(documentStatus),
+                bgcolor: '#dcfce7',
+                color: '#15803d',
+                border: '1px solid #bbf7d0',
+              }}
+            />
+            <Chip
+              label={`${needsReviewCount} Needs review`}
+              size="small"
+              sx={{
+                height: 24,
+                fontSize: '11px',
+                fontWeight: 600,
+                bgcolor: '#fef3c7',
+                color: '#b45309',
+                border: '1px solid #fde68a',
               }}
             />
 
-          </Box>
-
-          {/* Action Buttons */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
             {lastSavedTimestamp && (
-              <Typography sx={{ fontSize: '11.5px', color: '#64748b', mr: 0.5 }}>
+              <Typography sx={{ fontSize: '11.5px', color: '#64748b', ml: 0.5, mr: 0.5 }}>
                 Saved at {lastSavedTimestamp}
               </Typography>
             )}
@@ -1734,6 +1949,7 @@ export default function ReviewWorkspace({
             typeFilter={typeFilter}
             onTypeFilterChange={setTypeFilter}
             needsFixCount={needsReviewCount}
+            reviewedCount={reviewedCount}
             deletedClauses={deletedClauses}
             onDeleteClause={handleOpenDeleteModal}
             onRestoreClause={handleRestoreClause}

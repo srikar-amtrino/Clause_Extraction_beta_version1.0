@@ -27,7 +27,7 @@ LABELS = {C.CLAUSE: CanonicalType.CLAUSE, C.NON_CLAUSE: CanonicalType.NON_CLAUSE
 
 # The row's review columns, as one Save writes them.
 REVIEW_FIELDS = ['text', 'review_decision', 'reviewed_label', 'reviewed_canonical_type',
-                 'reviewed_sub_type', 'review_note', 'reviewed_by', 'reviewed_at']
+                 'reviewed_sub_type', 'review_note', 'reviewed_by', 'reviewed_at', 'needs_review']
 
 
 class ReviewError(ValueError):
@@ -477,6 +477,7 @@ def save_document(document, classification_run_id, items, user):
         c.review_note = note
         c.reviewed_by = user
         c.reviewed_at = now
+        c.needs_review = False
         changed.append(c)
 
     if errors:
@@ -485,6 +486,9 @@ def save_document(document, classification_run_id, items, user):
 
     if changed:
         Classification.objects.bulk_update(changed, REVIEW_FIELDS)
+        from document_pipeline.models import ClassificationRun
+        remaining_needs_review = Classification.objects.filter(run=run, deleted_at__isnull=True, needs_review=True).count()
+        ClassificationRun.objects.filter(pk=run.pk).update(review_count=remaining_needs_review)
     if live:
         _mirror(document, [rows[cid] for cid in live], user, now)
 

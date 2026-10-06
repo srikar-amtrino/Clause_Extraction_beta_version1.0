@@ -222,7 +222,7 @@ def classification_json(document):
             'type_name': type_name,
             'sub_type': sub_type,
             'confidence': c.confidence,
-            'needs_review': c.needs_review,
+            'needs_review': bool(c.needs_review and not c.review_decision),
             'review_reasons': c.review_reasons,
             'expected_types': c.expected_type_keys,
             'deviated': c.deviated,
@@ -259,7 +259,7 @@ def classification_json(document):
             'classified': r.classified_count,
             'unclassified': r.unclassified_count,
             'failed': r.failed_count,
-            'needs_review': r.review_count,
+            'needs_review': sum(1 for itm in items if itm.get('needs_review')),
             'by_outcome': dict(by_outcome),
             'by_type': dict(by_type.most_common()),
             # Review progress over the whole run, so a header can read
