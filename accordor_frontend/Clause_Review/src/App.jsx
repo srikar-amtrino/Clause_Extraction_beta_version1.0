@@ -105,6 +105,8 @@ function normalizeDoc(d, currentUser = null) {
     ? d.current_reviewer
     : (d.rawDoc?.current_reviewer !== undefined ? d.rawDoc.current_reviewer : null);
 
+  const reviewers = d.reviewers || (d.rawDoc?.reviewers) || [];
+
   return {
     id: d.document_id || d.id,
     documentId: d.document_id || d.id,
@@ -125,6 +127,8 @@ function normalizeDoc(d, currentUser = null) {
     stages: d.stages || {},
     current_reviewer: currentReviewer,
     currentReviewer: currentReviewer,
+    // All users who clicked Save (persistent contributor list from API)
+    reviewers,
     status: d.status || (currentReviewer ? 'In review' : (isClassified ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted' ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'rejected' ? 'Draft' : 'Needs review')),
     statusTag: d.statusTag || (warnings.length > 0 ? `${warnings.length} warning${warnings.length > 1 ? 's' : ''}` : null),
     vectorDbStatus: d.vectorDbStatus || 'Not sent yet',
@@ -184,10 +188,21 @@ function AppWorkspace() {
     user: null,
   });
 
-  // Real Documents loaded directly from API
   const [fetchedDocuments, setFetchedDocuments] = useState([]);
   const [_isLoadingDocs, setIsLoadingDocs] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+
+  // Server-side stats fetched from /api/documents/stats/ — loaded immediately
+  // on mount to fill Overview cards with real numbers before the full document
+  // list arrives (eliminates the "0 0" flicker).
+  const [serverStats, setServerStats] = useState(() => {
+    try {
+      const cached = sessionStorage.getItem('accordor_stats_v1');
+      return cached ? JSON.parse(cached) : null;
+    } catch (_) {
+      return null;
+    }
+  });
 
   // Clear any legacy cache keys from localStorage and sessionStorage
   useEffect(() => {
@@ -195,8 +210,27 @@ function AppWorkspace() {
       localStorage.removeItem('clausewright_cached_drivestate');
       localStorage.removeItem('clausewright_cached_documents');
       localStorage.removeItem('accordor_cached_documents_v1');
-      sessionStorage.clear();
+      // Do NOT wipe sessionStorage wholesale — we now use accordor_stats_v1
+      sessionStorage.removeItem('clausewright_session_docs');
     } catch (_) {}
+  }, []);
+
+  // Fetch /api/documents/stats/ immediately — this is a tiny, fast endpoint.
+  // We do it independently of the slow document list so Overview cards are
+  // populated within ~100ms of mount rather than waiting for the full list.
+  useEffect(() => {
+    let cancelled = false;
+    const fetchStats = async () => {
+      try {
+        const res = await documentService.stats().catch(() => null);
+        if (!cancelled && res) {
+          setServerStats(res);
+          try { sessionStorage.setItem('accordor_stats_v1', JSON.stringify(res)); } catch (_) {}
+        }
+      } catch (_) {}
+    };
+    fetchStats();
+    return () => { cancelled = true; };
   }, []);
 
   // Load real documents immediately from /api/documents/ and merge with Google Drive if connected
@@ -373,6 +407,20 @@ function AppWorkspace() {
   };
 
   const handleBackToDocuments = () => {
+    // Refresh document list from backend so table reflects latest live state
+    documentService.list({ limit: 100 }).then((res) => {
+      if (res && res.documents) {
+        setFetchedDocuments((prev) => {
+          const updated = prev.map((doc) => {
+            const match = res.documents.find(
+              (p) => (p.document_id || p.id) === (doc.documentId || doc.id) || (p.name || '').toLowerCase() === (doc.name || '').toLowerCase()
+            );
+            return match ? normalizeDoc({ ...doc, ...match }, currentUser) : doc;
+          });
+          return deduplicateDocs(updated);
+        });
+      }
+    }).catch(() => {});
     navigate('/documents');
   };
 
@@ -398,6 +446,14 @@ function AppWorkspace() {
       }
       return updated;
     });
+
+    // Refresh Overview stats in the background so the cards reflect the save.
+    documentService.stats().then((res) => {
+      if (res) {
+        setServerStats(res);
+        try { sessionStorage.setItem('accordor_stats_v1', JSON.stringify(res)); } catch (_) {}
+      }
+    }).catch(() => {});
   };
 
   // Second modal state (after selecting folder in Google Picker)
@@ -462,18 +518,43 @@ function AppWorkspace() {
     verifyAuthStatus();
   }, [currentUser]);
 
-  // Stats derived from fetched documents
-  const stats = {
-    needsReview: extractedDocuments.filter((d) => (d.needsReview > 0) || d.status === 'Needs review').length,
-    processing: queueDocuments.filter((d) => {
-      const s = (d.extractionStatus || d.extraction_status || 'pending').toLowerCase();
-      return s === 'pending' || s === 'extracted' || s === 'extracted_with_warnings';
-    }).length,
-    inReview: extractedDocuments.filter((d) => d.status === 'In review' || Boolean(d.current_reviewer)).length,
-    draft: queueDocuments.filter((d) => d.extractionStatus === 'rejected').length + extractedDocuments.filter((d) => d.status === 'Draft').length,
-    reviewed: extractedDocuments.filter((d) => d.status === 'Reviewed' || (d.extractionStatus === 'classified' && d.needsReview === 0)).length,
-    updatedToVector: extractedDocuments.filter((d) => d.vectorDbStatus && d.vectorDbStatus.startsWith('Updated')).length,
-  };
+  // Stats: use server-side counts when they are available (fast, accurate);
+  // fall back to deriving from the fetched document list while it loads.
+  const stats = React.useMemo(() => {
+    if (serverStats && serverStats.counts) {
+      const c = serverStats.counts;
+      const reviewed = (c.reviewed || 0) + (c.published || 0) + (c.reopened_reviewed || 0);
+      const draft = (c.draft || 0);
+      return {
+        needsReview: (c.needs_review || 0),
+        processing: (c.pending || 0) + (c.pending_classification || 0),
+        inReview: (c.in_review || 0) + (c.reopened_in_review || 0),
+        draft,
+        // Overview reads both .reviewed and .inreviewed — keep both in sync
+        reviewed,
+        inreviewed: reviewed,
+        indraft: draft,
+        updatedToVector: (c.published || 0),
+      };
+    }
+    // Fallback to local derivation while document list is loading
+    const reviewed = extractedDocuments.filter((d) => d.status === 'Reviewed' || (d.extractionStatus === 'classified' && d.needsReview === 0)).length;
+    const draft = queueDocuments.filter((d) => d.extractionStatus === 'rejected').length + extractedDocuments.filter((d) => d.status === 'Draft').length;
+    return {
+      needsReview: extractedDocuments.filter((d) => (d.needsReview > 0) || d.status === 'Needs review').length,
+      processing: queueDocuments.filter((d) => {
+        const s = (d.extractionStatus || d.extraction_status || 'pending').toLowerCase();
+        return s === 'pending' || s === 'extracted' || s === 'extracted_with_warnings';
+      }).length,
+      inReview: extractedDocuments.filter((d) => d.status === 'In review' || Boolean(d.current_reviewer)).length,
+      draft,
+      reviewed,
+      // Overview reads both .reviewed and .inreviewed — keep both in sync
+      inreviewed: reviewed,
+      indraft: draft,
+      updatedToVector: extractedDocuments.filter((d) => d.vectorDbStatus && d.vectorDbStatus.startsWith('Updated')).length,
+    };
+  }, [serverStats, extractedDocuments, queueDocuments]);
 
   // Manual Google Drive OAuth connect
   const handleConnectDrive = () => {

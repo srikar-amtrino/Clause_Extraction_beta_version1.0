@@ -147,6 +147,18 @@ export const documentService = {
     return post(`/api/documents/${documentId}/workspace/lock/release/`, {}, options);
   },
 
+  requestWorkspaceAccess(documentId) {
+    return post(`/api/documents/${documentId}/workspace/lock/request/`, {});
+  },
+
+  respondWorkspaceAccess(documentId, action, targetUserId, targetUsername) {
+    return post(`/api/documents/${documentId}/workspace/lock/respond/`, {
+      action,
+      target_user_id: targetUserId,
+      target_username: targetUsername,
+    });
+  },
+
   publishToVectorDb(documentId) {
     return post(`/api/documents/${documentId}/workspace/publish/`, {});
   },
@@ -191,6 +203,29 @@ export const documentService = {
 
   getDocumentActivity(documentId) {
     return get(`/api/documents/${documentId}/activity/`);
+  },
+
+  /**
+   * Status counts across all documents.
+   * -> { counts: { needs_review: n, in_review: n, reviewed: n, draft: n, ... } }
+   * Intentionally tiny and fast — call independently of the full document list.
+   */
+  stats() {
+    return get('/api/documents/stats/');
+  },
+
+  /**
+   * Global user-level activity feed.
+   * -> { events: [...], count: n }
+   * Filters: limit, user, document_id, action (repeatable), phase (repeatable)
+   */
+  globalActivity({ limit, user, documentId, action, phase } = {}) {
+    return get('/api/activity/', toQuery({ limit, user, document_id: documentId, action, phase }));
+  },
+
+  /** Current workspace state (lock, reviewers, publish readiness) for one document. */
+  workspace(documentId) {
+    return get(`/api/documents/${documentId}/workspace/`);
   },
 
   taxonomy() {

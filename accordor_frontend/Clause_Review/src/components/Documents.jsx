@@ -112,6 +112,9 @@ export default function Documents({
         ? d.current_reviewer
         : (d.rawDoc?.current_reviewer !== undefined ? d.rawDoc.current_reviewer : null);
 
+      // Persistent list of all users who saved edits (from API's reviewers field)
+      const reviewers = d.reviewers || d.rawDoc?.reviewers || [];
+
       return {
         id: d.id || d.document_id || `doc-${i}`,
         documentId: d.document_id || d.id || `doc-${i}`,
@@ -128,6 +131,8 @@ export default function Documents({
         stages: d.stages || {},
         current_reviewer: currentReviewer,
         currentReviewer: currentReviewer,
+        // All distinct users who clicked Save (the persistent reviewer list)
+        reviewers,
         status: (d.status === 'Saved' || d.isSaved) ? 'Saved' : (d.status || (currentReviewer ? 'In review' : (isClassified ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted' ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted_with_warnings' ? 'Needs review' : extractionStatus === 'rejected' ? 'Draft' : 'Needs review'))),
         statusTag: d.statusTag || (warnings.length > 0 ? `${warnings.length} warning${warnings.length > 1 ? 's' : ''}` : null),
         vectorDbStatus: d.vectorDbStatus || 'Not sent yet',
@@ -435,6 +440,84 @@ export default function Documents({
           color: '#6b7280',
         }}
       />
+    );
+  };
+
+  // Reviewer cell helper — horizontal display with at most 2 pills and "+N others" tooltip
+  const renderReviewerCell = (doc) => {
+    const rawReviewers = Array.isArray(doc.reviewers) ? doc.reviewers : [];
+    const reviewers = Array.from(new Set(rawReviewers.filter(Boolean)));
+    const currentRev = doc.current_reviewer;
+
+    if (reviewers.length === 0 && !currentRev) {
+      return (
+        <Typography sx={{ fontSize: '12px', color: '#94a3b8' }}>
+          Not assigned
+        </Typography>
+      );
+    }
+
+    const maxVisible = 2;
+    const visibleReviewers = reviewers.slice(0, maxVisible);
+    const extraCount = Math.max(0, reviewers.length - maxVisible);
+    const remainingNames = extraCount > 0 ? reviewers.slice(maxVisible).join(', ') : '';
+
+    return (
+      <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.6, flexWrap: 'nowrap' }}>
+        {currentRev && (
+          <Tooltip title={`Currently editing: ${currentRev}`} arrow>
+            <Chip
+              size="small"
+              label={`✏ ${currentRev}`}
+              sx={{
+                height: 22,
+                fontSize: '11px',
+                bgcolor: '#e0f2fe',
+                color: '#0369a1',
+                fontWeight: 600,
+                border: '1px solid #bae6fd',
+                flexShrink: 0,
+              }}
+            />
+          </Tooltip>
+        )}
+        {visibleReviewers.map((r) => (
+          <Chip
+            key={r}
+            size="small"
+            label={r}
+            title={`Reviewer: ${r}`}
+            sx={{
+              height: 22,
+              fontSize: '11px',
+              bgcolor: '#f0fdf4',
+              color: '#166534',
+              border: '1px solid #bbf7d0',
+              fontWeight: 600,
+              flexShrink: 0,
+            }}
+          />
+        ))}
+        {extraCount > 0 && (
+          <Tooltip title={remainingNames} arrow>
+            <Chip
+              size="small"
+              label={`+${extraCount} other${extraCount > 1 ? 's' : ''}`}
+              sx={{
+                height: 22,
+                fontSize: '11px',
+                bgcolor: '#f8fafc',
+                color: '#475569',
+                border: '1px solid #cbd5e1',
+                fontWeight: 600,
+                flexShrink: 0,
+                cursor: 'pointer',
+                '&:hover': { bgcolor: '#f1f5f9' },
+              }}
+            />
+          </Tooltip>
+        )}
+      </Box>
     );
   };
 
@@ -817,7 +900,7 @@ export default function Documents({
                   <TableCell sx={{ bgcolor: '#f8fafc', py: 1.25, fontSize: '12px', fontWeight: 600, color: '#64748b', borderBottom: '1px solid #e2e8f0', width: 160 }}>
                     Needs review
                   </TableCell>
-                  <TableCell sx={{ bgcolor: '#f8fafc', py: 1.25, fontSize: '12px', fontWeight: 600, color: '#64748b', borderBottom: '1px solid #e2e8f0', width: 170 }}>
+                  <TableCell sx={{ bgcolor: '#f8fafc', py: 1.25, fontSize: '12px', fontWeight: 600, color: '#64748b', borderBottom: '1px solid #e2e8f0', width: 230, minWidth: 200 }}>
                     Reviewer
                   </TableCell>
                   <TableCell sx={{ bgcolor: '#f8fafc', py: 1.25, fontSize: '12px', fontWeight: 600, color: '#64748b', borderBottom: '1px solid #e2e8f0', width: 170 }}>
@@ -896,26 +979,9 @@ export default function Documents({
                         {renderNeedsReviewBadge(doc.needsReview)}
                       </TableCell>
 
-                      {/* Reviewer */}
+                      {/* Reviewer — horizontal display */}
                       <TableCell sx={{ py: 1.4 }}>
-                        {doc.current_reviewer ? (
-                          <Chip
-                            size="small"
-                            label={`${doc.current_reviewer}`}
-                            sx={{
-                              height: 20,
-                              fontSize: '11px',
-                              bgcolor: '#e0f2fe',
-                              color: '#0369a1',
-                              fontWeight: 600,
-                              border: '1px solid #bae6fd',
-                            }}
-                          />
-                        ) : (
-                          <Typography sx={{ fontSize: '12px', color: '#64748b' }}>
-                            Not assigned
-                          </Typography>
-                        )}
+                        {renderReviewerCell(doc)}
                       </TableCell>
 
                       {/* Vector DB */}
@@ -1167,12 +1233,62 @@ export default function Documents({
 
               <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
                 <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 110 }}>
-                  Current reviewer
+                  Active editor
                 </Typography>
                 <Typography sx={{ fontSize: '12px', fontWeight: 600, color: selectedDoc.current_reviewer ? '#0f172a' : '#64748b', textAlign: 'right' }}>
-                  {selectedDoc.current_reviewer ? selectedDoc.current_reviewer : 'null'}
+                  {selectedDoc.current_reviewer || '—'}
                 </Typography>
               </Box>
+
+              {(selectedDoc.reviewers || []).length > 0 && (() => {
+                const revList = Array.from(new Set((selectedDoc.reviewers || []).filter(Boolean)));
+                const visible = revList.slice(0, 3);
+                const extra = Math.max(0, revList.length - 3);
+                const extraNames = extra > 0 ? revList.slice(3).join(', ') : '';
+
+                return (
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5, alignItems: 'center' }}>
+                    <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 90 }}>
+                      Reviewers
+                    </Typography>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                      {visible.map((r) => (
+                        <Chip
+                          key={r}
+                          label={r}
+                          size="small"
+                          sx={{
+                            height: 20,
+                            fontSize: '11px',
+                            bgcolor: '#f0fdf4',
+                            color: '#166534',
+                            border: '1px solid #bbf7d0',
+                            fontWeight: 600,
+                          }}
+                        />
+                      ))}
+                      {extra > 0 && (
+                        <Tooltip title={extraNames} arrow>
+                          <Chip
+                            label={`+${extra} other${extra > 1 ? 's' : ''}`}
+                            size="small"
+                            sx={{
+                              height: 20,
+                              fontSize: '11px',
+                              bgcolor: '#f8fafc',
+                              color: '#475569',
+                              border: '1px solid #cbd5e1',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              '&:hover': { bgcolor: '#f1f5f9' },
+                            }}
+                          />
+                        </Tooltip>
+                      )}
+                    </Box>
+                  </Box>
+                );
+              })()}
 
               <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
                 <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 100 }}>
