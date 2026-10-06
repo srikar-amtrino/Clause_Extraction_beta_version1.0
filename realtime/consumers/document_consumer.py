@@ -163,34 +163,82 @@ class DocumentConsumer(AsyncJsonWebsocketConsumer):
 			await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
 	async def receive_json(self, content, **kwargs):
-		if content.get('event') != 'close_document':
-			return
+		event = content.get('event')
+		if event == 'close_document':
+			if self._lock_released:
+				# Already released via disconnect — nothing to do.
+				return
 
-		if self._lock_released:
-			# Already released via disconnect — nothing to do.
-			return
+			closed_by = await _release_document_lock(self.document_id, self.user)
+			if not closed_by:
+				await self.send_json({'event': 'close_denied', 'document_id': self.document_id})
+				return
 
-		closed_by = await _release_document_lock(self.document_id, self.user)
-		if not closed_by:
-			await self.send_json({'event': 'close_denied', 'document_id': self.document_id})
-			return
-
-		self._lock_released = True
-		await self.channel_layer.group_send(
-			self.group_name,
-			{
-				'type': 'document_lock_update',
-				'payload': {
-					'event': 'document_closed',
-					'document_id': self.document_id,
-					'locked': False,
-					'locked_by': None,
-					'locked_by_id': None,
-					'closed_by': closed_by['username'],
-					'closed_by_id': closed_by['user_id'],
+			self._lock_released = True
+			await self.channel_layer.group_send(
+				self.group_name,
+				{
+					'type': 'document_lock_update',
+					'payload': {
+						'event': 'document_closed',
+						'document_id': self.document_id,
+						'locked': False,
+						'locked_by': None,
+						'locked_by_id': None,
+						'closed_by': closed_by['username'],
+						'closed_by_id': closed_by['user_id'],
+					},
 				},
-			},
-		)
+			)
+			return
+
+		if event == 'request_access':
+			await self.channel_layer.group_send(
+				self.group_name,
+				{
+					'type': 'document_lock_update',
+					'payload': {
+						'event': 'access_requested',
+						'document_id': self.document_id,
+						'requested_by': self.user.username,
+						'requested_by_id': str(self.user.pk),
+					},
+				},
+			)
+			return
+
+		if event == 'grant_access':
+			closed_by = await _release_document_lock(self.document_id, self.user)
+			await self.channel_layer.group_send(
+				self.group_name,
+				{
+					'type': 'document_lock_update',
+					'payload': {
+						'event': 'access_granted',
+						'document_id': self.document_id,
+						'granted_by': self.user.username,
+						'target_user': content.get('target_user'),
+						'target_user_id': str(content.get('target_user_id') or ''),
+					},
+				},
+			)
+			return
+
+		if event == 'deny_access':
+			await self.channel_layer.group_send(
+				self.group_name,
+				{
+					'type': 'document_lock_update',
+					'payload': {
+						'event': 'access_denied',
+						'document_id': self.document_id,
+						'denied_by': self.user.username,
+						'target_user': content.get('target_user'),
+						'target_user_id': str(content.get('target_user_id') or ''),
+					},
+				},
+			)
+			return
 
 	async def document_lock_update(self, event):
 		await self.send_json(event['payload'])

@@ -329,6 +329,111 @@ def lock_release(request, document_id):
     return _json({'released': True})
 
 
+@csrf_exempt
+@require_auth
+@require_http_methods(['POST'])
+def lock_request_access(request, document_id):
+    """A user requests editing access from the active lock holder."""
+    from document_pipeline.models import DocumentActivityLog
+    from document_pipeline.activity import log_activity
+    from realtime.events import publish_access_event
+
+    user = request.user
+    lock = _get_lock(document_id)
+    if not lock:
+        return _json({'status': 'available', 'message': 'No active lock. You can take editing access directly.'})
+    if lock.user_id == user.id:
+        return _json({'status': 'editing', 'message': 'You already hold the edit lock.'})
+
+    log_activity(
+        document_id=document_id,
+        phase=DocumentActivityLog.USER_INTERACTION,
+        action='requested_lock',
+        summary=f'{user.username} requested editing access from {lock.user.username}.',
+        actor_user=user,
+    )
+    publish_access_event(
+        document_id,
+        event='access_requested',
+        user=user,
+        target_user=lock.user,
+    )
+    return _json({
+        'status': 'requested',
+        'requested_by': user.username,
+        'locked_by': lock.user.username,
+    })
+
+
+@csrf_exempt
+@require_auth
+@require_http_methods(['POST'])
+def lock_respond_access(request, document_id):
+    """The active lock holder grants or denies the access request."""
+    import json
+    from core.models import User
+    from document_pipeline.models import Document, DocumentActivityLog, WorkspaceLock
+    from document_pipeline.activity import log_activity
+    from realtime.events import publish_access_event, publish_document_lock
+
+    user = request.user
+    try:
+        body = json.loads(request.body)
+    except (ValueError, TypeError):
+        body = {}
+
+    action = body.get('action')  # 'grant' or 'deny'
+    target_username = body.get('target_username')
+    target_user_id = body.get('target_user_id')
+
+    target_user = None
+    if target_user_id:
+        target_user = User.objects.filter(pk=target_user_id).first()
+    elif target_username:
+        target_user = User.objects.filter(username=target_username).first()
+
+    lock = _get_lock(document_id)
+    if action == 'grant':
+        if lock and lock.user_id == user.id:
+            WorkspaceLock.objects.filter(document_id=document_id, user_id=user.id).delete()
+            Document.objects.filter(pk=document_id).update(current_reviewer=None)
+            log_activity(
+                document_id=document_id,
+                phase=DocumentActivityLog.USER_INTERACTION,
+                action='granted_lock',
+                summary=f'{user.username} granted editing access to {target_username or "requester"}.',
+                actor_user=user,
+            )
+            publish_access_event(
+                document_id,
+                event='access_granted',
+                user=user,
+                target_user=target_user,
+            )
+            publish_document_lock(document_id, event='document_closed', user=user)
+            return _json({'status': 'granted'})
+        return _err('You do not hold the active lock.', 403)
+
+    elif action == 'deny':
+        log_activity(
+            document_id=document_id,
+            phase=DocumentActivityLog.USER_INTERACTION,
+            action='denied_lock',
+            summary=f'{user.username} declined editing access request from {target_username or "requester"}.',
+            actor_user=user,
+        )
+        publish_access_event(
+            document_id,
+            event='access_denied',
+            user=user,
+            target_user=target_user,
+        )
+        return _json({'status': 'denied'})
+
+    return _err('Invalid action. Use "grant" or "deny".', 400)
+
+
+
 # ---------------------------------------------------------------------------
 # Draft  -- autosave / discard
 # ---------------------------------------------------------------------------
