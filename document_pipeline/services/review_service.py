@@ -17,7 +17,7 @@ anything about the rules.
 import uuid
 
 from django.db import transaction
-from django.db.models import Count
+from django.db.models import Count, Q
 
 from document_pipeline.models import CanonicalType, Classification
 
@@ -62,13 +62,15 @@ def _is_uuid(value):
     return True
 
 
-def _resolve_type(key, label, taxonomy_version):
+def _resolve_type(key, label, taxonomy_version, types=None):
     """The canonical type a correction names, in the version the run used.
 
     Looked up in that version rather than the newest, so a correction can only
-    name a type the verdict itself could have carried.
+    name a type the verdict itself could have carried. `types` is that
+    version's {key: CanonicalType}, read once for a whole Save.
     """
-    canonical_type = CanonicalType.objects.filter(version=taxonomy_version, key=key).first()
+    canonical_type = (types.get(key) if types is not None else
+                      CanonicalType.objects.filter(version=taxonomy_version, key=key).first())
     if canonical_type is None:
         raise ReviewError('No type "%s" in taxonomy %s.' % (key, taxonomy_version))
     if not canonical_type.is_active:
@@ -125,18 +127,17 @@ def review_counts_by_run(run_ids):
     about it before.
     """
     counts = {}
+    deleted = Q(deleted_at__isnull=False)
     rows = (Classification.objects
-            .filter(run_id__in=run_ids, review_decision__isnull=False, deleted_at__isnull=True)
+            .filter(Q(review_decision__isnull=False) | deleted, run_id__in=run_ids)
             .values('run_id', 'review_decision')
-            .annotate(total=Count('id')))
+            .annotate(live=Count('id', filter=~deleted), deleted=Count('id', filter=deleted)))
     for row in rows:
-        counts.setdefault(row['run_id'], {})[row['review_decision']] = row['total']
-    deleted = (Classification.objects
-               .filter(run_id__in=run_ids, deleted_at__isnull=False)
-               .values('run_id')
-               .annotate(total=Count('id')))
-    for row in deleted:
-        counts.setdefault(row['run_id'], {})['deleted'] = row['total']
+        run = counts.setdefault(row['run_id'], {})
+        if row['review_decision'] is not None and row['live']:
+            run[row['review_decision']] = row['live']
+        if row['deleted']:
+            run['deleted'] = run.get('deleted', 0) + row['deleted']
     return counts
 
 
@@ -258,15 +259,21 @@ def _update_review_status(document, run):
 
     -> (status, reviewed, total)
     """
+    from django.utils import timezone
+
     from document_pipeline.models import Document
 
-    live = Classification.objects.filter(run=run, deleted_at__isnull=True)
-    reviewed = live.filter(review_decision__isnull=False).count()
-    total = live.count()
+    counts = (Classification.objects.filter(run=run, deleted_at__isnull=True)
+              .aggregate(total=Count('id'),
+                         reviewed=Count('id', filter=Q(review_decision__isnull=False))))
+    reviewed, total = counts['reviewed'], counts['total']
     document.refresh_from_db(fields=['review_status'])
     status = _next_review_status(document.review_status, reviewed >= total)
-    if status != document.review_status:
-        Document.objects.filter(pk=document.pk).update(review_status=status)
+    # updated_at moves on every write, status change or not: it is part of the
+    # ETag GET /classification/ answers with, and a queryset update skips
+    # auto_now.
+    Document.objects.filter(pk=document.pk).update(review_status=status,
+                                                   updated_at=timezone.now())
     return status, reviewed, total
 
 
@@ -292,24 +299,80 @@ def _run_for_write(document, classification_run_id):
     return run
 
 
-def _mirror(document, classification, user, now):
-    """Copy one saved item onto the document's paragraph record, the table
-    Update Vector DB reads. Created when finalize never materialised it, so a
-    Save never depends on which path classified the document."""
+# The paragraph record columns a Save writes. updated_at is listed because
+# bulk_update skips auto_now.
+MIRROR_FIELDS = ['chunk', 'classification', 'label', 'canonical_type', 'sub_type',
+                 'reviewed_text', 'is_reviewed', 'reviewed_by', 'is_modified',
+                 'last_edited_by', 'last_edited_at', 'updated_at']
+
+
+def _record_defaults(classification):
+    """A paragraph record as finalize would have materialised it."""
+    c = classification
+    chunk = c.chunk
+    return {
+        'chunk': chunk, 'classification': c,
+        'breadcrumb': chunk.breadcrumb.split(' > ') if chunk.breadcrumb else [],
+        'sequence_order': chunk.order_index,
+        'original_text': chunk.text, 'reviewed_text': chunk.text,
+        'confidence': c.confidence,
+        'llm_issues': c.review_reasons or [],
+    }
+
+
+def _mirror(document, classifications, user, now):
+    """Copy the saved items onto the document's paragraph records, the table
+    Update Vector DB reads. A record finalize never materialised is created, so
+    a Save never depends on which path classified the document.
+
+    One read, then at most one insert and one update for the whole Save: the
+    database is a network round trip away, and a query per item made a Save of
+    a long contract take minutes.
+    """
+    from django.conf import settings
+    from django.db import IntegrityError
+
+    from document_pipeline.models import DocumentParagraphRecord as R
+
+    records = {r.paragraph_id: r for r in R.objects.filter(
+        document_id=document.id,
+        paragraph_id__in=[c.chunk.local_id for c in classifications])}
+    created = {}
+    for c in classifications:
+        record = records.get(c.chunk.local_id)
+        if record is None:
+            record = R(document_id=document.id, paragraph_id=c.chunk.local_id,
+                       **_record_defaults(c))
+            created[c.chunk.local_id] = (record, c)
+        _apply_mirror(record, c, user, now)
+
+    batch_size = settings.PERSIST_BULK_BATCH_SIZE
+    if created:
+        try:
+            with transaction.atomic():
+                R.objects.bulk_create([record for record, _ in created.values()],
+                                      batch_size=batch_size)
+        except IntegrityError:
+            # Finalize materialised some of these meanwhile. Item by item, the
+            # way it always worked, so the record it wrote is updated, not lost.
+            for _, c in created.values():
+                record, _ = R.objects.get_or_create(
+                    document_id=document.id, paragraph_id=c.chunk.local_id,
+                    defaults=_record_defaults(c))
+                _apply_mirror(record, c, user, now)
+                record.save()
+    if records:
+        for record in records.values():
+            record.updated_at = now
+        R.objects.bulk_update(records.values(), MIRROR_FIELDS, batch_size=batch_size)
+
+
+def _apply_mirror(record, classification, user, now):
+    """Set one record to the saved item's values. Does not write it."""
     from document_pipeline.models import DocumentParagraphRecord
 
     c = classification
     chunk = c.chunk
-    record, _ = DocumentParagraphRecord.objects.get_or_create(
-        document_id=document.id, paragraph_id=chunk.local_id,
-        defaults={
-            'chunk': chunk, 'classification': c,
-            'breadcrumb': chunk.breadcrumb.split(' > ') if chunk.breadcrumb else [],
-            'sequence_order': chunk.order_index,
-            'original_text': chunk.text, 'reviewed_text': chunk.text,
-            'confidence': c.confidence,
-            'llm_issues': c.review_reasons or [],
-        })
     label, canonical_type, sub_type = current_verdict(c)
     values = (label or c.label or DocumentParagraphRecord.CLAUSE,
               canonical_type.key if canonical_type else '',
@@ -328,7 +391,6 @@ def _mirror(document, classification, user, now):
     if changed:
         record.last_edited_by = user
         record.last_edited_at = now
-    record.save()
 
 
 @transaction.atomic
@@ -375,6 +437,7 @@ def save_document(document, classification_run_id, items, user):
                                    .select_related('chunk', 'chunk__clause', 'canonical_type',
                                                    'reviewed_canonical_type', 'run'))}
 
+    types = {t.key: t for t in CanonicalType.objects.filter(version=run.taxonomy_version)}
     now = timezone.now()
     counts = {'accepted': 0, 'corrected': 0, 'rejected': 0, 'unchanged': 0,
               'deleted_skipped': 0}
@@ -391,7 +454,7 @@ def save_document(document, classification_run_id, items, user):
         live.append(cid)
         try:
             decision, label, type_key, sub_type, note = _decision_for(c, entry)
-            canonical_type = (_resolve_type(type_key, label, run.taxonomy_version)
+            canonical_type = (_resolve_type(type_key, label, run.taxonomy_version, types)
                               if type_key else None)
             text = _text_for(c, entry)
         except ReviewError as problem:
@@ -422,8 +485,8 @@ def save_document(document, classification_run_id, items, user):
 
     if changed:
         Classification.objects.bulk_update(changed, REVIEW_FIELDS)
-    for cid in live:
-        _mirror(document, rows[cid], user, now)
+    if live:
+        _mirror(document, [rows[cid] for cid in live], user, now)
 
     status, reviewed, total = _update_review_status(document, run)
 
@@ -687,3 +750,60 @@ def vector_sync_state(document):
             document_id=document.id, is_modified=True).count(),
         'last_synced_at': (last.finished_at or last.started_at).isoformat() if last else None,
     }
+
+
+def publish_readiness(document):
+    """-> whether Update Vector DB may run now, and what stops it.
+
+    Read from the classification rows of the current run, the review as it is
+    saved -- never from what a screen holds unsaved. Deleted items are outside
+    the review and never block. An item the model did not flag is published
+    with the model's verdict, untouched or not.
+
+    What blocks, each counted once:
+      needs_review  flagged by the model, no saved decision yet
+      rejected      rejected and not since corrected (or deleted)
+      missing_type  a Clause, or an item with no verdict at all, carrying no
+                    type -- e.g. an unclassified item accepted as it stood
+      empty_text    nothing to embed
+
+    -> {'can_publish', 'blockers': [sentence, ...], 'needs_review', 'rejected',
+        'missing_type', 'empty_text'}
+    """
+    from document_pipeline.services.export_service import current_classification_run
+
+    counts = {'needs_review': 0, 'rejected': 0, 'missing_type': 0, 'empty_text': 0}
+    run = current_classification_run(document) if document is not None else None
+    if run is None:
+        return dict(counts, can_publish=False,
+                    blockers=['This document has not been classified yet.'])
+
+    undecided = Q(review_decision__isnull=True)
+    flagged = undecided & Q(needs_review=True)
+    rejected = Q(review_decision=C.REJECTED)
+    no_type = ((undecided & Q(needs_review=False)
+                & (Q(label__isnull=True) | Q(label=C.CLAUSE, canonical_type__isnull=True)))
+               | (Q(review_decision__in=[C.ACCEPTED, C.CORRECTED])
+                  & Q(reviewed_label=C.CLAUSE, reviewed_canonical_type__isnull=True)))
+    empty = Q(text__regex=r'^\s*$') | Q(text__isnull=True, chunk__text__regex=r'^\s*$')
+    # Aliased n_*: an alias may not share a name with a field the filters use.
+    row = (Classification.objects.filter(run=run, deleted_at__isnull=True)
+           .aggregate(n_live=Count('id'),
+                      n_needs_review=Count('id', filter=flagged),
+                      n_rejected=Count('id', filter=rejected),
+                      n_missing_type=Count('id', filter=no_type),
+                      n_empty_text=Count('id', filter=empty)))
+    counts = {key: row['n_' + key] for key in counts}
+
+    blockers = []
+    if not row['n_live']:
+        blockers.append('Every item is deleted, so there is nothing to publish.')
+    if counts['needs_review']:
+        blockers.append('%d clause(s) still need review.' % counts['needs_review'])
+    if counts['rejected']:
+        blockers.append('%d clause(s) rejected: correct or delete them.' % counts['rejected'])
+    if counts['missing_type']:
+        blockers.append('%d clause(s) have no type: choose one.' % counts['missing_type'])
+    if counts['empty_text']:
+        blockers.append('%d clause(s) have empty text.' % counts['empty_text'])
+    return dict(counts, can_publish=not blockers, blockers=blockers)
