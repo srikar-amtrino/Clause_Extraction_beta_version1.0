@@ -263,6 +263,8 @@ def classification_json(document):
             'unclassified': r.unclassified_count,
             'failed': r.failed_count,
             'needs_review': sum(1 for itm in items if itm.get('needs_review')),
+            'needs_review': live_needs_review,
+            'needs_review': sum(1 for itm in items if itm.get('needs_review')),
             'by_outcome': dict(by_outcome),
             'by_type': dict(by_type.most_common()),
             # Review progress over the whole run, so a header can read

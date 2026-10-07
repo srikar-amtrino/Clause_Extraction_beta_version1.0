@@ -15,6 +15,7 @@ import {
   TableContainer,
   Checkbox,
   LinearProgress,
+  CircularProgress,
   Tooltip,
   Menu,
   MenuItem,
@@ -79,6 +80,8 @@ export default function ClauseTable({
   onTypeFilterChange,
   needsFixCount = 0,
   reviewedCount = 0,
+  isRestoring = false,
+  restoringClauseIds = [],
 }) {
   // Inline text editing state
   const [editingTextRowId, setEditingTextRowId] = useState(null);
@@ -367,7 +370,14 @@ export default function ClauseTable({
               <Button
                 size="small"
                 variant="contained"
-                startIcon={<RestoreFromTrashIcon sx={{ fontSize: 16 }} />}
+                disabled={isRestoring}
+                startIcon={
+                  isRestoring ? (
+                    <CircularProgress size={14} thickness={5} sx={{ color: '#ffffff' }} />
+                  ) : (
+                    <RestoreFromTrashIcon sx={{ fontSize: 16 }} />
+                  )
+                }
                 onClick={() => {
                   const selectedList = deletedClauses.filter((r) => {
                     const rKey = String(r.classification_id || r.id || r.clause_id);
@@ -386,9 +396,10 @@ export default function ClauseTable({
                   color: '#ffffff',
                   boxShadow: 'none',
                   '&:hover': { bgcolor: '#15803d', boxShadow: 'none' },
+                  '&.Mui-disabled': { bgcolor: '#86efac', color: '#ffffff' },
                 }}
               >
-                Restore ({selectedRows.length})
+                {isRestoring ? 'Restoring...' : `Restore (${selectedRows.length})`}
               </Button>
             ) : (
               <Button
@@ -1104,34 +1115,51 @@ export default function ClauseTable({
 
                       {/* Action Cell (Preview / Delete or Restore) */}
                       <TableCell align="center" sx={{ py: 1.25, verticalAlign: 'middle' }}>
-                        {activeFilter === 'deleted' ? (
-                          <Button
-                            size="small"
-                            variant="outlined"
-                            startIcon={<RestoreFromTrashIcon sx={{ fontSize: 14 }} />}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onRestoreClause?.(row);
-                            }}
-                            sx={{
-                              height: 26,
-                              fontSize: '11px',
-                              fontWeight: 600,
-                              textTransform: 'none',
-                              px: 1.25,
-                              borderRadius: 1,
-                              bgcolor: '#f0fdf4',
-                              color: '#16a34a',
-                              borderColor: '#bbf7d0',
-                              '&:hover': {
-                                bgcolor: '#dcfce7',
-                                borderColor: '#86efac',
-                              },
-                            }}
-                          >
-                            Restore
-                          </Button>
-                        ) : (
+                        {activeFilter === 'deleted' ? (() => {
+                          const rowKey = String(row.classification_id || row.id || row.clause_id);
+                          const isRowRestoring = (restoringClauseIds || []).includes(rowKey) || isRestoring;
+                          return (
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              disabled={isRowRestoring}
+                              startIcon={
+                                isRowRestoring ? (
+                                  <CircularProgress size={13} thickness={5} sx={{ color: '#16a34a' }} />
+                                ) : (
+                                  <RestoreFromTrashIcon sx={{ fontSize: 14 }} />
+                                )
+                              }
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onRestoreClause?.(row);
+                              }}
+                              sx={{
+                                height: 26,
+                                fontSize: '11px',
+                                fontWeight: 600,
+                                textTransform: 'none',
+                                px: 1.25,
+                                borderRadius: 1,
+                                bgcolor: '#f0fdf4',
+                                color: '#16a34a',
+                                borderColor: '#bbf7d0',
+                                '&:hover': {
+                                  bgcolor: '#dcfce7',
+                                  borderColor: '#86efac',
+                                },
+                                '&.Mui-disabled': {
+                                  bgcolor: '#f0fdf4',
+                                  color: '#16a34a',
+                                  borderColor: '#bbf7d0',
+                                  opacity: 0.85,
+                                },
+                              }}
+                            >
+                              {isRowRestoring ? 'Restoring...' : 'Restore'}
+                            </Button>
+                          );
+                        })() : (
                           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>
                             <Tooltip title="Preview in full document">
                               <IconButton

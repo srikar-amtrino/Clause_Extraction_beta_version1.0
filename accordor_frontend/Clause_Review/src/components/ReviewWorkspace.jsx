@@ -568,6 +568,8 @@ export default function ReviewWorkspace({
   const [lastSavedTimestamp, setLastSavedTimestamp] = useState(doc?.lastSaved || null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [isSavingClassification, setIsSavingClassification] = useState(false);
+  const [isRestoringClause, setIsRestoringClause] = useState(false);
+  const [restoringClauseIds, setRestoringClauseIds] = useState([]);
 
   const needsReviewCount = useMemo(() => {
     return extractedClauses.filter(
@@ -1562,6 +1564,10 @@ export default function ReviewWorkspace({
     const targetDocId = doc?.documentId || doc?.id || docId;
     if (!targetDocId) return;
 
+    const idsToRestore = list.map((item) => String(item.classification_id || item.id || item.clause_id));
+    setIsRestoringClause(true);
+    setRestoringClauseIds((prev) => [...new Set([...prev, ...idsToRestore])]);
+
     let runId = classificationRunId;
     if (!runId) {
       const classInfo = await documentService.classification(targetDocId).catch(() => null);
@@ -1685,6 +1691,9 @@ export default function ReviewWorkspace({
     } catch (err) {
       console.error('Restore clause error:', err);
       showToast?.(err?.data?.detail || err?.message || err?.detail || 'Failed to restore clause', 'error');
+    } finally {
+      setIsRestoringClause(false);
+      setRestoringClauseIds((prev) => prev.filter((id) => !idsToRestore.includes(id)));
     }
   };
 
@@ -1889,18 +1898,33 @@ export default function ReviewWorkspace({
                 border: '1px solid #bbf7d0',
               }}
             />
-            <Chip
-              label={`${needsReviewCount} Needs review`}
-              size="small"
-              sx={{
-                height: 24,
-                fontSize: '11px',
-                fontWeight: 600,
-                bgcolor: '#fef3c7',
-                color: '#b45309',
-                border: '1px solid #fde68a',
-              }}
-            />
+            {needsReviewCount > 0 ? (
+              <Chip
+                label={`${needsReviewCount} Needs review`}
+                size="small"
+                sx={{
+                  height: 24,
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  bgcolor: '#fef3c7',
+                  color: '#b45309',
+                  border: '1px solid #fde68a',
+                }}
+              />
+            ) : (
+              <Chip
+                label="Reviewed"
+                size="small"
+                sx={{
+                  height: 24,
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  bgcolor: '#dcfce7',
+                  color: '#15803d',
+                  border: '1px solid #bbf7d0',
+                }}
+              />
+            )}
 
             {lastSavedTimestamp && (
               <Typography sx={{ fontSize: '11.5px', color: '#64748b', ml: 0.5, mr: 0.5 }}>
@@ -2078,7 +2102,7 @@ export default function ReviewWorkspace({
             color: '#7b838c',
           }}
         >
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+          {/* <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
             <span>
               pages: {doc.pages ?? 1} · clauses: {doc.clauses ?? totalChunks} · paragraphs:{' '}
               {doc.paragraphs ?? totalChunks} · {doc.size || 'Document'}
@@ -2087,7 +2111,7 @@ export default function ReviewWorkspace({
             <span>
               Current reviewer <strong style={{ color: '#1b1f24' }}>{currentUserName}</strong>
             </span>
-          </Box>
+          </Box> */}
         </Box>
       </Box>
 
@@ -2218,6 +2242,8 @@ export default function ReviewWorkspace({
             deletedClauses={deletedClauses}
             onDeleteClause={handleOpenDeleteModal}
             onRestoreClause={handleRestoreClause}
+            isRestoring={isRestoringClause}
+            restoringClauseIds={restoringClauseIds}
           />
 
           {/* Right: Document Preview Panel */}
