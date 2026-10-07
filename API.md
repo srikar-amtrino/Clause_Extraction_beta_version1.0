@@ -796,6 +796,11 @@ Deleted items are never embedded. One that an earlier publish put in the vector
 DB has its vector deleted first. The result's `removed` says how many, and the
 message reads "…, 2 deleted removed" when there were any.
 
+Each Qdrant point payload includes the document's `agreement_type` and
+`sectorial_category` fields, so points can be filtered by either value. Values
+sent in the publish request take precedence; if omitted, the saved document
+metadata is used.
+
 ## Review status
 
 | `review_status` | means |

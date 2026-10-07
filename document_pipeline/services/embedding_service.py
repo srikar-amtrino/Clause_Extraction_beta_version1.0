@@ -76,7 +76,12 @@ def delete_points(point_ids) -> int:
     return len(point_ids)
 
 
-def embed_and_upsert(paragraph_records: list, document_id) -> dict:
+def embed_and_upsert(
+    paragraph_records: list,
+    document_id,
+    agreement_type=None,
+    sectorial_category=None,
+) -> dict:
     """Embed all selected records, then upsert them into Qdrant in batches.
 
     Parameters
@@ -130,6 +135,16 @@ def embed_and_upsert(paragraph_records: list, document_id) -> dict:
                     'chunk_id': chunk_id,
                     'document_id': str(document_id),
                     'document_name': document.name,
+                    'agreement_type': (
+                        agreement_type
+                        if agreement_type is not None
+                        else getattr(document, 'agreement_type', '')
+                    ),
+                    'sectorial_category': (
+                        sectorial_category
+                        if sectorial_category is not None
+                        else getattr(document, 'sectorial_category', '')
+                    ),
                     'run_id': str(chunk.chunk_run_id) if chunk else None,
                     'parent_id': chunk.parent_local_id if chunk else None,
                     'chunk_kind': chunk.kind if chunk else None,
