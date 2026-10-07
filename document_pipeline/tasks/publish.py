@@ -114,10 +114,11 @@ def publish_document_task(self, document_id: str, user_id: str):
             'records_failed', 'status', 'finished_at', 'duration_ms'
         ])
 
-        # 6. Update document review_status.
+        # 6. Update document statuses after the Vector DB sync succeeds.
         new_status = 'published'
         doc.review_status = new_status
-        doc.save(update_fields=['review_status'])
+        doc.extraction_status = new_status
+        doc.save(update_fields=['review_status', 'extraction_status'])
 
         # 7. Log to activity timeline.
         kind = 'full'
