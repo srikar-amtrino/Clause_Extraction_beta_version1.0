@@ -207,6 +207,13 @@ function AppWorkspace() {
   });
   const [_isLoadingDocs, setIsLoadingDocs] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [serverStats, setServerStats] = useState(() => {
+    try {
+      const cached = sessionStorage.getItem('accordor_stats_v1');
+      if (cached) return JSON.parse(cached);
+    } catch (_) {}
+    return null;
+  });
 
   // Clear legacy cache keys
   useEffect(() => {
