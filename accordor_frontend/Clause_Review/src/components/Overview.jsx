@@ -14,11 +14,13 @@ import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import CloseIcon from '@mui/icons-material/Close';
 import SyncIcon from '@mui/icons-material/Sync';
 import { useAuth } from '../context/AuthContext';
+import { normalizeDocumentList, computeDocumentCounts } from '../utils/documentUtils';
 
 export default function Overview({
   driveState = {},
   stats = {},
   queueItems = [],
+  documents = [],
   onOpenPicker,
   onConnectDrive,
   onCheckDrive,
@@ -39,16 +41,27 @@ export default function Overview({
     year: 'numeric',
   }).format(new Date());
 
-  // Safe metrics computation
+  // Prioritize active document list passed down from App to match Documents section filter chips exactly
+  const effectiveDocs = documents && documents.length > 0 ? documents : (_documents && _documents.length > 0 ? _documents : []);
+
+  const docCounts = React.useMemo(() => {
+    if (effectiveDocs && effectiveDocs.length > 0 && !isEmptyData) {
+      const normalized = normalizeDocumentList(effectiveDocs, driveState, currentUserName);
+      return computeDocumentCounts(normalized);
+    }
+    return null;
+  }, [effectiveDocs, driveState, currentUserName, isEmptyData]);
+
+  // Safe metrics computation - prioritizes exact document counts matching Documents section
   const safeStats = {
-    needsReview: stats?.needsReview ?? 0,
-    processing: stats?.processing ?? 0,
-    inReview: stats?.inReview ?? 0,
-    draft: stats?.draft ?? stats?.indraft ?? 0,
-    indraft: stats?.indraft ?? stats?.draft ?? 0,
-    reviewed: stats?.reviewed ?? stats?.inreviewed ?? 0,
-    inreviewed: stats?.inreviewed ?? stats?.reviewed ?? 0,
-    updatedToVector: stats?.updatedToVector ?? 0,
+    needsReview: docCounts ? docCounts.needsReview : (stats?.needsReview ?? 0),
+    processing: stats?.processing ?? (queueItems?.length ?? 0),
+    inReview: docCounts ? docCounts.inReview : (stats?.inReview ?? 0),
+    draft: docCounts ? docCounts.draft : (stats?.draft ?? stats?.indraft ?? 0),
+    indraft: docCounts ? docCounts.indraft : (stats?.indraft ?? stats?.draft ?? 0),
+    reviewed: docCounts ? docCounts.reviewed : (stats?.reviewed ?? stats?.inreviewed ?? 0),
+    inreviewed: docCounts ? docCounts.inreviewed : (stats?.inreviewed ?? stats?.reviewed ?? 0),
+    updatedToVector: docCounts ? docCounts.published : (stats?.updatedToVector ?? 0),
   };
 
   // Deduplicate and filter queue items
@@ -279,16 +292,33 @@ export default function Overview({
         {/* Needs review */}
         <Box sx={{ p: '16px 20px', borderRight: '1px solid #e3e3de', display: 'flex', flexDirection: 'column', gap: 0.5 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: '#5f6368' }} />
+            <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: safeStats.needsReview === 0 ? '#16a34a' : '#5f6368' }} />
             <Typography sx={{ fontSize: '12.5px', fontWeight: 500, color: '#4a5159' }}>
               Needs review
             </Typography>
           </Box>
-          <Typography sx={{ fontSize: '26px', fontWeight: 700, color: '#1b1f24', lineHeight: 1.2, mt: 0.25 }}>
-            {safeStats.needsReview}
-          </Typography>
+          {safeStats.needsReview === 0 ? (
+            <Box sx={{ mt: 0.5, mb: 0.25, display: 'flex', alignItems: 'center' }}>
+              <Chip
+                label="Reviewed"
+                size="small"
+                sx={{
+                  height: 26,
+                  fontSize: '12.5px',
+                  fontWeight: 700,
+                  bgcolor: '#dcfce7',
+                  color: '#166534',
+                  border: '1px solid #bbf7d0',
+                }}
+              />
+            </Box>
+          ) : (
+            <Typography sx={{ fontSize: '26px', fontWeight: 700, color: '#1b1f24', lineHeight: 1.2, mt: 0.25 }}>
+              {safeStats.needsReview}
+            </Typography>
+          )}
           <Typography sx={{ fontSize: '11.5px', color: '#7b838c' }}>
-            waiting for reviewer
+            {safeStats.needsReview === 0 ? 'all files reviewed' : 'waiting for reviewer'}
           </Typography>
         </Box>
 
