@@ -35,9 +35,15 @@ function deduplicateDocs(docs) {
       const existing = map.get(key);
       const existingStatus = (existing.extraction_status || existing.extractionStatus || '').toLowerCase();
       const newStatus = (doc.extraction_status || doc.extractionStatus || '').toLowerCase();
+      const existingPublished = existingStatus === 'published' || existing.review_status === 'published' || existing.isPublished;
+      const newPublished = newStatus === 'published' || doc.review_status === 'published' || doc.isPublished;
       const existingClassified = existingStatus === 'classified' || Boolean(existing.stages?.classification || existing.classified || (existing.stages?.classification?.micro_chunks > 0));
       const newClassified = newStatus === 'classified' || Boolean(doc.stages?.classification || doc.classified || (doc.stages?.classification?.micro_chunks > 0));
-      if (!existingClassified && newClassified) {
+      if (newPublished && !existingPublished) {
+        map.set(key, doc);
+      } else if (existingPublished && !newPublished) {
+        // Keep the published document and its current extraction status.
+      } else if (!existingClassified && newClassified) {
         map.set(key, doc);
       } else if (existingClassified && !newClassified) {
         // Keep existing classified document
@@ -90,7 +96,17 @@ function normalizeDoc(d, currentUser = null) {
     rawStatus === 'rejected' ||
     rawStatus === 'failed';
 
-  const extractionStatus = isClassified
+  const isPublished =
+    rawStatus === 'published' ||
+    d.isPublished ||
+    d.status === 'Published' ||
+    d.status === 'Updated to vector DB' ||
+    d.review_status === 'published' ||
+    (d.vectorDbStatus && (d.vectorDbStatus.startsWith('Updated') || d.vectorDbStatus === 'Published'));
+
+  const extractionStatus = isPublished
+    ? 'published'
+    : isClassified
     ? 'classified'
     : isExtracted
     ? (rawStatus === 'extracted_with_warnings' ? 'extracted_with_warnings' : 'extracted')
@@ -105,13 +121,6 @@ function normalizeDoc(d, currentUser = null) {
     ? d.current_reviewer
     : (d.rawDoc?.current_reviewer !== undefined ? d.rawDoc.current_reviewer : null);
 
-    const isPublished = Boolean(
-      d.isPublished ||
-      d.status === 'Published' ||
-      d.status === 'Updated to vector DB' ||
-      d.review_status === 'published' ||
-      (d.vectorDbStatus && (d.vectorDbStatus.startsWith('Updated') || d.vectorDbStatus === 'Published'))
-    );
     return {
       id: d.document_id || d.id,
       documentId: d.document_id || d.id,
@@ -324,14 +333,14 @@ function AppWorkspace() {
   const queueDocuments = React.useMemo(() => {
     return fetchedDocuments.filter((d) => {
       const status = (d.extraction_status || d.extractionStatus || 'pending').toLowerCase();
-      return status !== 'classified';
+      return status !== 'classified' && status !== 'published';
     });
   }, [fetchedDocuments]);
 
   const extractedDocuments = React.useMemo(() => {
     return fetchedDocuments.filter((d) => {
       const status = (d.extraction_status || d.extractionStatus || '').toLowerCase();
-      return status === 'classified' || d.status === 'Saved' || d.isSaved;
+      return status === 'classified' || status === 'published' || d.status === 'Saved' || d.isSaved;
     });
   }, [fetchedDocuments]);
 

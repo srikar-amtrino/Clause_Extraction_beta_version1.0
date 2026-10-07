@@ -91,7 +91,7 @@ def embed_and_upsert(paragraph_records: list, document_id) -> dict:
     if not paragraph_records:
         return {'embedded': 0, 'failed': 0}
 
-    embedding_url = 'http://54.215.196.139:8000/embed'
+    embedding_url = 'http://18.144.172.78:8000/embed'
     qdrant_url = _required_env('QDRANT_URL').rstrip('/')
     qdrant_api_key = _required_env('QDRANT_API_KEY')
     collection = os.environ.get('QDRANT_COLLECTION', 'legal_clauses_v1').strip()

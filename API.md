@@ -726,16 +726,30 @@ Both empty-type cases block publishing until a reviewer sets a type.
 { "acquired": true, "is_read_only": false, "expires_at": "…", "review_status": "in_review" }
 ```
 
-Taking the lock moves `needs_review` → `in_review`, and `published` →
-`reopened_in_review`. When someone else holds it the answer is still `200`:
+Opening a review workspace moves `needs_review` → `in_review`, and `published` →
+`reopened_in_review`. The active lock holder remains the document's current
+reviewer when another user opens the same workspace. That user is read-only;
+the answer is still `200`:
 
 ```json
-{ "acquired": false, "is_read_only": true, "locked_by": "anna", "locked_by_id": "…", "expires_at": "…" }
+{ "acquired": false, "is_read_only": true, "locked_by": "anna", "locked_by_id": "…", "expires_at": "…", "review_status": "in_review" }
 ```
 
 - `POST .../workspace/lock/heartbeat/` → `{ "expires_at": "…" }`. Send every
   60 s; `403` if you no longer hold the lock.
 - `POST .../workspace/lock/release/` → `{ "released": true }`.
+- A WebSocket disconnect by itself does not release the lock: brief network
+  interruptions should not end a review session. The client releases explicitly;
+  abandoned locks expire after 120 s without a heartbeat.
+- A read-only reviewer sends `{ "event": "request_access" }` over
+  `ws/documents/<id>/`. The active reviewer receives `access_requested` over
+  that socket.
+- The active reviewer responds with
+  `POST .../workspace/lock/respond/` and
+  `{ "action": "grant" | "deny", "target_user_id": "<user id>" }`. Granting
+  atomically transfers the existing lock and `current_reviewer` to the target;
+  both reviewers receive the updated lock state. Denying leaves the current
+  reviewer and lock unchanged.
 
 A write without the lock is refused with `403`; a write while someone else holds
 it with `423`.
