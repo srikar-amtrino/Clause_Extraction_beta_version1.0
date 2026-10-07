@@ -54,6 +54,28 @@ def count_document_vectors(document_id) -> int:
     return count
 
 
+def delete_points(point_ids) -> int:
+    """Delete points from Qdrant by id. An id Qdrant does not hold is ignored,
+    so deleting twice is harmless. Returns how many ids were sent."""
+    point_ids = [str(point_id) for point_id in point_ids]
+    if not point_ids:
+        return 0
+    qdrant_url = _required_env('QDRANT_URL').rstrip('/')
+    qdrant_api_key = _required_env('QDRANT_API_KEY')
+    collection = os.environ.get('QDRANT_COLLECTION', 'legal_clauses_v1').strip()
+    timeout = float(os.environ.get('EMBEDDING_API_TIMEOUT_SECONDS', '60'))
+    for batch_start in range(0, len(point_ids), 64):
+        response = requests.post(
+            f'{qdrant_url}/collections/{collection}/points/delete?wait=true',
+            json={'points': point_ids[batch_start:batch_start + 64]},
+            headers={'api-key': qdrant_api_key, 'Content-Type': 'application/json'},
+            timeout=timeout,
+        )
+        response.raise_for_status()
+    logger.info('Deleted %d paragraph vectors from Qdrant.', len(point_ids))
+    return len(point_ids)
+
+
 def embed_and_upsert(paragraph_records: list, document_id) -> dict:
     """Embed all selected records, then upsert them into Qdrant in batches.
 

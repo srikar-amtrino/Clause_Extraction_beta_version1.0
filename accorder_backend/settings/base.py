@@ -1,5 +1,6 @@
 """Settings shared by every environment. Values that differ per environment
 or are secret come from the process environment, loaded from `.env`."""
+import logging
 import os
 import ssl
 import sys
@@ -248,16 +249,31 @@ CELERY_RESULT_BACKEND = CELERY_BROKER_URL
 CELERY_BROKER_USE_SSL = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
 CELERY_REDIS_BACKEND_USE_SSL = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
 
+def _redis_channel_layer_available():
+    try:
+        import channels_redis.core  # noqa: F401
+    except Exception:  # not installed, or installed without its redis dependency
+        return False
+    return True
+
+
 # Use Redis across workers when configured; local development can run with the
-# in-memory layer when no Redis connection is available.
+# in-memory layer when no Redis connection is available. An environment that
+# has the broker URL but not channels_redis falls back too, rather than every
+# realtime event failing to import the backend.
+_use_redis_channel_layer = bool(CELERY_BROKER_URL) and _redis_channel_layer_available()
+if CELERY_BROKER_URL and not _use_redis_channel_layer:
+    logging.getLogger(__name__).warning(
+        "channels_redis is not installed; using InMemoryChannelLayer, so realtime "
+        "events reach only this process. Install requirements.txt to fix this.")
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": (
             "channels_redis.core.RedisChannelLayer"
-            if CELERY_BROKER_URL
+            if _use_redis_channel_layer
             else "channels.layers.InMemoryChannelLayer"
         ),
-        "CONFIG": {"hosts": [CELERY_BROKER_URL]} if CELERY_BROKER_URL else {},
+        "CONFIG": {"hosts": [CELERY_BROKER_URL]} if _use_redis_channel_layer else {},
     }
 }
 # A task that names no queue lands on one the worker consumes. Celery's own

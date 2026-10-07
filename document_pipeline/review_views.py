@@ -8,10 +8,9 @@ POST  /api/documents/{id}/workspace/lock/            -- acquire
 POST  /api/documents/{id}/workspace/lock/heartbeat/  -- renew TTL
 POST  /api/documents/{id}/workspace/lock/release/    -- release
 
-Paragraph editing
------------------
-POST  /api/documents/{id}/workspace/paragraphs/{para_id}/  -- update one
-POST  /api/documents/{id}/workspace/bulk-update/            -- update many
+Clause edits go through POST /api/documents/{id}/classification/save/
+(document_views), which writes the classification row and this workspace's
+paragraph record together.
 
 Draft management (24h auto-discard)
 ------------------------------------
@@ -41,7 +40,6 @@ import logging
 
 from django.db import transaction
 from django.http import JsonResponse
-from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
@@ -63,13 +61,23 @@ def _err(msg, status=400):
 
 
 def _get_lock(document_id):
-    """Return active WorkspaceLock or None."""
-    from document_pipeline.models import WorkspaceLock
+    """Return active WorkspaceLock or None.
+
+    If a lock row exists but its TTL has expired, delete it and clear the
+    denormalised ``current_reviewer`` on the Document so the next caller
+    sees a clean state without waiting for the background cleaner task.
+    """
+    from document_pipeline.models import Document, WorkspaceLock
     try:
         lock = WorkspaceLock.objects.select_related('user').get(document_id=document_id)
-        return lock if lock.is_active else None
     except WorkspaceLock.DoesNotExist:
         return None
+    if lock.is_active:
+        return lock
+    # Expired — remove ghost lock atomically.
+    lock.delete()
+    Document.objects.filter(pk=document_id).update(current_reviewer=None)
+    return None
 
 
 def _check_editable(document_id, user):
@@ -85,29 +93,35 @@ def _check_editable(document_id, user):
     return True, None
 
 
-def _compute_progress(document_id):
-    from document_pipeline.models import DocumentParagraphRecord
+def _live_records(document_id):
+    """The document's paragraph records, less the items a reviewer deleted."""
+    from document_pipeline.models import Document, DocumentParagraphRecord
+    from document_pipeline.services.review_service import deleted_paragraph_ids
+
     qs = DocumentParagraphRecord.objects.filter(document_id=document_id)
+    document = Document.objects.filter(pk=document_id).first()
+    deleted = deleted_paragraph_ids(document) if document else set()
+    return qs.exclude(paragraph_id__in=deleted) if deleted else qs
+
+
+def _compute_progress(document_id):
+    qs = _live_records(document_id)
     total = qs.count()
     reviewed = qs.filter(is_reviewed=True).count()
     return reviewed, total
 
 
+def _publish_readiness(document_id):
+    """review_service.publish_readiness for a document id."""
+    from document_pipeline.models import Document
+    from document_pipeline.services.review_service import publish_readiness
+
+    return publish_readiness(Document.objects.filter(pk=document_id).first())
+
+
 def _blockers(document_id):
     """Return list of blocker strings that prevent publishing."""
-    from document_pipeline.models import DocumentParagraphRecord
-    qs = DocumentParagraphRecord.objects.filter(document_id=document_id)
-    issues = []
-    not_reviewed = False # qs.filter(is_reviewed=False).count()
-    if not_reviewed:
-        issues.append('%d paragraph(s) still to review' % not_reviewed)
-    missing_type = qs.filter(label='Clause', canonical_type='').count()
-    if missing_type:
-        issues.append('%d paragraph(s) missing canonical type' % missing_type)
-    empty_text = qs.filter(reviewed_text='').count()
-    if empty_text:
-        issues.append('%d paragraph(s) have empty text' % empty_text)
-    return issues
+    return _publish_readiness(document_id)['blockers']
 
 
 # ---------------------------------------------------------------------------
@@ -119,9 +133,7 @@ def _blockers(document_id):
 @require_http_methods(['GET'])
 def workspace_detail(request, document_id):
     """Return full workspace data for one document."""
-    from document_pipeline.models import (
-        Document, DocumentParagraphRecord, ReviewDraft, WorkspaceLock
-    )
+    from document_pipeline.models import Document, ReviewDraft, WorkspaceLock
 
     try:
         doc = Document.objects.get(pk=document_id)
@@ -133,8 +145,7 @@ def workspace_detail(request, document_id):
     is_read_only = not lock or lock.user_id != user.id
 
     paragraphs = list(
-        DocumentParagraphRecord.objects
-        .filter(document_id=document_id)
+        _live_records(document_id)
         .order_by('sequence_order')
         .values(
             'paragraph_id', 'breadcrumb', 'source_page', 'sequence_order',
@@ -318,139 +329,109 @@ def lock_release(request, document_id):
     return _json({'released': True})
 
 
-# ---------------------------------------------------------------------------
-# Paragraph update  -- single
-# ---------------------------------------------------------------------------
-
 @csrf_exempt
 @require_auth
 @require_http_methods(['POST'])
-def paragraph_update(request, document_id, para_id):
-    """Update a single paragraph record."""
-    from document_pipeline.models import DocumentActivityLog, DocumentParagraphRecord
+def lock_request_access(request, document_id):
+    """A user requests editing access from the active lock holder."""
+    from document_pipeline.models import DocumentActivityLog
     from document_pipeline.activity import log_activity
+    from realtime.events import publish_access_event
 
     user = request.user
-    ok, resp = _check_editable(document_id, user)
-    if not ok:
-        return resp
-
-    try:
-        record = DocumentParagraphRecord.objects.get(
-            document_id=document_id, paragraph_id=para_id)
-    except DocumentParagraphRecord.DoesNotExist:
-        return _err('Paragraph not found.', 404)
-
-    try:
-        body = json.loads(request.body)
-    except (ValueError, TypeError):
-        return _err('Invalid JSON body.')
-
-    changed_fields = ['updated_at']
-    actions = []
-
-    if 'reviewed_text' in body and body['reviewed_text'] != record.reviewed_text:
-        record.reviewed_text = body['reviewed_text']
-        record.is_modified = True
-        record.last_edited_by = user
-        record.last_edited_at = timezone.now()
-        changed_fields += ['reviewed_text', 'is_modified', 'last_edited_by', 'last_edited_at']
-        actions.append(DocumentActivityLog.ACT_PARA_EDITED)
-
-    if 'canonical_type' in body and body['canonical_type'] != record.canonical_type:
-        record.canonical_type = body['canonical_type']
-        record.is_modified = True
-        record.last_edited_by = user
-        record.last_edited_at = timezone.now()
-        changed_fields += ['canonical_type', 'is_modified', 'last_edited_by', 'last_edited_at']
-        actions.append(DocumentActivityLog.ACT_TYPE_CHANGED)
-
-    if 'sub_type' in body:
-        record.sub_type = body['sub_type']
-        changed_fields.append('sub_type')
-
-    if 'label' in body:
-        record.label = body['label']
-        record.is_modified = True
-        changed_fields += ['label', 'is_modified']
-
-    if 'is_reviewed' in body:
-        record.is_reviewed = bool(body['is_reviewed'])
-        if record.is_reviewed:
-            record.reviewed_by = user
-            changed_fields += ['is_reviewed', 'reviewed_by']
-        else:
-            changed_fields.append('is_reviewed')
-        actions.append(DocumentActivityLog.ACT_MARKED_REVIEWED)
-
-    record.save(update_fields=list(set(changed_fields)))
-
-    for action in actions:
-        log_activity(
-            document_id=document_id,
-            phase=DocumentActivityLog.USER_INTERACTION,
-            action=action,
-            summary='%s %s on %s.' % (user.username, action.replace('_', ' '), para_id),
-            actor_user=user,
-            metadata={'paragraph_id': para_id},
-        )
-
-    return _json({'paragraph_id': para_id, 'updated': True})
-
-
-# ---------------------------------------------------------------------------
-# Bulk paragraph update
-# ---------------------------------------------------------------------------
-
-@csrf_exempt
-@require_auth
-@require_http_methods(['POST'])
-def bulk_update(request, document_id):
-    """Bulk-update (mark reviewed / set type) multiple paragraphs."""
-    from document_pipeline.models import DocumentActivityLog, DocumentParagraphRecord
-    from document_pipeline.activity import log_activity
-
-    user = request.user
-    ok, resp = _check_editable(document_id, user)
-    if not ok:
-        return resp
-
-    try:
-        body = json.loads(request.body)
-    except (ValueError, TypeError):
-        return _err('Invalid JSON body.')
-
-    para_ids = body.get('paragraph_ids', [])
-    if not para_ids:
-        return _err('paragraph_ids is required and must be non-empty.')
-
-    records = DocumentParagraphRecord.objects.filter(
-        document_id=document_id, paragraph_id__in=para_ids)
-
-    update_kwargs = {}
-    if 'is_reviewed' in body:
-        update_kwargs['is_reviewed'] = bool(body['is_reviewed'])
-        if update_kwargs['is_reviewed']:
-            update_kwargs['reviewed_by'] = user
-    if 'canonical_type' in body:
-        update_kwargs['canonical_type'] = body['canonical_type']
-        update_kwargs['is_modified'] = True
-    if 'label' in body:
-        update_kwargs['label'] = body['label']
-        update_kwargs['is_modified'] = True
-
-    count = records.update(**update_kwargs)
+    lock = _get_lock(document_id)
+    if not lock:
+        return _json({'status': 'available', 'message': 'No active lock. You can take editing access directly.'})
+    if lock.user_id == user.id:
+        return _json({'status': 'editing', 'message': 'You already hold the edit lock.'})
 
     log_activity(
         document_id=document_id,
         phase=DocumentActivityLog.USER_INTERACTION,
-        action=DocumentActivityLog.ACT_MARKED_REVIEWED,
-        summary='%s bulk-updated %d paragraphs.' % (user.username, count),
+        action='requested_lock',
+        summary=f'{user.username} requested editing access from {lock.user.username}.',
         actor_user=user,
-        metadata={'paragraph_ids': para_ids, 'fields': list(update_kwargs.keys())},
     )
+    publish_access_event(
+        document_id,
+        event='access_requested',
+        user=user,
+        target_user=lock.user,
+    )
+    return _json({
+        'status': 'requested',
+        'requested_by': user.username,
+        'locked_by': lock.user.username,
+    })
 
-    return _json({'updated': count})
+
+@csrf_exempt
+@require_auth
+@require_http_methods(['POST'])
+def lock_respond_access(request, document_id):
+    """The active lock holder grants or denies the access request."""
+    import json
+    from core.models import User
+    from document_pipeline.models import Document, DocumentActivityLog, WorkspaceLock
+    from document_pipeline.activity import log_activity
+    from realtime.events import publish_access_event, publish_document_lock
+
+    user = request.user
+    try:
+        body = json.loads(request.body)
+    except (ValueError, TypeError):
+        body = {}
+
+    action = body.get('action')  # 'grant' or 'deny'
+    target_username = body.get('target_username')
+    target_user_id = body.get('target_user_id')
+
+    target_user = None
+    if target_user_id:
+        target_user = User.objects.filter(pk=target_user_id).first()
+    elif target_username:
+        target_user = User.objects.filter(username=target_username).first()
+
+    lock = _get_lock(document_id)
+    if action == 'grant':
+        if lock and lock.user_id == user.id:
+            WorkspaceLock.objects.filter(document_id=document_id, user_id=user.id).delete()
+            Document.objects.filter(pk=document_id).update(current_reviewer=None)
+            log_activity(
+                document_id=document_id,
+                phase=DocumentActivityLog.USER_INTERACTION,
+                action='granted_lock',
+                summary=f'{user.username} granted editing access to {target_username or "requester"}.',
+                actor_user=user,
+            )
+            publish_access_event(
+                document_id,
+                event='access_granted',
+                user=user,
+                target_user=target_user,
+            )
+            publish_document_lock(document_id, event='document_closed', user=user)
+            return _json({'status': 'granted'})
+        return _err('You do not hold the active lock.', 403)
+
+    elif action == 'deny':
+        log_activity(
+            document_id=document_id,
+            phase=DocumentActivityLog.USER_INTERACTION,
+            action='denied_lock',
+            summary=f'{user.username} declined editing access request from {target_username or "requester"}.',
+            actor_user=user,
+        )
+        publish_access_event(
+            document_id,
+            event='access_denied',
+            user=user,
+            target_user=target_user,
+        )
+        return _json({'status': 'denied'})
+
+    return _err('Invalid action. Use "grant" or "deny".', 400)
+
 
 
 # ---------------------------------------------------------------------------
@@ -607,9 +588,10 @@ def workspace_publish(request, document_id):
     if not ok:
         return resp
 
-    blockers = _blockers(document_id)
-    if blockers:
-        return _json({'can_publish': False, 'blockers': blockers}, status=422)
+    # The rule the screen shows, enforced here: the button is only a hint.
+    readiness = _publish_readiness(document_id)
+    if not readiness['can_publish']:
+        return _json(readiness, status=422)
 
     try:
         result = publish_document_task.apply(
@@ -624,9 +606,10 @@ def workspace_publish(request, document_id):
         'published': True,
         'result': result,
         'message': (
-            'Published to Vector DB: %d records embedded (%d new, %d updated).'
+            'Published to Vector DB: %d records embedded (%d new, %d updated)%s.'
             % (result.get('embedded', 0), result.get('added', 0),
-               result.get('updated', 0))
+               result.get('updated', 0),
+               ', %d deleted removed' % result['removed'] if result.get('removed') else '')
         ),
     })
 
@@ -875,3 +858,68 @@ def document_queue(request):
         'needs_review': needs_review,
         'unprocessable': unprocessable,
     })
+
+
+# ---------------------------------------------------------------------------
+# Global user-level activity feed  GET /api/activity/
+# ---------------------------------------------------------------------------
+
+@require_auth
+@require_http_methods(['GET'])
+def global_activity_feed(request):
+    """Recent activity events across all documents.
+
+    Query params (all optional):
+      limit=<n>           max events to return, default 50, cap 200
+      user=<username>     filter by actor username
+      document_id=<uuid>  filter to one document
+      action=<code>       filter by action code (repeatable)
+      phase=<code>        filter by phase code (repeatable)
+    """
+    from document_pipeline.models import DocumentActivityLog
+
+    limit_raw = request.GET.get('limit', '50')
+    try:
+        limit = min(int(limit_raw), 200)
+    except (ValueError, TypeError):
+        return _err('limit must be a whole number.')
+
+    qs = (
+        DocumentActivityLog.objects
+        .select_related('actor_user', 'document')
+        .order_by('-created_at')
+    )
+
+    if username := (request.GET.get('user') or '').strip():
+        qs = qs.filter(actor_user__username__iexact=username)
+
+    if doc_id := (request.GET.get('document_id') or '').strip():
+        qs = qs.filter(document_id=doc_id)
+
+    actions = [a for a in request.GET.getlist('action') if a]
+    if actions:
+        qs = qs.filter(action__in=actions)
+
+    phases = [p for p in request.GET.getlist('phase') if p]
+    if phases:
+        qs = qs.filter(phase__in=phases)
+
+    events = [
+        {
+            'id': str(entry.id),
+            'document_id': str(entry.document_id),
+            'document_name': entry.document.name if entry.document else None,
+            'phase': entry.phase,
+            'action': entry.action,
+            'summary': entry.summary,
+            'actor': (
+                entry.actor_user.username if entry.actor_user else entry.actor_system
+            ),
+            'metadata': entry.metadata,
+            'created_at': entry.created_at.isoformat(),
+        }
+        for entry in qs[:limit]
+    ]
+
+    return _json({'events': events, 'count': len(events)})
+

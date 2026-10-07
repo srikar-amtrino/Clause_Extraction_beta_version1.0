@@ -28,6 +28,8 @@ import CheckCircleOutlinedIcon from '@mui/icons-material/CheckCircleOutlined';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import HistoryIcon from '@mui/icons-material/History';
+import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';
+import RestoreFromTrashIcon from '@mui/icons-material/RestoreFromTrash';
 
 function formatBreadcrumbDisplay(text) {
   if (!text) return 'General';
@@ -46,6 +48,7 @@ function formatBreadcrumbDisplay(text) {
 
 export default function ClauseTable({
   extractedClauses = [],
+  deletedClauses = [],
   isLoading = false,
   canEdit = true,
   docName = '',
@@ -64,6 +67,8 @@ export default function ClauseTable({
   onOpenHistory,
   onOpenPreview,
   onUpdateRow,
+  onDeleteClause,
+  onRestoreClause,
   availableCanonicalTypes = [],
   showToast,
   searchQuery,
@@ -73,6 +78,7 @@ export default function ClauseTable({
   typeFilter,
   onTypeFilterChange,
   needsFixCount = 0,
+  reviewedCount = 0,
 }) {
   // Inline text editing state
   const [editingTextRowId, setEditingTextRowId] = useState(null);
@@ -120,10 +126,14 @@ export default function ClauseTable({
 
   // Filtered rows for the table based on activeFilter, typeFilter, and searchQuery
   const filteredClauses = useMemo(() => {
-    return extractedClauses.filter((row) => {
+    const sourceRows = activeFilter === 'deleted' ? deletedClauses : extractedClauses;
+    return sourceRows.filter((row) => {
       // 1. Tab filter
-      if (activeFilter === 'to-review' && !row.needs_review) return false;
-      if (activeFilter === 'needs-fix') {
+      if (activeFilter === 'deleted') {
+        // Already scoped to deletedClauses
+      } else if (activeFilter === 'to-review') {
+        return Boolean(row.needs_review || row.needsReview || !row.isReviewed);
+      } else if (activeFilter === 'needs-fix') {
         const isNeedsReview =
           !row.review?.decision &&
           !row.isReviewed &&
@@ -134,16 +144,20 @@ export default function ClauseTable({
             row.outcome === 'failed' ||
             (row.review_reasons && row.review_reasons.length > 0));
         if (!isNeedsReview) return false;
-      }
-      if (activeFilter === 'edited' && !row.review) return false;
-      if (
+      } else if (activeFilter === 'reviewed') {
+        const isReviewed = Boolean(row.isReviewed || row.review?.decision || (!row.needs_review && !row.needsReview));
+        if (!isReviewed) return false;
+      } else if (activeFilter === 'edited' && !row.review) {
+        return false;
+      } else if (
         activeFilter === 'low-conf' &&
         !(
           (row.confidence !== null && row.confidence !== undefined && row.confidence < 0.85) ||
           (row.review_reasons && row.review_reasons.includes('low_confidence'))
         )
-      )
+      ) {
         return false;
+      }
 
       // 2. Type menu filter
       if (typeFilter === 'clauses' && row.label !== 'Clause') return false;
@@ -161,7 +175,7 @@ export default function ClauseTable({
       }
       return true;
     });
-  }, [extractedClauses, activeFilter, typeFilter, searchQuery]);
+  }, [extractedClauses, deletedClauses, activeFilter, typeFilter, searchQuery]);
 
   return (
     <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0, overflow: 'hidden' }}>
@@ -241,6 +255,8 @@ export default function ClauseTable({
             {[
               { id: 'all', label: `All ${extractedClauses.length}` },
               { id: 'needs-fix', label: `Needs review ${needsFixCount > 0 ? `(${needsFixCount})` : ''}` },
+              { id: 'reviewed', label: `Reviewed ${reviewedCount > 0 ? `(${reviewedCount})` : ''}` },
+              { id: 'deleted', label: `Deleted ${deletedClauses.length > 0 ? `(${deletedClauses.length})` : ''}` },
             ].map((f) => (
               <Button
                 key={f.id}
@@ -253,12 +269,36 @@ export default function ClauseTable({
                   textTransform: 'none',
                   px: 1.25,
                   borderRadius: 1.5,
-                  bgcolor: activeFilter === f.id ? '#1e3a5f' : '#ffffff',
-                  color: activeFilter === f.id ? '#ffffff' : '#4a5159',
+                  bgcolor:
+                    activeFilter === f.id
+                      ? f.id === 'deleted'
+                        ? '#dc2626'
+                        : '#1e3a5f'
+                      : '#ffffff',
+                  color:
+                    activeFilter === f.id
+                      ? '#ffffff'
+                      : f.id === 'deleted' && deletedClauses.length > 0
+                        ? '#dc2626'
+                        : '#4a5159',
                   border: '1px solid',
-                  borderColor: activeFilter === f.id ? '#1e3a5f' : '#cfcfc8',
+                  borderColor:
+                    activeFilter === f.id
+                      ? f.id === 'deleted'
+                        ? '#dc2626'
+                        : '#1e3a5f'
+                      : f.id === 'deleted' && deletedClauses.length > 0
+                        ? '#fca5a5'
+                        : '#cfcfc8',
                   '&:hover': {
-                    bgcolor: activeFilter === f.id ? '#152943' : '#f5f5f2',
+                    bgcolor:
+                      activeFilter === f.id
+                        ? f.id === 'deleted'
+                          ? '#b91c1c'
+                          : '#152943'
+                        : f.id === 'deleted'
+                          ? '#fef2f2'
+                          : '#f5f5f2',
                   },
                 }}
               >
@@ -320,52 +360,65 @@ export default function ClauseTable({
           </Box>
         </Box>
 
-        {/* Right Buttons: Preview toggle, History, and Source document */}
-        <Box sx={{ display: 'flex' }}>
-          {/* {onTogglePreview && (
-            <Button
-              size="small"
-              startIcon={<VisibilityOutlinedIcon sx={{ fontSize: 16 }} />}
-              onClick={onTogglePreview}
-              sx={{
-                height: 28,
-                fontSize: '11.5px',
-                fontWeight: 500,
-                textTransform: 'none',
-                bgcolor: isPreviewOpen ? '#1e3a5f' : '#ffffff',
-                color: isPreviewOpen ? '#ffffff' : '#4a5159',
-                border: '1px solid',
-                borderColor: isPreviewOpen ? '#1e3a5f' : '#cfcfc8',
-                borderRadius: 1.5,
-                '&:hover': {
-                  bgcolor: isPreviewOpen ? '#152943' : '#f5f5f2',
-                },
-              }}
-            >
-              {isPreviewOpen ? 'Hide Preview' : 'Show Preview'}
-            </Button>
+        {/* Right Buttons: Selected actions & Source document */}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          {selectedRows.length > 0 && (
+            activeFilter === 'deleted' ? (
+              <Button
+                size="small"
+                variant="contained"
+                startIcon={<RestoreFromTrashIcon sx={{ fontSize: 16 }} />}
+                onClick={() => {
+                  const selectedList = deletedClauses.filter((r) => {
+                    const rKey = String(r.classification_id || r.id || r.clause_id);
+                    return (selectedRows || []).map(String).includes(rKey);
+                  });
+                  onRestoreClause?.(selectedList.length > 0 ? selectedList : selectedRows);
+                }}
+                sx={{
+                  height: 28,
+                  fontSize: '11.5px',
+                  fontWeight: 600,
+                  textTransform: 'none',
+                  px: 1.5,
+                  borderRadius: 1.5,
+                  bgcolor: '#16a34a',
+                  color: '#ffffff',
+                  boxShadow: 'none',
+                  '&:hover': { bgcolor: '#15803d', boxShadow: 'none' },
+                }}
+              >
+                Restore ({selectedRows.length})
+              </Button>
+            ) : (
+              <Button
+                size="small"
+                variant="contained"
+                startIcon={<DeleteOutlinedIcon sx={{ fontSize: 16 }} />}
+                onClick={() => {
+                  const selectedList = extractedClauses.filter((r) => {
+                    const rKey = String(r.classification_id || r.id || r.clause_id);
+                    return (selectedRows || []).map(String).includes(rKey);
+                  });
+                  onDeleteClause?.(selectedList.length > 0 ? selectedList : selectedRows);
+                }}
+                sx={{
+                  height: 28,
+                  fontSize: '11.5px',
+                  fontWeight: 600,
+                  textTransform: 'none',
+                  px: 1.5,
+                  borderRadius: 1.5,
+                  bgcolor: '#dc2626',
+                  color: '#ffffff',
+                  boxShadow: 'none',
+                  '&:hover': { bgcolor: '#b91c1c', boxShadow: 'none' },
+                }}
+              >
+                Delete ({selectedRows.length})
+              </Button>
+            )
           )}
-
-          {onOpenHistory && (
-            <Button
-              size="small"
-              startIcon={<HistoryIcon sx={{ fontSize: 16 }} />}
-              onClick={onOpenHistory}
-              sx={{
-                height: 28,
-                fontSize: '11.5px',
-                fontWeight: 500,
-                textTransform: 'none',
-                bgcolor: '#ffffff',
-                color: '#4a5159',
-                border: '1px solid #cfcfc8',
-                borderRadius: 1.5,
-                '&:hover': { bgcolor: '#f5f5f2' },
-              }}
-            >
-              History
-            </Button>
-          )} */}
 
           <Button
             size="small"
@@ -465,9 +518,9 @@ export default function ClauseTable({
                 </TableCell>
                 <TableCell
                   align="center"
-                  sx={{ bgcolor: '#fafaf8', py: 1, fontSize: '11.5px', fontWeight: 600, color: '#7b838c', borderBottom: '1px solid #e3e3de', width: 60, minWidth: 60, verticalAlign: 'middle' }}
+                  sx={{ bgcolor: '#fafaf8', py: 1, fontSize: '11.5px', fontWeight: 600, color: '#7b838c', borderBottom: '1px solid #e3e3de', width: activeFilter === 'deleted' ? 100 : 90, minWidth: activeFilter === 'deleted' ? 100 : 90, verticalAlign: 'middle' }}
                 >
-                  Preview
+                  {activeFilter === 'deleted' ? 'Restore' : 'Actions'}
                 </TableCell>
               </TableRow>
             </TableHead>
@@ -522,12 +575,18 @@ export default function ClauseTable({
                         <DescriptionOutlinedIcon sx={{ fontSize: 24 }} />
                       </Box>
                       <Typography sx={{ fontSize: '14px', fontWeight: 600, color: '#1e293b' }}>
-                        {extractedClauses.length === 0 ? `No clauses found for ${docName}` : 'No matching clauses found'}
+                        {activeFilter === 'deleted'
+                          ? 'No deleted clauses'
+                          : extractedClauses.length === 0
+                            ? `No clauses found for ${docName}`
+                            : 'No matching clauses found'}
                       </Typography>
                       <Typography sx={{ fontSize: '12px', color: '#64748b', lineHeight: 1.5 }}>
-                        {extractedClauses.length === 0
-                          ? `No classification data returned from backend.`
-                          : 'Try changing your filter pills or search keyword.'}
+                        {activeFilter === 'deleted'
+                          ? 'Clauses you delete from this document will appear here where they can be restored.'
+                          : extractedClauses.length === 0
+                            ? `No classification data returned from backend.`
+                            : 'Try changing your filter pills or search keyword.'}
                       </Typography>
                     </Box>
                   </TableCell>
@@ -861,36 +920,58 @@ export default function ClauseTable({
                                   />
                                 </Box>
                               )}
+                              {row.merged_into && (
+                                <Box sx={{ mt: 0.5, display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                  <Chip
+                                    label={
+                                      typeof row.merged_into === 'object' && row.merged_into.note
+                                        ? `Merged into next clause (${row.merged_into.note})`
+                                        : 'Merged into next clause'
+                                    }
+                                    size="small"
+                                    sx={{
+                                      height: 18,
+                                      fontSize: '10px',
+                                      fontWeight: 600,
+                                      bgcolor: '#f1f5f9',
+                                      color: '#475569',
+                                      border: '1px solid #cbd5e1',
+                                    }}
+                                  />
+                                </Box>
+                              )}
                             </Box>
 
                             {/* Edit Icon Button */}
-                            <Tooltip title={canEdit ? 'Edit text information' : 'Read-only mode'}>
-                              <span>
-                                <IconButton
-                                  size="small"
-                                  disabled={!canEdit}
-                                  onClick={(e) =>
-                                    handleStartEditText(row.id || row.clause_id || row.paraId || idx, textContent, e)
-                                  }
-                                  sx={{
-                                    p: 0.5,
-                                    color: '#64748b',
-                                    borderRadius: 1,
-                                    flexShrink: 0,
-                                    opacity: 0.7,
-                                    border: '1px solid transparent',
-                                    '&:hover': {
-                                      opacity: 1,
-                                      color: '#1e3a5f',
-                                      bgcolor: '#f1f5f9',
-                                      borderColor: '#cbd5e1',
-                                    },
-                                  }}
-                                >
-                                  <EditOutlinedIcon sx={{ fontSize: 15 }} />
-                                </IconButton>
-                              </span>
-                            </Tooltip>
+                            {activeFilter !== 'deleted' && (
+                              <Tooltip title={canEdit ? 'Edit text information' : 'Read-only mode'}>
+                                <span>
+                                  <IconButton
+                                    size="small"
+                                    disabled={!canEdit}
+                                    onClick={(e) =>
+                                      handleStartEditText(row.id || row.clause_id || row.paraId || idx, textContent, e)
+                                    }
+                                    sx={{
+                                      p: 0.5,
+                                      color: '#64748b',
+                                      borderRadius: 1,
+                                      flexShrink: 0,
+                                      opacity: 0.7,
+                                      border: '1px solid transparent',
+                                      '&:hover': {
+                                        opacity: 1,
+                                        color: '#1e3a5f',
+                                        bgcolor: '#f1f5f9',
+                                        borderColor: '#cbd5e1',
+                                      },
+                                    }}
+                                  >
+                                    <EditOutlinedIcon sx={{ fontSize: 15 }} />
+                                  </IconButton>
+                                </span>
+                              </Tooltip>
+                            )}
                           </Box>
                         )}
                       </TableCell>
@@ -899,7 +980,7 @@ export default function ClauseTable({
                       <TableCell sx={{ py: 1.25, verticalAlign: 'middle' }}>
                         <Button
                           size="small"
-                          disabled={!canEdit}
+                          disabled={!canEdit || activeFilter === 'deleted'}
                           onClick={(e) => {
                             e.stopPropagation();
                             setLabelAnchor({
@@ -978,7 +1059,7 @@ export default function ClauseTable({
                           <Box
                             onClick={(e) => {
                               e.stopPropagation();
-                              if (!canEdit) return;
+                              if (!canEdit || activeFilter === 'deleted') return;
                               setTypeAnchor({
                                 el: e.currentTarget,
                                 rowId: row.classification_id || row.id || row.clause_id,
@@ -993,12 +1074,12 @@ export default function ClauseTable({
                               py: 0.35,
                               height: 26,
                               borderRadius: 1,
-                              cursor: canEdit ? 'pointer' : 'default',
+                              cursor: canEdit && activeFilter !== 'deleted' ? 'pointer' : 'default',
                               border: typeAnchor?.rowId === row.id ? '1.5px solid #1e3a5f' : '1px solid #cbd5e1',
                               bgcolor: '#ffffff',
                               boxShadow: typeAnchor?.rowId === row.id ? '0 0 0 1px #1e3a5f' : 'none',
                               '&:hover': {
-                                borderColor: canEdit ? '#1e3a5f' : '#cbd5e1',
+                                borderColor: canEdit && activeFilter !== 'deleted' ? '#1e3a5f' : '#cbd5e1',
                               },
                             }}
                           >
@@ -1021,26 +1102,74 @@ export default function ClauseTable({
                         </Box>
                       </TableCell>
 
-                      {/* Preview button */}
+                      {/* Action Cell (Preview / Delete or Restore) */}
                       <TableCell align="center" sx={{ py: 1.25, verticalAlign: 'middle' }}>
-                        <Tooltip title="Preview in full document">
-                          <IconButton
+                        {activeFilter === 'deleted' ? (
+                          <Button
                             size="small"
+                            variant="outlined"
+                            startIcon={<RestoreFromTrashIcon sx={{ fontSize: 14 }} />}
                             onClick={(e) => {
                               e.stopPropagation();
-                              onOpenPreview(row);
+                              onRestoreClause?.(row);
                             }}
                             sx={{
-                              p: 0.5,
+                              height: 26,
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              textTransform: 'none',
+                              px: 1.25,
                               borderRadius: 1,
-                              color: isPreviewActive ? '#0284c7' : '#94a3b8',
-                              bgcolor: isPreviewActive ? '#e0f2fe' : 'transparent',
-                              '&:hover': { color: '#0284c7', bgcolor: '#f0f9ff' },
+                              bgcolor: '#f0fdf4',
+                              color: '#16a34a',
+                              borderColor: '#bbf7d0',
+                              '&:hover': {
+                                bgcolor: '#dcfce7',
+                                borderColor: '#86efac',
+                              },
                             }}
                           >
-                            <VisibilityOutlinedIcon sx={{ fontSize: 16 }} />
-                          </IconButton>
-                        </Tooltip>
+                            Restore
+                          </Button>
+                        ) : (
+                          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>
+                            <Tooltip title="Preview in full document">
+                              <IconButton
+                                size="small"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onOpenPreview(row);
+                                }}
+                                sx={{
+                                  p: 0.5,
+                                  borderRadius: 1,
+                                  color: isPreviewActive ? '#0284c7' : '#94a3b8',
+                                  bgcolor: isPreviewActive ? '#e0f2fe' : 'transparent',
+                                  '&:hover': { color: '#0284c7', bgcolor: '#f0f9ff' },
+                                }}
+                              >
+                                <VisibilityOutlinedIcon sx={{ fontSize: 16 }} />
+                              </IconButton>
+                            </Tooltip>
+                            <Tooltip title="Delete clause">
+                              <IconButton
+                                size="small"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onDeleteClause?.([row]);
+                                }}
+                                sx={{
+                                  p: 0.5,
+                                  borderRadius: 1,
+                                  color: '#94a3b8',
+                                  '&:hover': { color: '#dc2626', bgcolor: '#fef2f2' },
+                                }}
+                              >
+                                <DeleteOutlinedIcon sx={{ fontSize: 16 }} />
+                              </IconButton>
+                            </Tooltip>
+                          </Box>
+                        )}
                       </TableCell>
                     </TableRow>
                   );

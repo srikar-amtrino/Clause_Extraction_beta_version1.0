@@ -1,6 +1,9 @@
+import hashlib
 import json
 
 from django.http import JsonResponse
+from django.utils.cache import get_conditional_response
+from django.utils.http import http_date
 from django.views.decorators.http import require_GET, require_POST
 
 from core.auth_helpers import require_auth
@@ -11,7 +14,7 @@ from .models import (
     ExtractionRun,
 )
 from .services import export_service, review_service
-from .services.ingestion_service import google_drive_source
+from .services.ingestion_service import GOOGLE_DRIVE
 from .services.review_service import SaveError
 
 # Read by a person as often as by a script: pretty-printed on purpose.
@@ -59,7 +62,7 @@ def _get_document(document_id):
     return document, None
 
 
-def _stage_summary(extraction_run, classification_run, review_counts=None):
+def _stage_summary(extraction_run, classification_run, review_counts=None, live_needs_review=None):
     """What a list row shows about how far the document got. A stage that has
     not run is null, not an empty object: the frontend tests one thing."""
     extraction = None
@@ -77,6 +80,19 @@ def _stage_summary(extraction_run, classification_run, review_counts=None):
         }
     classification = None
     if classification_run is not None:
+        if live_needs_review is not None:
+            if isinstance(live_needs_review, dict):
+                nr = live_needs_review.get(classification_run.id, 0)
+            else:
+                nr = live_needs_review
+        else:
+            from .models import Classification
+            nr = Classification.objects.filter(
+                run=classification_run,
+                needs_review=True,
+                review_decision__isnull=True,
+                deleted_at__isnull=True,
+            ).count()
         classification = {
             'run_id': str(classification_run.id),
             'status': classification_run.status,
@@ -86,7 +102,7 @@ def _stage_summary(extraction_run, classification_run, review_counts=None):
             'classified': classification_run.classified_count,
             'unclassified': classification_run.unclassified_count,
             'failed': classification_run.failed_count,
-            'needs_review': classification_run.review_count,
+            'needs_review': nr,
             'classified_at': (classification_run.finished_at.isoformat()
                               if classification_run.finished_at else None),
             # How far the human pass has got on this document, so the table can
@@ -96,17 +112,21 @@ def _stage_summary(extraction_run, classification_run, review_counts=None):
     return {'extraction': extraction, 'classification': classification}
 
 
+
 def _review_progress(classification_run, counts):
     """Decisions made against this run. Zeroed, never null: a run that exists
-    always has a reviewable population, even if nobody has touched it."""
+    always has a reviewable population, even if nobody has touched it.
+    Deleted items are outside it."""
     by_decision = counts.get(classification_run.id, {})
-    reviewed = sum(by_decision.values())
+    deleted = by_decision.get('deleted', 0)
+    reviewed = sum(by_decision.values()) - deleted
     return {
         'reviewed': reviewed,
-        'pending': max(classification_run.micro_count - reviewed, 0),
+        'pending': max(classification_run.micro_count - deleted - reviewed, 0),
         'accepted': by_decision.get('accepted', 0),
         'corrected': by_decision.get('corrected', 0),
         'rejected': by_decision.get('rejected', 0),
+        'deleted': deleted,
     }
 
 
@@ -124,7 +144,49 @@ def _document_links(document):
     }
 
 
-def _document_row(document, extraction_run, classification_run, review_counts=None):
+def _document_row(document, extraction_run, classification_run, review_counts=None,
+                  reviewers_by_doc=None, live_needs_review=None):
+    """Build the serialised document row.
+
+    ``reviewers_by_doc`` is an optional dict keyed by document_id containing
+    a list of usernames who have **saved** review decisions on this document.
+    When absent the field is computed inline (one extra query — acceptable for
+    single-document detail views).
+    """
+    from django.utils import timezone
+
+    # Auto-clear expired WorkspaceLock so the list view never shows a ghost
+    # reviewer whose session died before the cleaner ran.
+    current_reviewer = None
+    raw_reviewer = getattr(document, 'current_reviewer', None)
+    if raw_reviewer is not None:
+        try:
+            lock = getattr(document, 'workspace_lock', None)
+            if lock and lock.expires_at < timezone.now():
+                lock.delete()
+                Document.objects.filter(pk=document.id).update(current_reviewer=None)
+                raw_reviewer = None
+        except Exception:
+            pass
+        current_reviewer = raw_reviewer.username if raw_reviewer else None
+
+    # Reviewers who actually clicked Save (distinct, ordered alphabetically).
+    if reviewers_by_doc is not None:
+        reviewers = reviewers_by_doc.get(document.id, [])
+    else:
+        from .models import Classification
+        reviewers = list(
+            Classification.objects
+            .filter(
+                run__document_id=document.id,
+                run__is_current=True,
+                reviewed_by__isnull=False,
+            )
+            .values_list('reviewed_by__username', flat=True)
+            .distinct()
+            .order_by('reviewed_by__username')
+        )
+
     return {
         'document_id': str(document.id),
         'name': document.name,
@@ -137,11 +199,14 @@ def _document_row(document, extraction_run, classification_run, review_counts=No
         'mime_type': document.mime_type,
         'extraction_status': document.extraction_status,
         'review_status': getattr(document, 'review_status', 'needs_review'),
-        'current_reviewer': (document.current_reviewer.username
-                             if getattr(document, 'current_reviewer', None) else None),
+        # Who currently holds the editing lock (may be None after expiry cleanup).
+        'current_reviewer': current_reviewer,
+        # All distinct users who clicked Save at least once — the persistent
+        # contributor list shown in the Documents table Reviewer column.
+        'reviewers': reviewers,
         'last_extracted_at': (document.last_extracted_at.isoformat()
                               if document.last_extracted_at else None),
-        'stages': _stage_summary(extraction_run, classification_run, review_counts),
+        'stages': _stage_summary(extraction_run, classification_run, review_counts, live_needs_review),
         'links': _document_links(document),
     }
 
@@ -157,6 +222,36 @@ def _current_runs_by_document(document_ids):
         document_id__in=document_ids, is_current=True,
         chunk_run__is_current=True, chunk_run__extraction_run__is_current=True)}
     return extraction, classification
+
+
+def _reviewers_by_document(document_ids):
+    """Return a dict { document_id: [username, ...] } of distinct users who
+    have clicked Save (i.e. set reviewed_by) on any classification in the
+    current run for each document, in a single aggregated query.
+
+    Read-only visitors who never saved are deliberately excluded.
+    """
+    from django.db.models import Prefetch
+    from .models import Classification
+    rows = (
+        Classification.objects
+        .filter(
+            run__document_id__in=document_ids,
+            run__is_current=True,
+            run__chunk_run__is_current=True,
+            run__chunk_run__extraction_run__is_current=True,
+            reviewed_by__isnull=False,
+        )
+        .values('run__document_id', 'reviewed_by__username')
+        .distinct()
+        .order_by('reviewed_by__username')
+    )
+    result = {}
+    for row in rows:
+        doc_id = row['run__document_id']
+        username = row['reviewed_by__username']
+        result.setdefault(doc_id, []).append(username)
+    return result
 
 
 @require_GET
@@ -180,7 +275,10 @@ def document_list(request):
     if error:
         return JsonResponse({'detail': error}, status=400)
 
-    documents = Document.objects.filter(ingestion_source=google_drive_source(),
+    # Joined by name rather than through google_drive_source(): its
+    # get_or_create costs a round trip per call, and a source row that does not
+    # exist yet has no documents anyway.
+    documents = Document.objects.filter(ingestion_source__name=GOOGLE_DRIVE,
                                         deleted_at__isnull=True).select_related('current_reviewer')
 
     folder_ids = [f for f in request.GET.getlist('folder_id') if f]
@@ -219,12 +317,18 @@ def document_list(request):
     documents = documents.distinct()
     total = documents.count()
     page = list(documents.order_by('-created_at')[offset:offset + limit])
-    extraction, classification = _current_runs_by_document([d.id for d in page])
-    review_counts = review_service.review_counts_by_run([r.id for r in classification.values()])
+    doc_ids = [d.id for d in page]
+    extraction, classification = _current_runs_by_document(doc_ids)
+    run_ids = [r.id for r in classification.values()]
+    review_counts = review_service.review_counts_by_run(run_ids)
+    # Live count of items still flagged as needs_review with no saved decision.
+    # One extra batch query per page — correct even after user Saves.
+    live_needs_review = review_service.live_needs_review_by_run(run_ids)
+    reviewers_by_doc = _reviewers_by_document(doc_ids)
 
     return JsonResponse({
         'documents': [_document_row(d, extraction.get(d.id), classification.get(d.id),
-                                    review_counts)
+                                    review_counts, reviewers_by_doc, live_needs_review)
                       for d in page],
         'page': {'total': total, 'limit': limit, 'offset': offset,
                  'returned': len(page), 'has_more': offset + len(page) < total},
@@ -240,10 +344,15 @@ def document_detail(request, document_id):
     if error:
         return error
     extraction, classification = _current_runs_by_document([document.id])
-    review_counts = review_service.review_counts_by_run([r.id for r in classification.values()])
+    c_run = classification.get(document.id)
+    c_run_id = c_run.id if c_run else None
+    run_ids = [c_run_id] if c_run_id else []
+    review_counts = review_service.review_counts_by_run(run_ids)
+    live_needs_review = review_service.live_needs_review_by_run(run_ids)
+    reviewers_by_doc = _reviewers_by_document([document.id])
     return JsonResponse(
-        _document_row(document, extraction.get(document.id), classification.get(document.id),
-                      review_counts),
+        _document_row(document, extraction.get(document.id), c_run,
+                      review_counts, reviewers_by_doc, live_needs_review),
         json_dumps_params=PRETTY)
 
 
@@ -279,16 +388,48 @@ def document_classification(request, document_id):
       needs_review=true   only the flagged items. The summary still counts the
                           whole run, so a queue can say "12 of 184".
 
-    `classification_run` is null when the document has not been classified."""
+    `classification_run` is null when the document has not been classified.
+
+    `publish` says whether Update Vector DB may run, from the saved review:
+    {can_publish, blockers, needs_review, rejected, missing_type, empty_text}.
+    Drive the button from it; publishing enforces the same rule.
+
+    Answers with an ETag; a request sending it back in If-None-Match gets a
+    304 without the classification rows being read at all."""
     document, error = _get_document(document_id)
     if error:
         return error
-    payload = export_service.classification_json(document)
     from .models import WorkspaceLock
     lock = (WorkspaceLock.objects.select_related('user')
             .filter(document_id=document_id).first())
     if lock and not lock.is_active:
         lock = None
+    run = export_service.current_classification_run(document)
+    vector_sync = review_service.vector_sync_state(document)
+    needs_review_only = _bool_param(request, 'needs_review') is True
+
+    # Everything the response depends on, read without touching the rows.
+    # Save, Delete and Restore move document.updated_at; a re-classification
+    # changes the run; the lock, the viewer and the sync state are per request.
+    fingerprint = '|'.join(str(part) for part in (
+        run.id if run else None, run.finished_at if run else None,
+        document.updated_at, document.review_status,
+        request.user.pk, lock.user_id if lock else None,
+        vector_sync['pending_changes'], vector_sync['last_synced_at'],
+        needs_review_only,
+    ))
+    etag = 'W/"%s"' % hashlib.sha1(fingerprint.encode()).hexdigest()
+    last_modified = document.updated_at
+    if run is not None:
+        last_modified = max(last_modified, run.finished_at or run.started_at)
+
+    # Only the ETag decides a 304: a lock or sync change moves no timestamp,
+    # so If-Modified-Since alone could answer "unchanged" when it is not.
+    not_modified = get_conditional_response(request, etag=etag)
+    if not_modified is not None:
+        return _cache_headers(not_modified, etag, last_modified)
+
+    payload = export_service.classification_json(document)
     payload['access'] = {
         'user': {
             'id': str(request.user.pk),
@@ -299,11 +440,22 @@ def document_classification(request, document_id):
         'locked_by_id': str(lock.user_id) if lock else None,
     }
     payload['document']['review_status'] = document.review_status
-    payload['vector_sync'] = review_service.vector_sync_state(document)
-    if _bool_param(request, 'needs_review') is True:
+    payload['vector_sync'] = vector_sync
+    payload['publish'] = review_service.publish_readiness(document)
+    if needs_review_only:
         payload['items'] = [item for item in payload['items'] if item['needs_review']]
         payload['filtered'] = {'needs_review': True, 'returned': len(payload['items'])}
-    return JsonResponse(payload, json_dumps_params=PRETTY)
+    return _cache_headers(JsonResponse(payload, json_dumps_params=PRETTY), etag, last_modified)
+
+
+def _cache_headers(response, etag, last_modified):
+    """Revalidate every time (no-cache), never share between users: the body
+    carries the viewer's own lock state, and auth is a Bearer header."""
+    response['ETag'] = etag
+    response['Last-Modified'] = http_date(last_modified.timestamp())
+    response['Cache-Control'] = 'private, no-cache'
+    response['Vary'] = 'Authorization'
+    return response
 
 
 @require_POST
@@ -323,7 +475,7 @@ def classification_save(request, document_id):
 
     -> 200 { "saved": {accepted, corrected, rejected, unchanged},
              "review_status": "...", "items": [...the rows sent, fresh...],
-             "summary": {...}, "vector_sync": {...} }
+             "summary": {...}, "vector_sync": {...}, "publish": {...} }
     -> 400 { "detail", "errors": [{classification_id, detail}] }
     -> 403 / 423 without the workspace lock
     -> 409 { "detail", "classification_run_id" } after a re-classification
@@ -359,7 +511,97 @@ def classification_save(request, document_id):
         'items': [item for item in fresh['items'] if item['classification_id'] in saved],
         'summary': fresh['summary'],
         'vector_sync': review_service.vector_sync_state(document),
+        'publish': review_service.publish_readiness(document),
     }, json_dumps_params=PRETTY)
+
+
+def _item_write(request, document_id, write):
+    """Shared body of Delete and Restore: lock check, JSON body, the service
+    call, then the rows it touched read back fresh. write(document, payload)
+    -> (result, the classification ids whose rows changed)."""
+    document, error = _get_document(document_id)
+    if error:
+        return error
+    from .review_views import _check_editable
+    editable, response = _check_editable(document.id, request.user)
+    if not editable:
+        return response
+
+    payload, error = _json_body(request)
+    if error:
+        return error
+    if not isinstance(payload, dict):
+        return JsonResponse({'detail': 'Body must be a JSON object.'}, status=400)
+    try:
+        result, touched = write(document, payload)
+    except SaveError as problem:
+        return JsonResponse(dict({'detail': str(problem)}, **problem.extra),
+                            status=problem.status)
+
+    fresh = export_service.classification_json(document)
+    return JsonResponse(dict(
+        result,
+        items=[item for item in fresh['items'] if item['classification_id'] in touched],
+        deleted_items=fresh['deleted_items'],
+        summary=fresh['summary'],
+        vector_sync=review_service.vector_sync_state(document),
+        publish=review_service.publish_readiness(document),
+    ), json_dumps_params=PRETTY)
+
+
+@require_POST
+@require_auth
+def classification_delete(request, document_id, classification_id):
+    """Delete one item from the review.
+
+      { "classification_run_id": "<from GET /classification/>",
+        "merge_into_next": false, "note": "optional" }
+
+    With merge_into_next the item's text is first put at the start of the
+    next item's text. The row is kept, so Restore can undo it. Nothing goes to
+    the vector DB until Update Vector DB, which then removes the item.
+
+    -> 200 { "classification_id", "merged_into", "review_status",
+             "items": [the next item, when text was moved into it],
+             "deleted_items": [...], "summary": {...}, "vector_sync": {...},
+             "publish": {...} }
+    -> 400 { "detail" } already deleted, or nothing after it to merge into
+    -> 403 / 423 without the workspace lock; 404 not in the current run
+    -> 409 { "detail", "classification_run_id" } after a re-classification
+    """
+    def write(document, payload):
+        result = review_service.delete_item(
+            document, payload.get('classification_run_id'), str(classification_id),
+            request.user, merge_into_next=payload.get('merge_into_next', False),
+            note=payload.get('note'))
+        return result, {result['merged_into']}
+    return _item_write(request, document_id, write)
+
+
+@require_POST
+@require_auth
+def classification_restore(request, document_id, classification_id):
+    """Undo a delete.
+
+      { "classification_run_id": "<from GET /classification/>" }
+
+    If the item's text was moved into the next item and is still there
+    unchanged, it is taken back out (unmerged_from). If that item was edited
+    since, its text is left alone (merged_text_kept_in) for the reviewer to
+    tidy by hand.
+
+    -> 200 { "classification_id", "unmerged_from", "merged_text_kept_in",
+             "review_status", "items": [the restored item, and the item its
+             text came back out of], "deleted_items", "summary", "vector_sync",
+             "publish" }
+    -> 400 not deleted; 403 / 423 without the lock; 404; 409 as for delete
+    """
+    def write(document, payload):
+        result = review_service.restore_item(
+            document, payload.get('classification_run_id'), str(classification_id),
+            request.user)
+        return result, {result['classification_id'], result['unmerged_from']}
+    return _item_write(request, document_id, write)
 
 
 def _json_body(request):

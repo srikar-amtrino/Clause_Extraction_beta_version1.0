@@ -28,6 +28,7 @@ import SyncIcon from '@mui/icons-material/Sync';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { useAuth } from '../context/AuthContext';
 import { documentService } from '../services/documentService';
+import { AGREEMENT_TYPES, SECTORIAL_OPTIONS } from './FolderMetadataModal';
 
 export default function Documents({
   documents = [],
@@ -112,12 +113,19 @@ export default function Documents({
         ? d.current_reviewer
         : (d.rawDoc?.current_reviewer !== undefined ? d.rawDoc.current_reviewer : null);
 
+      // Persistent list of all users who saved edits (from API's reviewers field)
+      const reviewers = d.reviewers || d.rawDoc?.reviewers || [];
+
       return {
         id: d.id || d.document_id || `doc-${i}`,
         documentId: d.document_id || d.id || `doc-${i}`,
         name: d.name || 'Untitled Document',
         fileName: d.name || 'document.docx',
         title: d.title || d.name,
+        agreement_type: d.agreement_type || d.agreementType || d.rawDoc?.agreement_type || d.rawDoc?.metadata?.agreement_type || '',
+        sectorial_category: d.sectorial_category || d.sectorial || d.rawDoc?.sectorial_category || d.rawDoc?.metadata?.sectorial_category || '',
+        agreementType: d.agreement_type || d.agreementType || d.rawDoc?.agreement_type || d.rawDoc?.metadata?.agreement_type || '',
+        sectorial: d.sectorial_category || d.sectorial || d.rawDoc?.sectorial_category || d.rawDoc?.metadata?.sectorial_category || '',
         pages,
         clauses,
         paragraphs,
@@ -128,6 +136,8 @@ export default function Documents({
         stages: d.stages || {},
         current_reviewer: currentReviewer,
         currentReviewer: currentReviewer,
+        // All distinct users who clicked Save (the persistent reviewer list)
+        reviewers,
         status: (d.status === 'Saved' || d.isSaved) ? 'Saved' : (d.status || (currentReviewer ? 'In review' : (isClassified ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted' ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted_with_warnings' ? 'Needs review' : extractionStatus === 'rejected' ? 'Draft' : 'Needs review'))),
         statusTag: d.statusTag || (warnings.length > 0 ? `${warnings.length} warning${warnings.length > 1 ? 's' : ''}` : null),
         vectorDbStatus: d.vectorDbStatus || 'Not sent yet',
@@ -167,9 +177,10 @@ export default function Documents({
 
   const [selectedDocId, setSelectedDocId] = useState(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(true);
-  const [isOpeningWorkspace, setIsOpeningWorkspace] = useState(false);
-  const [typeMenuAnchor, setTypeMenuAnchor] = useState(null);
-  const [reviewerMenuAnchor, setReviewerMenuAnchor] = useState(null);
+  const [selectedAgreementType, setSelectedAgreementType] = useState('all');
+  const [selectedSectorial, setSelectedSectorial] = useState('all');
+  const [agreementMenuAnchor, setAgreementMenuAnchor] = useState(null);
+  const [sectorialMenuAnchor, setSectorialMenuAnchor] = useState(null);
 
   // Derive selected document directly from selectedDocId or default to first document
   const selectedDoc = useMemo(() => {
@@ -185,6 +196,14 @@ export default function Documents({
   const counts = useMemo(() => {
     const draftCount = allDocs.filter((d) => d.status === 'Draft' || d.extractionStatus === 'rejected').length;
     const reviewedCount = allDocs.filter((d) => d.status === 'Reviewed').length;
+    const publishedCount = allDocs.filter(
+      (d) =>
+        d.status === 'Published' ||
+        d.status === 'Updated to vector DB' ||
+        d.review_status === 'published' ||
+        (d.vectorDbStatus && (d.vectorDbStatus.startsWith('Updated') || d.vectorDbStatus === 'Published')) ||
+        d.isPublished
+    ).length;
     return {
       all: allDocs.length,
       needsReview: allDocs.filter((d) => (d.needsReview && d.needsReview > 0) || d.status === 'Needs review').length,
@@ -194,10 +213,11 @@ export default function Documents({
       saved: allDocs.filter((d) => d.status === 'Saved').length,
       reviewed: reviewedCount,
       inreviewed: reviewedCount,
+      published: publishedCount,
       extracted: allDocs.filter((d) => d.extractionStatus === 'extracted').length,
       warnings: allDocs.filter((d) => d.extractionStatus === 'extracted_with_warnings' || (d.warnings && d.warnings.length > 0)).length,
       rejected: allDocs.filter((d) => d.extractionStatus === 'rejected').length,
-      updated: allDocs.filter((d) => d.vectorDbStatus && d.vectorDbStatus.startsWith('Updated')).length,
+      updated: publishedCount,
     };
   }, [allDocs]);
 
@@ -213,9 +233,33 @@ export default function Documents({
       if (activeFilter === 'extracted' && d.extractionStatus !== 'extracted') return false;
       if (activeFilter === 'warnings' && !(d.extractionStatus === 'extracted_with_warnings' || (d.warnings && d.warnings.length > 0))) return false;
       if (activeFilter === 'rejected' && d.extractionStatus !== 'rejected') return false;
-      if (activeFilter === 'updated' && !(d.vectorDbStatus && d.vectorDbStatus.startsWith('Updated'))) return false;
+      if (
+        (activeFilter === 'updated' || activeFilter === 'published') &&
+        !(
+          d.status === 'Published' ||
+          d.status === 'Updated to vector DB' ||
+          d.review_status === 'published' ||
+          (d.vectorDbStatus && (d.vectorDbStatus.startsWith('Updated') || d.vectorDbStatus === 'Published')) ||
+          d.isPublished
+        )
+      )
+        return false;
 
-      // Search filter across name, title, parties, reviewer, and folder
+      // Agreement Type filter
+      if (selectedAgreementType !== 'all') {
+        const docAg = (d.agreement_type || d.agreementType || '').trim().toLowerCase();
+        const filterAg = selectedAgreementType.trim().toLowerCase();
+        if (docAg !== filterAg) return false;
+      }
+
+      // Sectorial Category filter
+      if (selectedSectorial !== 'all') {
+        const docSec = (d.sectorial_category || d.sectorial || '').trim().toLowerCase();
+        const filterSec = selectedSectorial.trim().toLowerCase();
+        if (docSec !== filterSec) return false;
+      }
+
+      // Search filter across name, title, parties, reviewer, folder, agreement type, and sectorial category
       if (activeSearch && activeSearch.trim()) {
         const q = activeSearch.trim().toLowerCase();
         const matchesName = (d.name || '').toLowerCase().includes(q);
@@ -223,11 +267,13 @@ export default function Documents({
         const matchesParties = d.parties ? d.parties.toLowerCase().includes(q) : false;
         const matchesReviewer = d.reviewer ? d.reviewer.toLowerCase().includes(q) : false;
         const matchesFolder = d.folder ? d.folder.toLowerCase().includes(q) : false;
-        if (!matchesName && !matchesTitle && !matchesParties && !matchesReviewer && !matchesFolder) return false;
+        const matchesAg = (d.agreement_type || d.agreementType || '').toLowerCase().includes(q);
+        const matchesSec = (d.sectorial_category || d.sectorial || '').toLowerCase().includes(q);
+        if (!matchesName && !matchesTitle && !matchesParties && !matchesReviewer && !matchesFolder && !matchesAg && !matchesSec) return false;
       }
       return true;
     });
-  }, [allDocs, activeFilter, activeSearch]);
+  }, [allDocs, activeFilter, activeSearch, selectedAgreementType, selectedSectorial]);
 
   // Handle document row selection
   const handleSelectDoc = (doc) => {
@@ -235,27 +281,12 @@ export default function Documents({
     setIsDrawerOpen(true);
   };
 
-  // Open review workspace and call the classification endpoint for the document
-  const handleOpenWorkspace = async (docToOpen) => {
+  // Open review workspace directly without api call
+  const handleOpenWorkspace = (docToOpen) => {
     const targetDoc = docToOpen || selectedDoc;
     if (!targetDoc) return;
-    const documentId = targetDoc.documentId || targetDoc.id;
-
-    setIsOpeningWorkspace(true);
-    let classData = null;
-    try {
-      if (documentId) {
-        // Call the classification API for this document
-        classData = await documentService.classification(documentId);
-      }
-    } catch (err) {
-      console.warn('Direct classification fetch on workspace open notice:', err);
-    } finally {
-      setIsOpeningWorkspace(false);
-      if (onOpenWorkspace) {
-        const enrichedDoc = classData ? { ...targetDoc, _initialClassification: classData } : targetDoc;
-        onOpenWorkspace(enrichedDoc);
-      }
+    if (onOpenWorkspace) {
+      onOpenWorkspace(targetDoc);
     }
   };
 
@@ -424,10 +455,10 @@ export default function Documents({
         />
       );
     }
-    if (status && status.startsWith('Updated')) {
+    if (status && (status.startsWith('Updated') || status === 'Published')) {
       return (
         <Chip
-          label={status}
+          label="Published"
           size="small"
           sx={{
             height: 22,
@@ -435,6 +466,7 @@ export default function Documents({
             fontWeight: 600,
             bgcolor: '#dcfce7',
             color: '#166534',
+            border: '1px solid #bbf7d0',
           }}
         />
       );
@@ -451,6 +483,84 @@ export default function Documents({
           color: '#6b7280',
         }}
       />
+    );
+  };
+
+  // Reviewer cell helper — horizontal display with at most 2 pills and "+N others" tooltip
+  const renderReviewerCell = (doc) => {
+    const rawReviewers = Array.isArray(doc.reviewers) ? doc.reviewers : [];
+    const reviewers = Array.from(new Set(rawReviewers.filter(Boolean)));
+    const currentRev = doc.current_reviewer;
+
+    if (reviewers.length === 0 && !currentRev) {
+      return (
+        <Typography sx={{ fontSize: '12px', color: '#94a3b8' }}>
+          Not assigned
+        </Typography>
+      );
+    }
+
+    const maxVisible = 2;
+    const visibleReviewers = reviewers.slice(0, maxVisible);
+    const extraCount = Math.max(0, reviewers.length - maxVisible);
+    const remainingNames = extraCount > 0 ? reviewers.slice(maxVisible).join(', ') : '';
+
+    return (
+      <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.6, flexWrap: 'nowrap' }}>
+        {currentRev && (
+          <Tooltip title={`Currently editing: ${currentRev}`} arrow>
+            <Chip
+              size="small"
+              label={`✏ ${currentRev}`}
+              sx={{
+                height: 22,
+                fontSize: '11px',
+                bgcolor: '#e0f2fe',
+                color: '#0369a1',
+                fontWeight: 600,
+                border: '1px solid #bae6fd',
+                flexShrink: 0,
+              }}
+            />
+          </Tooltip>
+        )}
+        {visibleReviewers.map((r) => (
+          <Chip
+            key={r}
+            size="small"
+            label={r}
+            title={`Reviewer: ${r}`}
+            sx={{
+              height: 22,
+              fontSize: '11px',
+              bgcolor: '#f0fdf4',
+              color: '#166534',
+              border: '1px solid #bbf7d0',
+              fontWeight: 600,
+              flexShrink: 0,
+            }}
+          />
+        ))}
+        {extraCount > 0 && (
+          <Tooltip title={remainingNames} arrow>
+            <Chip
+              size="small"
+              label={`+${extraCount} other${extraCount > 1 ? 's' : ''}`}
+              sx={{
+                height: 22,
+                fontSize: '11px',
+                bgcolor: '#f8fafc',
+                color: '#475569',
+                border: '1px solid #cbd5e1',
+                fontWeight: 600,
+                flexShrink: 0,
+                cursor: 'pointer',
+                '&:hover': { bgcolor: '#f1f5f9' },
+              }}
+            />
+          </Tooltip>
+        )}
+      </Box>
     );
   };
 
@@ -511,20 +621,6 @@ export default function Documents({
                 fontWeight: 500,
               }}
             />
-            {driveState.folderPath && (
-              <Chip
-                label={`📁 ${driveState.folderPath}`}
-                size="small"
-                sx={{
-                  height: 24,
-                  fontSize: '11.5px',
-                  bgcolor: '#f0fdf4',
-                  color: '#166534',
-                  border: '1px solid #bbf7d0',
-                  fontWeight: 500,
-                }}
-              />
-            )}
           </Box>
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
@@ -600,11 +696,9 @@ export default function Documents({
               { id: 'all', label: `All ${counts.all}` },
               { id: 'needs-review', label: `Needs review ${counts.needsReview}` },
               { id: 'in-review', label: `In review ${counts.inReview}` },
-              { id: 'draft', label: `Draft ${counts.indraft}` },
               { id: 'saved', label: `Saved ${counts.saved}` },
               { id: 'reviewed', label: `Reviewed ${counts.inreviewed}` },
-              { id: 'updated', label: `Updated ${counts.updated}` },
-              { id: 'rejected', label: `Rejected ${counts.rejected}` },
+              { id: 'published', label: `Published ${counts.published}` },
             ].map((tab) => {
               const isSelected = activeFilter === tab.id;
               return (
@@ -636,69 +730,150 @@ export default function Documents({
             })}
           </Box>
 
-          {/* Dropdown Filters */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          {/* Dropdown Filters: Agreement Type and Sectorial Category */}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+            {/* Agreement Type Filter */}
             <Button
               size="small"
               endIcon={<KeyboardArrowDownIcon sx={{ fontSize: 14 }} />}
-              onClick={(e) => setTypeMenuAnchor(e.currentTarget)}
+              onClick={(e) => setAgreementMenuAnchor(e.currentTarget)}
               sx={{
                 height: 28,
                 fontSize: '11.5px',
-                fontWeight: 500,
+                fontWeight: selectedAgreementType !== 'all' ? 600 : 500,
                 textTransform: 'none',
                 px: 1.25,
-                bgcolor: '#ffffff',
-                color: '#475569',
-                border: '1px solid #e2e8f0',
+                bgcolor: selectedAgreementType !== 'all' ? '#eff6ff' : '#ffffff',
+                color: selectedAgreementType !== 'all' ? '#1d4ed8' : '#475569',
+                border: '1px solid',
+                borderColor: selectedAgreementType !== 'all' ? '#bfdbfe' : '#e2e8f0',
                 borderRadius: 1.5,
-                '&:hover': { bgcolor: '#f8fafc' },
+                maxWidth: 220,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                '&:hover': { bgcolor: selectedAgreementType !== 'all' ? '#dbeafe' : '#f8fafc' },
               }}
             >
-              All types
+              {selectedAgreementType === 'all'
+                ? 'All agreement types'
+                : selectedAgreementType.length > 22
+                  ? `${selectedAgreementType.slice(0, 20)}...`
+                  : selectedAgreementType}
             </Button>
             <Menu
-              anchorEl={typeMenuAnchor}
-              open={Boolean(typeMenuAnchor)}
-              onClose={() => setTypeMenuAnchor(null)}
+              anchorEl={agreementMenuAnchor}
+              open={Boolean(agreementMenuAnchor)}
+              onClose={() => setAgreementMenuAnchor(null)}
+              slotProps={{ paper: { sx: { maxHeight: 320, width: 280 } } }}
             >
-              <MenuItem onClick={() => setTypeMenuAnchor(null)}>All types</MenuItem>
-              <MenuItem onClick={() => setTypeMenuAnchor(null)}>MSA</MenuItem>
-              <MenuItem onClick={() => setTypeMenuAnchor(null)}>NDA</MenuItem>
-              <MenuItem onClick={() => setTypeMenuAnchor(null)}>SOW</MenuItem>
-              <MenuItem onClick={() => setTypeMenuAnchor(null)}>DPA</MenuItem>
-              <MenuItem onClick={() => setTypeMenuAnchor(null)}>General</MenuItem>
+              <MenuItem
+                selected={selectedAgreementType === 'all'}
+                onClick={() => {
+                  setSelectedAgreementType('all');
+                  setAgreementMenuAnchor(null);
+                }}
+                sx={{ fontSize: '12.5px', fontWeight: selectedAgreementType === 'all' ? 600 : 400 }}
+              >
+                All agreement types
+              </MenuItem>
+              {AGREEMENT_TYPES.map((type) => (
+                <MenuItem
+                  key={type}
+                  selected={selectedAgreementType === type}
+                  onClick={() => {
+                    setSelectedAgreementType(type);
+                    setAgreementMenuAnchor(null);
+                  }}
+                  sx={{ fontSize: '12.5px', fontWeight: selectedAgreementType === type ? 600 : 400 }}
+                >
+                  {type}
+                </MenuItem>
+              ))}
             </Menu>
 
+            {/* Sectorial Category Filter */}
             <Button
               size="small"
               endIcon={<KeyboardArrowDownIcon sx={{ fontSize: 14 }} />}
-              onClick={(e) => setReviewerMenuAnchor(e.currentTarget)}
+              onClick={(e) => setSectorialMenuAnchor(e.currentTarget)}
               sx={{
                 height: 28,
                 fontSize: '11.5px',
-                fontWeight: 500,
+                fontWeight: selectedSectorial !== 'all' ? 600 : 500,
                 textTransform: 'none',
                 px: 1.25,
-                bgcolor: '#ffffff',
-                color: '#475569',
-                border: '1px solid #e2e8f0',
+                bgcolor: selectedSectorial !== 'all' ? '#f0fdf4' : '#ffffff',
+                color: selectedSectorial !== 'all' ? '#166534' : '#475569',
+                border: '1px solid',
+                borderColor: selectedSectorial !== 'all' ? '#bbf7d0' : '#e2e8f0',
                 borderRadius: 1.5,
-                '&:hover': { bgcolor: '#f8fafc' },
+                maxWidth: 220,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                '&:hover': { bgcolor: selectedSectorial !== 'all' ? '#dcfce7' : '#f8fafc' },
               }}
             >
-              Any reviewer
+              {selectedSectorial === 'all'
+                ? 'All sectorial categories'
+                : selectedSectorial.length > 22
+                  ? `${selectedSectorial.slice(0, 20)}...`
+                  : selectedSectorial}
             </Button>
             <Menu
-              anchorEl={reviewerMenuAnchor}
-              open={Boolean(reviewerMenuAnchor)}
-              onClose={() => setReviewerMenuAnchor(null)}
+              anchorEl={sectorialMenuAnchor}
+              open={Boolean(sectorialMenuAnchor)}
+              onClose={() => setSectorialMenuAnchor(null)}
+              slotProps={{ paper: { sx: { maxHeight: 320, width: 300 } } }}
             >
-              <MenuItem onClick={() => setReviewerMenuAnchor(null)}>Any reviewer</MenuItem>
-              <MenuItem onClick={() => setReviewerMenuAnchor(null)}>
-                {driveState.user?.name || driveState.user?.email || 'Current Reviewer'}
+              <MenuItem
+                selected={selectedSectorial === 'all'}
+                onClick={() => {
+                  setSelectedSectorial('all');
+                  setSectorialMenuAnchor(null);
+                }}
+                sx={{ fontSize: '12.5px', fontWeight: selectedSectorial === 'all' ? 600 : 400 }}
+              >
+                All sectorial categories
               </MenuItem>
+              {SECTORIAL_OPTIONS.map((sec) => (
+                <MenuItem
+                  key={sec}
+                  selected={selectedSectorial === sec}
+                  onClick={() => {
+                    setSelectedSectorial(sec);
+                    setSectorialMenuAnchor(null);
+                  }}
+                  sx={{ fontSize: '12.5px', fontWeight: selectedSectorial === sec ? 600 : 400 }}
+                >
+                  {sec}
+                </MenuItem>
+              ))}
             </Menu>
+
+            {/* Clear Filters Button if any active */}
+            {(selectedAgreementType !== 'all' || selectedSectorial !== 'all') && (
+              <Button
+                size="small"
+                onClick={() => {
+                  setSelectedAgreementType('all');
+                  setSelectedSectorial('all');
+                }}
+                sx={{
+                  height: 28,
+                  fontSize: '11px',
+                  textTransform: 'none',
+                  color: '#dc2626',
+                  fontWeight: 600,
+                  p: 0.5,
+                  minWidth: 'auto',
+                  '&:hover': { bgcolor: '#fef2f2' },
+                }}
+              >
+                Reset filters
+              </Button>
+            )}
           </Box>
         </Box>
 
@@ -833,7 +1008,7 @@ export default function Documents({
                   <TableCell sx={{ bgcolor: '#f8fafc', py: 1.25, fontSize: '12px', fontWeight: 600, color: '#64748b', borderBottom: '1px solid #e2e8f0', width: 160 }}>
                     Needs review
                   </TableCell>
-                  <TableCell sx={{ bgcolor: '#f8fafc', py: 1.25, fontSize: '12px', fontWeight: 600, color: '#64748b', borderBottom: '1px solid #e2e8f0', width: 170 }}>
+                  <TableCell sx={{ bgcolor: '#f8fafc', py: 1.25, fontSize: '12px', fontWeight: 600, color: '#64748b', borderBottom: '1px solid #e2e8f0', width: 230, minWidth: 200 }}>
                     Reviewer
                   </TableCell>
                   <TableCell sx={{ bgcolor: '#f8fafc', py: 1.25, fontSize: '12px', fontWeight: 600, color: '#64748b', borderBottom: '1px solid #e2e8f0', width: 170 }}>
@@ -895,10 +1070,39 @@ export default function Documents({
                                 }}
                               />
                             )}
+                            {(doc.status === 'Published' ||
+                              doc.status === 'Updated to vector DB' ||
+                              doc.review_status === 'published' ||
+                              (doc.vectorDbStatus && (doc.vectorDbStatus.startsWith('Updated') || doc.vectorDbStatus === 'Published')) ||
+                              doc.isPublished) && (
+                              <Chip
+                                label="Published"
+                                size="small"
+                                sx={{
+                                  height: 20,
+                                  fontSize: '11px',
+                                  fontWeight: 600,
+                                  bgcolor: '#dcfce7',
+                                  color: '#166534',
+                                  border: '1px solid #bbf7d0',
+                                }}
+                              />
+                            )}
                           </Box>
-                          <Typography sx={{ fontSize: '11.5px', color: '#64748b', letterSpacing: '0.01em' }}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap', mt: 0.25 }}>
+                            <Typography sx={{ fontSize: '11px', color: '#475569', fontWeight: 500 }}>
+                              <Box component="span" sx={{ color: '#64748b', fontWeight: 400 }}>Agreement: </Box>
+                              {doc.agreement_type || doc.agreementType || '—'}
+                            </Typography>
+                            <Box component="span" sx={{ color: '#cbd5e1' }}>•</Box>
+                            <Typography sx={{ fontSize: '11px', color: '#475569', fontWeight: 500 }}>
+                              <Box component="span" sx={{ color: '#64748b', fontWeight: 400 }}>Sector: </Box>
+                              {doc.sectorial_category || doc.sectorial || '—'}
+                            </Typography>
+                          </Box>
+                          {/* <Typography sx={{ fontSize: '11.5px', color: '#64748b', letterSpacing: '0.01em', mt: 0.2 }}>
                             pages: {doc.pages ?? 0} · clauses: {doc.clauses ?? 0} · paragraphs: {doc.paragraphs ?? 0} · {doc.size}
-                          </Typography>
+                          </Typography> */}
                         </Box>
                       </TableCell>
 
@@ -912,26 +1116,9 @@ export default function Documents({
                         {renderNeedsReviewBadge(doc.needsReview)}
                       </TableCell>
 
-                      {/* Reviewer */}
+                      {/* Reviewer — horizontal display */}
                       <TableCell sx={{ py: 1.4 }}>
-                        {doc.current_reviewer ? (
-                          <Chip
-                            size="small"
-                            label={`${doc.current_reviewer}`}
-                            sx={{
-                              height: 20,
-                              fontSize: '11px',
-                              bgcolor: '#e0f2fe',
-                              color: '#0369a1',
-                              fontWeight: 600,
-                              border: '1px solid #bae6fd',
-                            }}
-                          />
-                        ) : (
-                          <Typography sx={{ fontSize: '12px', color: '#64748b' }}>
-                            Not assigned
-                          </Typography>
-                        )}
+                        {renderReviewerCell(doc)}
                       </TableCell>
 
                       {/* Vector DB */}
@@ -1155,6 +1342,24 @@ export default function Documents({
               </Box>
 
               <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
+                <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 110 }}>
+                  Agreement type
+                </Typography>
+                <Typography sx={{ fontSize: '12px', fontWeight: 600, color: '#0f172a', textAlign: 'right' }}>
+                  {selectedDoc.agreement_type || selectedDoc.agreementType || '—'}
+                </Typography>
+              </Box>
+
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
+                <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 110 }}>
+                  Sectorial category
+                </Typography>
+                <Typography sx={{ fontSize: '12px', fontWeight: 600, color: '#0f172a', textAlign: 'right' }}>
+                  {selectedDoc.sectorial_category || selectedDoc.sectorial || '—'}
+                </Typography>
+              </Box>
+
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
                 <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 100 }}>
                   Paragraphs
                 </Typography>
@@ -1183,12 +1388,62 @@ export default function Documents({
 
               <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
                 <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 110 }}>
-                  Current reviewer
+                  Active editor
                 </Typography>
                 <Typography sx={{ fontSize: '12px', fontWeight: 600, color: selectedDoc.current_reviewer ? '#0f172a' : '#64748b', textAlign: 'right' }}>
-                  {selectedDoc.current_reviewer ? selectedDoc.current_reviewer : 'null'}
+                  {selectedDoc.current_reviewer || '—'}
                 </Typography>
               </Box>
+
+              {(selectedDoc.reviewers || []).length > 0 && (() => {
+                const revList = Array.from(new Set((selectedDoc.reviewers || []).filter(Boolean)));
+                const visible = revList.slice(0, 3);
+                const extra = Math.max(0, revList.length - 3);
+                const extraNames = extra > 0 ? revList.slice(3).join(', ') : '';
+
+                return (
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5, alignItems: 'center' }}>
+                    <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 90 }}>
+                      Reviewers
+                    </Typography>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                      {visible.map((r) => (
+                        <Chip
+                          key={r}
+                          label={r}
+                          size="small"
+                          sx={{
+                            height: 20,
+                            fontSize: '11px',
+                            bgcolor: '#f0fdf4',
+                            color: '#166534',
+                            border: '1px solid #bbf7d0',
+                            fontWeight: 600,
+                          }}
+                        />
+                      ))}
+                      {extra > 0 && (
+                        <Tooltip title={extraNames} arrow>
+                          <Chip
+                            label={`+${extra} other${extra > 1 ? 's' : ''}`}
+                            size="small"
+                            sx={{
+                              height: 20,
+                              fontSize: '11px',
+                              bgcolor: '#f8fafc',
+                              color: '#475569',
+                              border: '1px solid #cbd5e1',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              '&:hover': { bgcolor: '#f1f5f9' },
+                            }}
+                          />
+                        </Tooltip>
+                      )}
+                    </Box>
+                  </Box>
+                );
+              })()}
 
               <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
                 <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 100 }}>
@@ -1244,9 +1499,8 @@ export default function Documents({
             <Button
               variant="contained"
               fullWidth
-              disabled={isOpeningWorkspace || !selectedDoc}
+              disabled={!selectedDoc}
               onClick={() => handleOpenWorkspace(selectedDoc)}
-              startIcon={isOpeningWorkspace ? <CircularProgress size={16} sx={{ color: '#ffffff' }} /> : null}
               sx={{
                 bgcolor: '#1e3a5f',
                 color: '#ffffff',
@@ -1266,7 +1520,7 @@ export default function Documents({
                 },
               }}
             >
-              {isOpeningWorkspace ? 'Opening workspace...' : 'Open review workspace'}
+              Open review workspace
             </Button>
           </Box>
         </Box>

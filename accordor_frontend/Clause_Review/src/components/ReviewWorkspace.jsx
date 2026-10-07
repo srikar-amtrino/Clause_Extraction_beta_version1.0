@@ -8,6 +8,12 @@ import {
   Tooltip,
   TextField,
   CircularProgress,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  FormControlLabel,
+  Checkbox,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import UndoOutlinedIcon from '@mui/icons-material/UndoOutlined';
@@ -18,6 +24,8 @@ import HistoryIcon from '@mui/icons-material/History';
 import NoteAltOutlinedIcon from '@mui/icons-material/NoteAltOutlined';
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';
+import RestoreFromTrashIcon from '@mui/icons-material/RestoreFromTrash';
 
 import { documentService } from '../services/documentService';
 import { getStoredToken } from '../services/authService';
@@ -55,6 +63,48 @@ function resolveTaxonomyKey(typeOrName, taxonomyMap) {
     .replace(/^-+|-+$/g, '');
 }
 
+function mapClassificationItem(item, i, doc, classRes) {
+  const clauseId = item.clause_id || (item.number ? `c${item.number}` : `c${i + 1}`);
+  const breadcrumb =
+    item.breadcrumb || item.heading_trail || item.heading || (item.number ? `Clause ${item.number}` : `Clause ${i + 1}`);
+  const reviewObj = item.review || null;
+  const isItemReviewed = Boolean(reviewObj?.decision || item.needs_review === false || item.isReviewed);
+  const itemNeedsReview = isItemReviewed ? false : Boolean(item.needs_review !== false && (item.needs_review || item.needsReview));
+  return {
+    id: item.classification_id || item.id || `clause-${i}`,
+    classification_id: item.classification_id,
+    clause_id: clauseId,
+    paraId: clauseId,
+    number: item.number,
+    paragraph_ids: item.paragraph_ids || [],
+    heading_trail: breadcrumb,
+    breadcrumb: breadcrumb,
+    text: item.text || item.chunk_text || '',
+    reviewed_text: item.reviewed_text || item.text || item.chunk_text || '',
+    label: item.label || 'Clause',
+    type: item.type || 'unassigned',
+    type_name: item.type_name || item.type || 'Unassigned',
+    canonicalType: item.type_name || item.type || 'Unassigned',
+    sub_type: item.sub_type || null,
+    subType: item.sub_type || null,
+    preview: item.preview || doc?.webViewLink || classRes?.document?.drive_web_link || '',
+    confidence: item.confidence,
+    needs_review: itemNeedsReview,
+    needsReview: itemNeedsReview,
+    isReviewed: isItemReviewed,
+    review_reasons: isItemReviewed ? [] : (item.review_reasons || []),
+    deviated: isItemReviewed ? false : Boolean(item.deviated),
+    outcome: isItemReviewed ? 'reviewed' : item.outcome,
+    expected_types: item.expected_types || [],
+    review: reviewObj,
+    decision: reviewObj?.decision || (itemNeedsReview ? 'needs_review' : 'accepted'),
+    note: reviewObj?.note || '',
+    merged_into: item.merged_into || null,
+    deleted_at: item.deleted_at || null,
+    deleted_by: item.deleted_by || null,
+  };
+}
+
 export default function ReviewWorkspace({
   document: doc,
   onBackToDocuments,
@@ -75,6 +125,9 @@ export default function ReviewWorkspace({
   const lockOwnedRef = useRef(false);
   const heartbeatRef = useRef(null);
   const lockEffectGenerationRef = useRef(0);
+  const socketRef = useRef(null);
+  const [isRequestingAccess, setIsRequestingAccess] = useState(false);
+  const [incomingAccessRequest, setIncomingAccessRequest] = useState(null);
 
   const handleHeartbeatFailure = useCallback(
     (error) => {
@@ -125,6 +178,7 @@ export default function ReviewWorkspace({
     const connectSocket = () => {
       if (!active || !token) return;
       socket = new WebSocket(documentService.websocketUrl(docId), ['bearer', token]);
+      socketRef.current = socket;
       socket.onopen = () => {
         reconnectAttempts = 0;
       };
@@ -133,6 +187,46 @@ export default function ReviewWorkspace({
         try {
           update = JSON.parse(message.data);
         } catch {
+          return;
+        }
+
+        // Access handover events
+        if (update.event === 'access_requested') {
+          // If I am the active editor and someone else requested access
+          const requester = update.requested_by;
+          if (
+            lockOwnedRef.current &&
+            requester &&
+            String(requester).toLowerCase() !== String(currentUserName).toLowerCase()
+          ) {
+            setIncomingAccessRequest({
+              requestedBy: requester,
+              requestedById: update.requested_by_id,
+            });
+          }
+          return;
+        }
+
+        if (update.event === 'access_granted') {
+          const isTargetedToMe =
+            String(update.target_user_id) === String(currentUserIdRef.current) ||
+            (update.target_user && String(update.target_user).toLowerCase() === String(currentUserName).toLowerCase());
+          if (isTargetedToMe) {
+            setIsRequestingAccess(false);
+            showToast?.(`${update.granted_by || 'The editor'} granted editing access! Taking over…`, 'success');
+            handleTakeEditingAccess();
+          }
+          return;
+        }
+
+        if (update.event === 'access_denied') {
+          const isTargetedToMe =
+            String(update.target_user_id) === String(currentUserIdRef.current) ||
+            (update.target_user && String(update.target_user).toLowerCase() === String(currentUserName).toLowerCase());
+          if (isTargetedToMe) {
+            setIsRequestingAccess(false);
+            showToast?.(`${update.denied_by || 'The editor'} is currently editing and declined the handover request.`, 'warning');
+          }
           return;
         }
 
@@ -163,6 +257,7 @@ export default function ReviewWorkspace({
         }
       };
       socket.onclose = () => {
+        if (socketRef.current === socket) socketRef.current = null;
         if (active) {
           const delay = Math.min(2000 * 2 ** reconnectAttempts, 30000);
           reconnectAttempts += 1;
@@ -226,6 +321,29 @@ export default function ReviewWorkspace({
     };
   }, [docId, handleHeartbeatFailure, showToast, currentUserName]);
 
+  // Fire a lock-release beacon on hard page unload (tab close, browser close,
+  // direct URL navigation). navigator.sendBeacon is queued by the browser and
+  // survives page teardown; keepalive fetch above covers React unmount.
+  useEffect(() => {
+    if (!docId) return undefined;
+
+    const handleUnload = () => {
+      if (!lockOwnedRef.current) return; // read-only visitor — nothing to release
+      const token = getStoredToken();
+      const url = `/api/documents/${docId}/workspace/lock/release/`;
+      // sendBeacon ignores the response; the backend is idempotent on 403.
+      if (navigator.sendBeacon) {
+        const blob = new Blob(['{}'], { type: 'application/json' });
+        // Attach auth token as a query param so the Django backend can auth the
+        // beacon request (sendBeacon cannot set custom headers).
+        navigator.sendBeacon(`${url}?token=${encodeURIComponent(token || '')}`, blob);
+      }
+    };
+
+    window.addEventListener('beforeunload', handleUnload);
+    return () => window.removeEventListener('beforeunload', handleUnload);
+  }, [docId]);
+
   const handleTakeEditingAccess = async () => {
     try {
       const result = await documentService.acquireWorkspaceLock(docId, { takeOver: true });
@@ -244,6 +362,68 @@ export default function ReviewWorkspace({
       showToast?.('Editing access acquired.', 'success');
     } catch (err) {
       showToast?.(err.message || 'Could not take editing access.', 'error');
+    }
+  };
+
+  const handleRequestEditingAccess = async () => {
+    setIsRequestingAccess(true);
+    try {
+      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+        socketRef.current.send(JSON.stringify({ event: 'request_access' }));
+      }
+      const res = await documentService.requestWorkspaceAccess(docId);
+      if (res?.status === 'available') {
+        showToast?.('Document is now available. Acquiring editing access…', 'success');
+        handleTakeEditingAccess();
+        setIsRequestingAccess(false);
+        return;
+      }
+      showToast?.(`Access request sent to ${workspaceLock.lockedBy || 'the reviewer'}. Waiting for response…`, 'info');
+    } catch (err) {
+      setIsRequestingAccess(false);
+      showToast?.(err.message || 'Could not send access request.', 'error');
+    }
+  };
+
+  const handleGrantAccessToRequester = async () => {
+    if (!incomingAccessRequest) return;
+    const { requestedBy, requestedById } = incomingAccessRequest;
+    try {
+      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+        socketRef.current.send(JSON.stringify({
+          event: 'grant_access',
+          target_user: requestedBy,
+          target_user_id: requestedById,
+        }));
+      }
+      await documentService.respondWorkspaceAccess(docId, 'grant', requestedById, requestedBy);
+      lockOwnedRef.current = false;
+      if (heartbeatRef.current) window.clearInterval(heartbeatRef.current);
+      heartbeatRef.current = null;
+      setWorkspaceLock({ status: 'read-only', lockedBy: requestedBy, documentId: docId });
+      setIncomingAccessRequest(null);
+      showToast?.(`Editing access granted to ${requestedBy}. Document is now read-only.`, 'success');
+    } catch (err) {
+      showToast?.(err.message || 'Could not grant editing access.', 'error');
+    }
+  };
+
+  const handleDeclineAccessRequest = async () => {
+    if (!incomingAccessRequest) return;
+    const { requestedBy, requestedById } = incomingAccessRequest;
+    try {
+      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+        socketRef.current.send(JSON.stringify({
+          event: 'deny_access',
+          target_user: requestedBy,
+          target_user_id: requestedById,
+        }));
+      }
+      await documentService.respondWorkspaceAccess(docId, 'deny', requestedById, requestedBy);
+      setIncomingAccessRequest(null);
+      showToast?.(`Declined access request from ${requestedBy}.`, 'info');
+    } catch {
+      setIncomingAccessRequest(null);
     }
   };
 
@@ -293,6 +473,15 @@ export default function ReviewWorkspace({
 
   // Data states
   const [extractedClauses, setExtractedClauses] = useState([]);
+  const [deletedClauses, setDeletedClauses] = useState([]);
+  const [deleteModalState, setDeleteModalState] = useState({
+    open: false,
+    clause: null,
+    clauses: [],
+    mergeIntoNext: false,
+    note: '',
+    isDeleting: false,
+  });
   const [classificationSummary, setClassificationSummary] = useState(null);
   const [classificationRunId, setClassificationRunId] = useState(null);
   const [documentMeta, setDocumentMeta] = useState(null);
@@ -311,7 +500,7 @@ export default function ReviewWorkspace({
 
   const reviewedCount = useMemo(() => {
     return extractedClauses.filter(
-      (r) => Boolean(r.review?.decision || r.isReviewed)
+      (r) => Boolean(r.review?.decision || r.isReviewed || (!r.needs_review && !r.needsReview))
     ).length;
   }, [extractedClauses]);
 
@@ -327,22 +516,62 @@ export default function ReviewWorkspace({
   const handlePublishToVectorDb = async () => {
     const targetDocId = doc?.documentId || doc?.id || docId;
     if (!targetDocId || isPublishingToVectorDb) return;
-    if (needsReviewCount > 0) {
-      showToast?.(`Cannot update to Vector DB: ${needsReviewCount} clause(s) still need review.`, 'warning');
-      return;
-    }
     setIsPublishingToVectorDb(true);
     try {
-      const result = await documentService.publishToVectorDb(targetDocId);
-      const msg = result?.message || `Published "${docName}" to Vector DB successfully.`;
+      const deletedIds = new Set(
+        (deletedClauses || []).map((d) => String(d.classification_id || d.id || d.clause_id))
+      );
+
+      const activeClauses = extractedClauses
+        .filter((c) => !deletedIds.has(String(c.classification_id || c.id || c.clause_id)))
+        .map((c, idx) => ({
+          classification_id: c.classification_id || c.id,
+          clause_id: c.clause_id || (c.number ? `c${c.number}` : `c${idx + 1}`),
+          number: c.number,
+          paragraph_ids: c.paragraph_ids || [],
+          breadcrumb: c.breadcrumb || c.heading_trail || '',
+          heading_trail: c.heading_trail || c.breadcrumb || '',
+          text: (c.reviewed_text || c.text || '').trim(),
+          reviewed_text: (c.reviewed_text || c.text || '').trim(),
+          label: c.label || 'Clause',
+          type: c.type || null,
+          type_name: c.type_name || c.canonicalType || 'Unassigned',
+          sub_type: c.sub_type || null,
+          decision: c.review?.decision || c.decision || 'accepted',
+        }));
+
+      const activeAgreementType = doc?.agreement_type || doc?.agreementType || documentMeta?.agreement_type || documentMeta?.agreementType || '';
+      const activeSectorialCategory = doc?.sectorial_category || doc?.sectorial || documentMeta?.sectorial_category || documentMeta?.sectorial || '';
+
+      const publishPayload = {
+        classification_run_id: classificationRunId,
+        agreement_type: activeAgreementType,
+        sectorial_category: activeSectorialCategory,
+        clauses: activeClauses,
+        items: activeClauses,
+      };
+
+      const result = await documentService.publishToVectorDb(targetDocId, publishPayload);
+      const msg = result?.message || `Published "${docName}" (${activeClauses.length} clauses) to Vector DB successfully.`;
       showToast?.(msg, 'success');
-      setDocumentStatus('Updated to vector DB');
+      const updatedPublishDoc = {
+        ...doc,
+        status: 'Updated to vector DB',
+        review_status: 'published',
+        vectorDbStatus: 'Updated to vector DB',
+        isPublished: true,
+        agreement_type: activeAgreementType,
+        sectorial_category: activeSectorialCategory,
+      };
+      if (onUpdateDocument) {
+        onUpdateDocument(updatedPublishDoc);
+      }
       window.dispatchEvent(
         new CustomEvent('document_saved', {
           detail: {
             documentId: targetDocId,
             status: 'Updated to vector DB',
-            doc: { ...doc, status: 'Updated to vector DB' },
+            doc: updatedPublishDoc,
           },
         })
       );
@@ -361,10 +590,10 @@ export default function ReviewWorkspace({
   };
 
   // Contents Drawer & Preview State
-  const [isContentsOpen, setIsContentsOpen] = useState(true);
+  const [isContentsOpen, setIsContentsOpen] = useState(false);
   const [expandedSections, setExpandedSections] = useState(() => new Set([1, 2, 3]));
   const [highlightedClauseId, setHighlightedClauseId] = useState(null);
-  const [isPreviewOpen, setIsPreviewOpen] = useState(true);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [previewClause, setPreviewClause] = useState(null);
   const previewContainerRef = useRef(null);
 
@@ -423,59 +652,55 @@ export default function ReviewWorkspace({
     };
   }, []);
 
-  // Immediately initialize clauses if pre-fetched classification was provided from document click
+  // Immediately initialize clauses if pre-fetched classification or sessionStorage cache is available (0ms buffering)
   useEffect(() => {
-    if (doc?._initialClassification && Array.isArray(doc._initialClassification.items) && doc._initialClassification.items.length > 0) {
-      const initRows = doc._initialClassification.items.map((item, i) => {
-        const clauseId = item.clause_id || (item.number ? `c${item.number}` : `c${i + 1}`);
-        const breadcrumb =
-          item.breadcrumb || item.heading_trail || item.heading || (item.number ? `Clause ${item.number}` : `Clause ${i + 1}`);
-        const reviewObj = item.review || null;
-        const isItemReviewed = Boolean(reviewObj?.decision);
-        const itemNeedsReview = isItemReviewed ? false : Boolean(item.needs_review);
-        return {
-          id: item.classification_id || item.id || `clause-${i}`,
-          classification_id: item.classification_id,
-          clause_id: clauseId,
-          paraId: clauseId,
-          number: item.number,
-          paragraph_ids: item.paragraph_ids || [],
-          heading_trail: breadcrumb,
-          breadcrumb: breadcrumb,
-          text: item.text || item.chunk_text || '',
-          label: item.label || 'Clause',
-          type: item.type || 'unassigned',
-          type_name: item.type_name || item.type || 'Unassigned',
-          canonicalType: item.type_name || item.type || 'Unassigned',
-          sub_type: item.sub_type || null,
-          subType: item.sub_type || null,
-          preview: item.preview || doc.webViewLink || '',
-          confidence: item.confidence,
-          needs_review: itemNeedsReview,
-          needsReview: itemNeedsReview,
-          isReviewed: isItemReviewed,
-          review_reasons: isItemReviewed ? [] : (item.review_reasons || []),
-          deviated: isItemReviewed ? false : Boolean(item.deviated),
-          outcome: isItemReviewed ? 'reviewed' : item.outcome,
-          expected_types: item.expected_types || [],
-          review: reviewObj,
-          decision: reviewObj?.decision || (itemNeedsReview ? 'needs_review' : 'accepted'),
-          note: reviewObj?.note || '',
-        };
-      });
+    const targetDocId = docId || doc?.documentId || doc?.id;
+    if (!targetDocId) return;
+
+    let initialData = doc?._initialClassification;
+    if (!initialData || !Array.isArray(initialData.items) || initialData.items.length === 0) {
+      try {
+        const cached = sessionStorage.getItem('accordor_class_cache_' + targetDocId);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (parsed && Array.isArray(parsed.items) && parsed.items.length > 0) {
+            initialData = parsed;
+          }
+        }
+      } catch (_) {}
+    }
+
+    if (initialData && Array.isArray(initialData.items) && initialData.items.length > 0) {
+      const initRows = initialData.items.map((item, i) =>
+        mapClassificationItem(item, i, doc, initialData)
+      );
       setExtractedClauses(initRows);
+      if (Array.isArray(initialData.deleted_items)) {
+        setDeletedClauses(
+          initialData.deleted_items.map((item, i) =>
+            mapClassificationItem(item, i, doc, initialData)
+          )
+        );
+      }
       if (initRows.length > 0) {
         setPreviewClause(initRows[0]);
         setHighlightedClauseId(initRows[0].id || initRows[0].clause_id);
       }
-      if (doc._initialClassification.summary) {
-        setClassificationSummary(doc._initialClassification.summary);
+      if (initialData.summary) {
+        setClassificationSummary(initialData.summary);
       }
-      if (doc._initialClassification.document) {
-        setDocumentMeta(doc._initialClassification.document);
+      if (initialData.document) {
+        setDocumentMeta(initialData.document);
       }
+      const runId =
+        initialData.classification_run?.classification_run_id ||
+        initialData.classification_run?.id ||
+        initialData.classification_run_id ||
+        initialData.summary?.classification_run_id;
+      if (runId) setClassificationRunId(runId);
+      setIsLoadingClauses(false);
     }
-  }, [doc]);
+  }, [docId, doc]);
 
   // Keep first clause selected and highlighted in preview when clauses are ready
   useEffect(() => {
@@ -485,12 +710,27 @@ export default function ReviewWorkspace({
     }
   }, [extractedClauses, previewClause]);
 
-  // Load classification items directly from backend API (no local storage cache)
+  // Load classification items directly from backend API (revalidates in background without blocking if cached)
   useEffect(() => {
     let isMounted = true;
     if (!docId) return;
 
-    setIsLoadingClauses(true);
+    // Check if we already have cached data in sessionStorage
+    let hasCachedData = false;
+    try {
+      const cached = sessionStorage.getItem('accordor_class_cache_' + docId);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed && Array.isArray(parsed.items) && parsed.items.length > 0) {
+          hasCachedData = true;
+        }
+      }
+    } catch (_) {}
+
+    if (!hasCachedData && extractedClauses.length === 0) {
+      setIsLoadingClauses(true);
+    }
+
     async function fetchClassification() {
       try {
         // Fetch full document metadata if doc is loading or missing attributes
@@ -525,6 +765,11 @@ export default function ReviewWorkspace({
         }
 
         if (classRes && Array.isArray(classRes.items) && classRes.items.length > 0) {
+          // Store in sessionStorage cache for instant reload / reopen
+          try {
+            sessionStorage.setItem('accordor_class_cache_' + docId, JSON.stringify(classRes));
+          } catch (_) {}
+
           const runId =
             classRes.classification_run?.classification_run_id ||
             classRes.classification_run?.id ||
@@ -535,46 +780,14 @@ export default function ReviewWorkspace({
             setClassificationRunId(runId);
           }
 
-          const rows = classRes.items.map((item, i) => {
-            const clauseId = item.clause_id || (item.number ? `c${item.number}` : `c${i + 1}`);
-            const breadcrumb =
-              item.breadcrumb || item.heading_trail || item.heading || (item.number ? `Clause ${item.number}` : `Clause ${i + 1}`);
-            const reviewObj = item.review || null;
-            const isItemReviewed = Boolean(reviewObj?.decision);
-            const itemNeedsReview = isItemReviewed ? false : Boolean(item.needs_review);
-            return {
-              id: item.classification_id || item.id || `clause-${i}`,
-              classification_id: item.classification_id,
-              clause_id: clauseId,
-              paraId: clauseId,
-              number: item.number,
-              paragraph_ids: item.paragraph_ids || [],
-              heading_trail: breadcrumb,
-              breadcrumb: breadcrumb,
-              text: item.text || item.chunk_text || '',
-              label: item.label || 'Clause',
-              type: item.type || 'unassigned',
-              type_name: item.type_name || item.type || 'Unassigned',
-              canonicalType: item.type_name || item.type || 'Unassigned',
-              sub_type: item.sub_type || null,
-              subType: item.sub_type || null,
-              preview: item.preview || doc.webViewLink || classRes.document?.drive_web_link || '',
-              confidence: item.confidence,
-              needs_review: itemNeedsReview,
-              needsReview: itemNeedsReview,
-              isReviewed: isItemReviewed,
-              review_reasons: isItemReviewed ? [] : (item.review_reasons || []),
-              deviated: isItemReviewed ? false : Boolean(item.deviated),
-              outcome: isItemReviewed ? 'reviewed' : item.outcome,
-              expected_types: item.expected_types || [],
-              review: reviewObj,
-              decision: reviewObj?.decision || (itemNeedsReview ? 'needs_review' : 'accepted'),
-              note: reviewObj?.note || '',
-            };
-          });
+          const rows = classRes.items.map((item, i) => mapClassificationItem(item, i, doc, classRes));
+          const deletedRows = Array.isArray(classRes.deleted_items)
+            ? classRes.deleted_items.map((item, i) => mapClassificationItem(item, i, doc, classRes))
+            : [];
 
           if (isMounted) {
             setExtractedClauses(rows);
+            setDeletedClauses(deletedRows);
             if (rows.length > 0 && !previewClause) {
               setPreviewClause(rows[0]);
               setHighlightedClauseId(rows[0].id || rows[0].clause_id);
@@ -586,7 +799,7 @@ export default function ReviewWorkspace({
               setDocumentMeta(classRes.document);
             }
           }
-        } else if (isMounted) {
+        } else if (isMounted && extractedClauses.length === 0) {
           setExtractedClauses([]);
         }
       } catch (err) {
@@ -655,9 +868,6 @@ export default function ReviewWorkspace({
           return {
             ...row,
             ...updates,
-            needs_review: false,
-            needsReview: false,
-            isReviewed: true,
             isLocallyEdited: true,
             decision: updates.decision || (row.decision === 'rejected' ? 'rejected' : 'corrected'),
           };
@@ -833,6 +1043,10 @@ export default function ReviewWorkspace({
     });
   };
 
+  const handleToggleContents = () => {
+    setIsContentsOpen((prev) => !prev);
+  };
+
   const handleContentsClauseClick = (clause) => {
     if (!clause) return;
     const rowId = clause.id || clause.clause_id || clause.paraId;
@@ -933,42 +1147,52 @@ export default function ReviewWorkspace({
             selectedKeySet.has(String(row.paraId)) ||
             selectedKeySet.has(String(idx))
           )
-        : extractedClauses;
+        : extractedClauses.filter((row) => row.isLocallyEdited || row.is_text_modified);
 
-      const validItems = rowsToSave
+      const itemsToProcess = rowsToSave.length > 0 ? rowsToSave : extractedClauses;
+
+      const validItems = itemsToProcess
         .filter((row) => {
           const cid = row.classification_id || row.id;
-          return cid && uuidRegex.test(cid);
+          return Boolean(cid);
         })
         .map((row) => {
           const cid = row.classification_id || row.id;
           const label = row.label === 'Non-clause' ? 'Non-clause' : 'Clause';
           let typeKey = resolveTaxonomyKey(row.type, taxonomyMapRef.current);
-          if (!typeKey && row.canonicalType) {
-            typeKey = resolveTaxonomyKey(row.canonicalType, taxonomyMapRef.current);
+          if (!typeKey && (row.type_name || row.canonicalType)) {
+            typeKey = resolveTaxonomyKey(row.type_name || row.canonicalType, taxonomyMapRef.current);
           }
+          const textVal = (row.reviewed_text || row.text || '').trim();
+          const origText = (row.text || '').trim();
+
+          const isModified = Boolean(
+            row.isLocallyEdited ||
+            row.is_text_modified ||
+            (row.reviewed_text && row.text && row.reviewed_text.trim() !== row.text.trim())
+          );
+          let decision = 'accepted';
+          if (row.decision === 'rejected') {
+            decision = 'rejected';
+          } else if (isModified || row.decision === 'corrected') {
+            decision = 'corrected';
+          } else {
+            decision = 'accepted';
+          }
+
           const itemPayload = {
             classification_id: cid,
             label,
+            type: typeKey || row.type || 'unassigned',
+            sub_type: label !== 'Non-clause' && row.sub_type && row.sub_type !== 'null' ? row.sub_type : null,
+            text: origText || textVal,
+            reviewed_text: textVal || origText,
+            decision: decision,
           };
-          if (typeKey) itemPayload.type = typeKey;
-          if (label !== 'Non-clause' && row.sub_type && row.sub_type !== 'null') {
-            itemPayload.sub_type = row.sub_type;
-          }
-          if (row.text && typeof row.text === 'string' && row.text.trim()) {
-            itemPayload.text = row.text.trim();
-          }
-          if (row.decision === 'rejected') {
-            itemPayload.decision = 'rejected';
-            itemPayload.note = row.note?.trim() || 'Rejected during review';
-          } else if (row.decision === 'corrected' || row.isLocallyEdited) {
-            itemPayload.decision = 'corrected';
-            if (row.note && row.note.trim()) itemPayload.note = row.note.trim();
-          } else if (row.decision === 'accepted' || row.isReviewed) {
-            itemPayload.decision = 'accepted';
-            if (row.note && row.note.trim()) itemPayload.note = row.note.trim();
-          } else if (row.note && row.note.trim()) {
+          if (row.note && row.note.trim()) {
             itemPayload.note = row.note.trim();
+          } else if (decision === 'rejected') {
+            itemPayload.note = 'Rejected during review';
           }
           return itemPayload;
         });
@@ -995,15 +1219,20 @@ export default function ReviewWorkspace({
         prev.map((row) => {
           const cid = String(row.classification_id || row.id);
           if (savedIds.has(cid)) {
+            const dec = row.decision === 'rejected' ? 'rejected' : (row.isLocallyEdited || row.is_text_modified ? 'corrected' : 'accepted');
             return {
               ...row,
               needs_review: false,
               needsReview: false,
               isReviewed: true,
               isLocallyEdited: false,
-              decision: row.decision === 'rejected' ? 'rejected' : (row.decision === 'corrected' ? 'corrected' : 'accepted'),
-              review: row.review || {
-                decision: row.decision || 'accepted',
+              is_text_modified: false,
+              outcome: 'reviewed',
+              deviated: false,
+              review_reasons: [],
+              decision: dec,
+              review: {
+                decision: dec,
                 reviewed_by_name: currentUserName,
                 reviewed_at: new Date().toISOString(),
               },
@@ -1013,48 +1242,17 @@ export default function ReviewWorkspace({
         })
       );
       setSelectedRows([]);
+      setHasUnsavedChanges(false);
 
       // Re-fetch fresh classification from database to get the updated data immediately
+      let freshRows = [];
       const freshClass = await documentService.classification(targetDocId).catch(() => null);
       if (freshClass && Array.isArray(freshClass.items) && freshClass.items.length > 0) {
-        const freshRows = freshClass.items.map((item, i) => {
-          const clauseId = item.clause_id || (item.number ? `c${item.number}` : `c${i + 1}`);
-          const breadcrumb =
-            item.breadcrumb || item.heading_trail || item.heading || (item.number ? `Clause ${item.number}` : `Clause ${i + 1}`);
-          const reviewObj = item.review || null;
-          const isItemReviewed = Boolean(reviewObj?.decision);
-          const itemNeedsReview = isItemReviewed ? false : Boolean(item.needs_review);
-          return {
-            id: item.classification_id || item.id || `clause-${i}`,
-            classification_id: item.classification_id,
-            clause_id: clauseId,
-            paraId: clauseId,
-            number: item.number,
-            paragraph_ids: item.paragraph_ids || [],
-            heading_trail: breadcrumb,
-            breadcrumb: breadcrumb,
-            text: item.text || item.chunk_text || '',
-            label: item.label || 'Clause',
-            type: item.type || 'unassigned',
-            type_name: item.type_name || item.type || 'Unassigned',
-            canonicalType: item.type_name || item.type || 'Unassigned',
-            sub_type: item.sub_type || null,
-            subType: item.sub_type || null,
-            preview: item.preview || doc?.webViewLink || freshClass.document?.drive_web_link || '',
-            confidence: item.confidence,
-            needs_review: itemNeedsReview,
-            needsReview: itemNeedsReview,
-            isReviewed: isItemReviewed,
-            review_reasons: isItemReviewed ? [] : (item.review_reasons || []),
-            deviated: isItemReviewed ? false : Boolean(item.deviated),
-            outcome: isItemReviewed ? 'reviewed' : item.outcome,
-            expected_types: item.expected_types || [],
-            review: reviewObj,
-            decision: reviewObj?.decision || (itemNeedsReview ? 'needs_review' : 'accepted'),
-            note: reviewObj?.note || '',
-          };
-        });
+        freshRows = freshClass.items.map((item, i) => mapClassificationItem(item, i, doc, freshClass));
         setExtractedClauses(freshRows);
+        if (Array.isArray(freshClass.deleted_items)) {
+          setDeletedClauses(freshClass.deleted_items.map((item, i) => mapClassificationItem(item, i, doc, freshClass)));
+        }
         setSelectedRows([]);
         if (freshClass.summary) {
           setClassificationSummary(freshClass.summary);
@@ -1064,17 +1262,28 @@ export default function ReviewWorkspace({
         }
       }
 
+      const backendStatus = saveResult?.review_status || freshClass?.document?.review_status || 'in_progress';
       const nowFormatted = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       setLastSavedTimestamp(nowFormatted);
-      const backendStatus = saveResult?.review_status || 'reviewed';
-      const displayStatus = backendStatus === 'reviewed' ? 'Reviewed' : (backendStatus === 'pending_review' ? 'Pending Review' : 'Saved');
+      const displayStatus = 'Saved';
       setDocumentStatus(displayStatus);
-      setHasUnsavedChanges(false);
+
+      const finalClauses = freshRows.length > 0 ? freshRows : extractedClauses;
+      const remainingNeedsReview =
+        freshClass?.summary?.needs_review !== undefined
+          ? freshClass.summary.needs_review
+          : finalClauses.filter(
+              (r) => !r.isReviewed && !r.review?.decision && (r.needs_review || r.needsReview)
+            ).length;
+
+      const liveNeedsReviewCount = remainingNeedsReview;
 
       const updatedDoc = {
         ...doc,
         status: displayStatus,
         review_status: backendStatus,
+        needsReview: liveNeedsReviewCount,
+        needs_review: liveNeedsReviewCount,
         lastSaved: 'Today',
         modifiedTime: nowFormatted,
         isSaved: true,
@@ -1093,6 +1302,32 @@ export default function ReviewWorkspace({
       const savedCount = saveResult?.saved
         ? (saveResult.saved.accepted + saveResult.saved.corrected + saveResult.saved.rejected + saveResult.saved.unchanged)
         : validItems.length;
+
+      // Update sessionStorage cache
+      try {
+        const currentClauses = freshRows.length > 0 ? freshRows : extractedClauses;
+        sessionStorage.setItem('accordor_class_cache_' + targetDocId, JSON.stringify({
+          items: currentClauses.map((c) => ({
+            classification_id: c.classification_id,
+            clause_id: c.clause_id,
+            number: c.number,
+            breadcrumb: c.breadcrumb,
+            text: c.reviewed_text || c.text,
+            reviewed_text: c.reviewed_text || c.text,
+            label: c.label,
+            type: c.type,
+            type_name: c.type_name,
+            sub_type: c.sub_type,
+            needs_review: c.needs_review,
+            review: c.review,
+          })),
+          deleted_items: deletedClauses,
+          summary: classificationSummary,
+          document: documentMeta,
+          classification_run: { classification_run_id: runId },
+        }));
+      } catch (_) {}
+
       showToast?.(`Saved ${savedCount} clause decisions to database. Updated data loaded!`, 'success');
     } catch (err) {
       console.error('Error saving classification:', err);
@@ -1111,12 +1346,276 @@ export default function ReviewWorkspace({
     }
   };
 
+  const handleOpenDeleteModal = (targetClauses) => {
+    const list = Array.isArray(targetClauses) ? targetClauses : (targetClauses ? [targetClauses] : []);
+    if (list.length === 0) return;
+    setDeleteModalState({
+      open: true,
+      clause: list[0] || null,
+      clauses: list,
+      mergeIntoNext: false,
+      note: '',
+      isDeleting: false,
+    });
+  };
+
+  const handleConfirmDelete = async () => {
+    const targetDocId = doc?.documentId || doc?.id || docId;
+    if (!targetDocId) return;
+
+    let runId = classificationRunId;
+    if (!runId) {
+      const classInfo = await documentService.classification(targetDocId).catch(() => null);
+      runId =
+        classInfo?.classification_run?.classification_run_id ||
+        classInfo?.classification_run?.id ||
+        classInfo?.classification_run_id ||
+        classInfo?.summary?.classification_run_id;
+      if (runId) setClassificationRunId(runId);
+    }
+
+    setDeleteModalState((prev) => ({ ...prev, isDeleting: true }));
+
+    try {
+      const toDelete = deleteModalState.clauses;
+      let lastRes = null;
+      const deletedIds = new Set();
+      const updatedItemsMap = new Map();
+
+      for (const item of toDelete) {
+        const classId = item.classification_id || item.id;
+        if (!classId) continue;
+        const res = await documentService.deleteClassificationItem(targetDocId, classId, {
+          classification_run_id: runId,
+          merge_into_next: deleteModalState.mergeIntoNext,
+          note: deleteModalState.note || undefined,
+        });
+        lastRes = res;
+        deletedIds.add(String(classId));
+        deletedIds.add(String(item.clause_id));
+        deletedIds.add(String(item.id));
+
+        if (res?.items && Array.isArray(res.items)) {
+          res.items.forEach((it) => {
+            updatedItemsMap.set(String(it.classification_id), it);
+          });
+        }
+      }
+
+      // 1. Remove deleted from extractedClauses and update any merged next item
+      setExtractedClauses((prev) =>
+        prev
+          .filter(
+            (c) =>
+              !deletedIds.has(String(c.classification_id)) &&
+              !deletedIds.has(String(c.id)) &&
+              !deletedIds.has(String(c.clause_id))
+          )
+          .map((c) => {
+            const updated = updatedItemsMap.get(String(c.classification_id));
+            if (updated) {
+              return {
+                ...c,
+                text: updated.text || updated.chunk_text || c.text,
+                reviewed_text: updated.reviewed_text || updated.text || c.reviewed_text,
+                label: updated.label || c.label,
+                type: updated.type || c.type,
+                type_name: updated.type_name || c.type_name,
+              };
+            }
+            return c;
+          })
+      );
+
+      // 2. Update deletedClauses
+      if (lastRes?.deleted_items && Array.isArray(lastRes.deleted_items)) {
+        setDeletedClauses(lastRes.deleted_items.map((it, i) => mapClassificationItem(it, i, doc, lastRes)));
+      } else {
+        const newlyDeleted = toDelete.map((it) => ({
+          ...it,
+          merged_into: deleteModalState.mergeIntoNext ? { note: deleteModalState.note } : null,
+          deleted_at: new Date().toISOString(),
+        }));
+        setDeletedClauses((prev) => [...newlyDeleted, ...prev]);
+      }
+
+      // 3. Clear selected rows that were deleted
+      setSelectedRows((prev) => prev.filter((k) => !deletedIds.has(String(k))));
+
+      // Update sessionStorage cache
+      try {
+        const cacheKey = 'accordor_class_cache_' + targetDocId;
+        const currentCached = sessionStorage.getItem(cacheKey);
+        if (currentCached) {
+          const parsed = JSON.parse(currentCached);
+          parsed.items = (parsed.items || []).filter(
+            (c) =>
+              !deletedIds.has(String(c.classification_id)) &&
+              !deletedIds.has(String(c.id)) &&
+              !deletedIds.has(String(c.clause_id))
+          );
+          if (lastRes?.deleted_items) {
+            parsed.deleted_items = lastRes.deleted_items;
+          }
+          sessionStorage.setItem(cacheKey, JSON.stringify(parsed));
+        }
+      } catch (_) {}
+
+      const count = toDelete.length;
+      const clauseName = toDelete[0]?.clause_id || '';
+      setDeleteModalState({ open: false, clause: null, clauses: [], mergeIntoNext: false, note: '', isDeleting: false });
+      showToast?.(
+        count > 1 ? `Deleted ${count} clauses.` : `Clause ${clauseName} deleted successfully.`,
+        'success'
+      );
+    } catch (err) {
+      console.error('Delete clause error:', err);
+      showToast?.(err?.data?.detail || err?.message || err?.detail || 'Failed to delete clause', 'error');
+      setDeleteModalState((prev) => ({ ...prev, isDeleting: false }));
+    }
+  };
+
+  const handleRestoreClause = async (clauseOrList) => {
+    const list = Array.isArray(clauseOrList) ? clauseOrList : (clauseOrList ? [clauseOrList] : []);
+    if (list.length === 0) return;
+
+    const targetDocId = doc?.documentId || doc?.id || docId;
+    if (!targetDocId) return;
+
+    let runId = classificationRunId;
+    if (!runId) {
+      const classInfo = await documentService.classification(targetDocId).catch(() => null);
+      runId =
+        classInfo?.classification_run?.classification_run_id ||
+        classInfo?.classification_run?.id ||
+        classInfo?.classification_run_id ||
+        classInfo?.summary?.classification_run_id;
+      if (runId) setClassificationRunId(runId);
+    }
+
+    try {
+      const restoredItems = [];
+      const restoredIds = new Set();
+      const updatedItemsMap = new Map();
+      let lastRes = null;
+      let hasKeptMergedText = false;
+      let hasUnmergedText = false;
+
+      for (const item of list) {
+        const classId = item.classification_id || item.id;
+        if (!classId) continue;
+
+        const res = await documentService.restoreClassificationItem(targetDocId, classId, {
+          classification_run_id: runId,
+        });
+        lastRes = res;
+        restoredIds.add(String(classId));
+        restoredIds.add(String(item.clause_id));
+
+        if (res?.merged_text_kept_in) hasKeptMergedText = true;
+        if (res?.unmerged_from) hasUnmergedText = true;
+
+        if (res?.items && Array.isArray(res.items)) {
+          res.items.forEach((it) => {
+            updatedItemsMap.set(String(it.classification_id), it);
+          });
+        }
+
+        if (updatedItemsMap.has(String(classId))) {
+          restoredItems.push(mapClassificationItem(updatedItemsMap.get(String(classId)), 0, doc, res));
+        } else {
+          restoredItems.push({ ...item, merged_into: null, deleted_at: null });
+        }
+      }
+
+      // 1. Update deletedClauses
+      if (lastRes?.deleted_items && Array.isArray(lastRes.deleted_items)) {
+        setDeletedClauses(lastRes.deleted_items.map((it, i) => mapClassificationItem(it, i, doc, lastRes)));
+      } else {
+        setDeletedClauses((prev) =>
+          prev.filter(
+            (c) =>
+              !restoredIds.has(String(c.classification_id)) &&
+              !restoredIds.has(String(c.id)) &&
+              !restoredIds.has(String(c.clause_id))
+          )
+        );
+      }
+
+      // 2. Put restored items back in extractedClauses and unmerge next clause if applicable
+      setExtractedClauses((prev) => {
+        const updatedPrev = prev.map((c) => {
+          const updated = updatedItemsMap.get(String(c.classification_id));
+          if (updated && !restoredIds.has(String(c.classification_id))) {
+            return {
+              ...c,
+              text: updated.text || updated.chunk_text || c.text,
+              reviewed_text: updated.reviewed_text || updated.text || c.reviewed_text,
+            };
+          }
+          return c;
+        });
+
+        const nextList = [...updatedPrev, ...restoredItems];
+        nextList.sort((a, b) => {
+          const numA = typeof a.number === 'number' ? a.number : parseInt(String(a.clause_id).replace(/\D/g, ''), 10) || 0;
+          const numB = typeof b.number === 'number' ? b.number : parseInt(String(b.clause_id).replace(/\D/g, ''), 10) || 0;
+          return numA - numB;
+        });
+        return nextList;
+      });
+
+      // Clear from selectedRows if selected
+      setSelectedRows((prev) => prev.filter((k) => !restoredIds.has(String(k))));
+
+      // Update sessionStorage cache
+      try {
+        const cacheKey = 'accordor_class_cache_' + targetDocId;
+        const currentCached = sessionStorage.getItem(cacheKey);
+        if (currentCached) {
+          const parsed = JSON.parse(currentCached);
+          if (lastRes?.deleted_items) {
+            parsed.deleted_items = lastRes.deleted_items;
+          }
+          if (lastRes?.items) {
+            parsed.items = lastRes.items;
+          }
+          sessionStorage.setItem(cacheKey, JSON.stringify(parsed));
+        }
+      } catch (_) {}
+
+      if (hasKeptMergedText) {
+        showToast?.(
+          `Clause restored. Note: The next clause was edited post-merge, so its text was left untouched. Please review and tidy by hand if needed.`,
+          'warning'
+        );
+      } else if (hasUnmergedText) {
+        showToast?.(
+          `Clause restored and text unmerged from the next clause.`,
+          'success'
+        );
+      } else {
+        showToast?.(
+          list.length > 1
+            ? `Restored ${list.length} clauses directly to active clauses.`
+            : `Clause ${list[0]?.clause_id || ''} restored directly to clauses.`,
+          'success'
+        );
+      }
+    } catch (err) {
+      console.error('Restore clause error:', err);
+      showToast?.(err?.data?.detail || err?.message || err?.detail || 'Failed to restore clause', 'error');
+    }
+  };
+
   const totalChunks = classificationSummary?.micro_chunks ?? extractedClauses.length;
   const needsFixCount = needsReviewCount;
 
   const docName = doc?.name || doc?.fileName || 'Document';
   const docTitle = documentMeta?.title || doc?.title || docName;
   const webViewLink = doc?.webViewLink || documentMeta?.drive_web_link || '';
+  const agreementType = doc?.agreement_type || doc?.agreementType || documentMeta?.agreement_type || documentMeta?.agreementType || '';
+  const sectorialCategory = doc?.sectorial_category || doc?.sectorial || documentMeta?.sectorial_category || documentMeta?.sectorial || '';
 
   const getStatusBadgeStyle = (status) => {
     switch (status) {
@@ -1245,65 +1744,75 @@ export default function ReviewWorkspace({
             gap: 2,
           }}
         >
-          {/* Document Title, Status */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+          {/* Document Title, Status, Agreement Type & Sectorial Category */}
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
               <Typography variant="h6" sx={{ fontWeight: 700, fontSize: '17px', color: '#1b1f24' }}>
                 {docName}
               </Typography>
+
+              {/* Status Badge */}
+              <Chip
+                label={documentStatus}
+                size="small"
+                sx={{
+                  height: 22,
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  ...getStatusBadgeStyle(documentStatus),
+                }}
+              />
             </Box>
 
-            {/* Status Badge */}
+            {/* Agreement Type and Sectorial Category */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+              <Typography sx={{ fontSize: '11.5px', color: '#475569', fontWeight: 500 }}>
+                <Box component="span" sx={{ color: '#64748b', fontWeight: 400 }}>Agreement: </Box>
+                {agreementType || '—'}
+              </Typography>
+              <Box component="span" sx={{ color: '#cbd5e1' }}>•</Box>
+              <Typography sx={{ fontSize: '11.5px', color: '#475569', fontWeight: 500 }}>
+                <Box component="span" sx={{ color: '#64748b', fontWeight: 400 }}>Sector: </Box>
+                {sectorialCategory || '—'}
+              </Typography>
+            </Box>
+          </Box>
+
+          {/* Action Buttons & Review Counters on Right Side */}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+            {/* Color-coded Review Stats Counters */}
             <Chip
-              label={documentStatus}
+              label={`${reviewedCount} Reviewed`}
               size="small"
               sx={{
-                height: 22,
+                height: 24,
                 fontSize: '11px',
                 fontWeight: 600,
-                ...getStatusBadgeStyle(documentStatus),
+                bgcolor: '#dcfce7',
+                color: '#15803d',
+                border: '1px solid #bbf7d0',
+              }}
+            />
+            <Chip
+              label={`${needsReviewCount} Needs review`}
+              size="small"
+              sx={{
+                height: 24,
+                fontSize: '11px',
+                fontWeight: 600,
+                bgcolor: '#fef3c7',
+                color: '#b45309',
+                border: '1px solid #fde68a',
               }}
             />
 
-            {/* Needs Review Remaining Badge */}
-            {needsReviewCount > 0 ? (
-              <Chip
-                label={`${needsReviewCount} needs review`}
-                size="small"
-                sx={{
-                  height: 22,
-                  fontSize: '11px',
-                  fontWeight: 600,
-                  bgcolor: '#fef3c7',
-                  color: '#b45309',
-                  border: '1px solid #fde68a',
-                }}
-              />
-            ) : (
-              <Chip
-                label="All reviewed"
-                size="small"
-                sx={{
-                  height: 22,
-                  fontSize: '11px',
-                  fontWeight: 600,
-                  bgcolor: '#dcfce7',
-                  color: '#15803d',
-                  border: '1px solid #bbf7d0',
-                }}
-              />
-            )}
-          </Box>
-
-          {/* Action Buttons */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
             {lastSavedTimestamp && (
-              <Typography sx={{ fontSize: '11.5px', color: '#64748b', mr: 0.5 }}>
+              <Typography sx={{ fontSize: '11.5px', color: '#64748b', ml: 0.5, mr: 0.5 }}>
                 Saved at {lastSavedTimestamp}
               </Typography>
             )}
 
-            <Button
+            {/* <Button
               variant="outlined"
               size="small"
               startIcon={<UndoOutlinedIcon sx={{ fontSize: 15 }} />}
@@ -1318,7 +1827,7 @@ export default function ReviewWorkspace({
               }}
             >
               Undo
-            </Button>
+            </Button> */}
 
             <Button
               variant="contained"
@@ -1342,11 +1851,9 @@ export default function ReviewWorkspace({
 
             <Tooltip
               title={
-                needsReviewCount > 0
-                  ? `All clauses must be reviewed before updating to Vector DB (${needsReviewCount} remaining)`
-                  : !canEdit
-                    ? 'Document is read-only. Editing access required.'
-                    : 'Publish verified document data to Vector DB'
+                !canEdit
+                  ? 'Document is read-only. Editing access required.'
+                  : 'Publish verified document data to Vector DB'
               }
               arrow
             >
@@ -1361,18 +1868,18 @@ export default function ReviewWorkspace({
                       <CloudUploadOutlinedIcon sx={{ fontSize: 15 }} />
                     )
                   }
-                  disabled={needsReviewCount > 0 || !canEdit || isPublishingToVectorDb}
+                  disabled={!canEdit || isPublishingToVectorDb}
                   onClick={handlePublishToVectorDb}
                   sx={{
                     height: 30,
                     fontSize: '12px',
                     textTransform: 'none',
-                    bgcolor: needsReviewCount === 0 && canEdit ? '#059669' : '#94a3b8',
+                    bgcolor: canEdit ? '#059669' : '#94a3b8',
                     color: '#ffffff',
                     boxShadow: 'none',
                     fontWeight: 600,
                     '&:hover': {
-                      bgcolor: needsReviewCount === 0 && canEdit ? '#047857' : '#94a3b8',
+                      bgcolor: canEdit ? '#047857' : '#94a3b8',
                       boxShadow: 'none',
                     },
                     '&.Mui-disabled': {
@@ -1417,9 +1924,46 @@ export default function ReviewWorkspace({
                       ? 'Document access could not be confirmed. Editing is disabled.'
                       : `Read-only while ${workspaceLock.lockedBy || 'another reviewer'} has the document open.`}
             </span>
-            {(workspaceLock.status === 'available' || workspaceLock.status === 'read-only') && (
-              <Button size="small" variant="outlined" onClick={handleTakeEditingAccess}>
+            {workspaceLock.status === 'available' && (
+              <Button
+                size="small"
+                variant="contained"
+                onClick={handleTakeEditingAccess}
+                sx={{
+                  bgcolor: '#16a34a',
+                  '&:hover': { bgcolor: '#15803d' },
+                  fontSize: '12px',
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  boxShadow: 'none',
+                }}
+              >
                 Take editing access
+              </Button>
+            )}
+            {workspaceLock.status === 'read-only' && (
+              <Button
+                size="small"
+                variant="contained"
+                disabled={isRequestingAccess}
+                onClick={handleRequestEditingAccess}
+                sx={{
+                  bgcolor: isRequestingAccess ? '#94a3b8' : '#0284c7',
+                  '&:hover': { bgcolor: '#0369a1' },
+                  fontSize: '12px',
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  boxShadow: 'none',
+                }}
+              >
+                {isRequestingAccess ? (
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
+                    <CircularProgress size={13} sx={{ color: '#ffffff' }} />
+                    <span>Request Sent…</span>
+                  </Box>
+                ) : (
+                  'Request Access'
+                )}
               </Button>
             )}
           </Box>
@@ -1447,17 +1991,6 @@ export default function ReviewWorkspace({
             <span>
               Current reviewer <strong style={{ color: '#1b1f24' }}>{currentUserName}</strong>
             </span>
-          </Box>
-
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.75 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, fontSize: '11.5px', color: '#374151' }}>
-              <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: '#16a34a' }} />
-              <span>Reviewed {reviewedCount}</span>
-            </Box>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, fontSize: '11.5px', color: '#374151' }}>
-              <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: '#f59e0b' }} />
-              <span>Needs review {needsFixCount}</span>
-            </Box>
           </Box>
         </Box>
       </Box>
@@ -1571,7 +2104,7 @@ export default function ReviewWorkspace({
             previewClause={previewClause}
             isPreviewOpen={isPreviewOpen}
             isContentsOpen={isContentsOpen}
-            onToggleContents={() => setIsContentsOpen((prev) => !prev)}
+            onToggleContents={handleToggleContents}
             onTogglePreview={() => setIsPreviewOpen((prev) => !prev)}
             onOpenHistory={() => setActiveTab('history')}
             onOpenPreview={handleOpenPreview}
@@ -1585,6 +2118,10 @@ export default function ReviewWorkspace({
             typeFilter={typeFilter}
             onTypeFilterChange={setTypeFilter}
             needsFixCount={needsReviewCount}
+            reviewedCount={reviewedCount}
+            deletedClauses={deletedClauses}
+            onDeleteClause={handleOpenDeleteModal}
+            onRestoreClause={handleRestoreClause}
           />
 
           {/* Right: Document Preview Panel */}
@@ -1750,6 +2287,158 @@ export default function ReviewWorkspace({
           </Box>
         </Box>
       )}
+
+      {/* Delete Clause Confirmation Dialog */}
+      <Dialog
+        open={deleteModalState.open}
+        onClose={() => !deleteModalState.isDeleting && setDeleteModalState((prev) => ({ ...prev, open: false }))}
+        maxWidth="sm"
+        fullWidth
+        slotProps={{
+          paper: {
+            sx: { borderRadius: 2, p: 1 },
+          },
+        }}
+      >
+        <DialogTitle sx={{ fontWeight: 600, fontSize: '16px', color: '#0f172a', pb: 1 }}>
+          {deleteModalState.clauses.length > 1
+            ? `Delete ${deleteModalState.clauses.length} Clauses`
+            : `Delete Clause ${deleteModalState.clause?.clause_id || ''}`}
+        </DialogTitle>
+        <DialogContent sx={{ pt: 1 }}>
+          <Typography sx={{ fontSize: '13px', color: '#475569', mb: 2 }}>
+            {deleteModalState.clauses.length > 1
+              ? `Are you sure you want to delete these ${deleteModalState.clauses.length} clauses? They will be moved to the Deleted filter where they can be restored at any time.`
+              : 'Are you sure you want to delete this clause? It will be moved to the Deleted filter where it can be restored at any time.'}
+          </Typography>
+
+          {deleteModalState.clause && (
+            <Box sx={{ p: 1.5, bgcolor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 1.5, mb: 2 }}>
+              <Typography sx={{ fontSize: '12px', fontWeight: 600, color: '#1e293b', mb: 0.5 }}>
+                {deleteModalState.clause.clause_id} · {deleteModalState.clause.breadcrumb || 'General'}
+              </Typography>
+              <Typography
+                sx={{
+                  fontSize: '12px',
+                  color: '#64748b',
+                  display: '-webkit-box',
+                  WebkitLineClamp: 3,
+                  WebkitBoxOrient: 'vertical',
+                  overflow: 'hidden',
+                }}
+              >
+                {deleteModalState.clause.text}
+              </Typography>
+            </Box>
+          )}
+
+          {/* <FormControlLabel
+            control={
+              <Checkbox
+                checked={deleteModalState.mergeIntoNext}
+                onChange={(e) => setDeleteModalState((prev) => ({ ...prev, mergeIntoNext: e.target.checked }))}
+                size="small"
+              />
+            }
+            label={
+              <Box>
+                <Typography sx={{ fontSize: '13px', fontWeight: 500, color: '#1e293b' }}>
+                  Merge text into next clause before deletion
+                </Typography>
+                <Typography sx={{ fontSize: '11px', color: '#64748b' }}>
+                  Prepends this clause's text to the next clause in reading order before deleting.
+                </Typography>
+              </Box>
+            }
+            sx={{ alignItems: 'flex-start', mb: 2, ml: 0 }}
+          /> */}
+
+          <TextField
+            fullWidth
+            size="small"
+            label="Reason / Note (optional)"
+            placeholder="e.g. Lead-in belongs with next clause"
+            value={deleteModalState.note}
+            onChange={(e) => setDeleteModalState((prev) => ({ ...prev, note: e.target.value }))}
+            sx={{ mt: 1 }}
+          />
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button
+            onClick={() => setDeleteModalState((prev) => ({ ...prev, open: false }))}
+            disabled={deleteModalState.isDeleting}
+            sx={{ textTransform: 'none', color: '#64748b', fontSize: '13px' }}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            color="error"
+            onClick={handleConfirmDelete}
+            disabled={deleteModalState.isDeleting}
+            startIcon={
+              deleteModalState.isDeleting ? (
+                <CircularProgress size={16} sx={{ color: '#ffffff' }} />
+              ) : (
+                <DeleteOutlinedIcon sx={{ fontSize: 16 }} />
+              )
+            }
+            sx={{ textTransform: 'none', fontWeight: 600, fontSize: '13px', px: 2 }}
+          >
+            {deleteModalState.isDeleting ? 'Deleting...' : 'Delete'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Handover / Access Request Modal for Active Editor */}
+      <Dialog
+        open={Boolean(incomingAccessRequest)}
+        onClose={handleDeclineAccessRequest}
+        maxWidth="xs"
+        fullWidth
+        PaperProps={{
+          sx: { borderRadius: 2, p: 0.5 },
+        }}
+      >
+        <DialogTitle sx={{ fontWeight: 700, fontSize: '16px', color: '#0f172a', pb: 1 }}>
+          Editing Access Requested
+        </DialogTitle>
+        <DialogContent sx={{ pt: 0.5 }}>
+          <Typography sx={{ fontSize: '13.5px', color: '#334151', lineHeight: 1.5 }}>
+            <strong>{incomingAccessRequest?.requestedBy}</strong> is requesting editing access to this document.
+          </Typography>
+          <Typography sx={{ fontSize: '12px', color: '#64748b', mt: 1.2 }}>
+            {hasUnsavedChanges
+              ? 'Your pending unsaved changes will be saved to the database before handing over.'
+              : 'Granting access will transfer the edit lock and switch your view to read-only.'}
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5, gap: 1 }}>
+          <Button
+            onClick={handleDeclineAccessRequest}
+            variant="outlined"
+            size="small"
+            sx={{ textTransform: 'none', color: '#64748b', borderColor: '#cbd5e1', fontWeight: 600 }}
+          >
+            Decline
+          </Button>
+          <Button
+            variant="contained"
+            size="small"
+            onClick={handleGrantAccessToRequester}
+            sx={{
+              textTransform: 'none',
+              bgcolor: '#16a34a',
+              '&:hover': { bgcolor: '#15803d' },
+              fontWeight: 600,
+              boxShadow: 'none',
+              px: 2,
+            }}
+          >
+            Grant Access
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }
