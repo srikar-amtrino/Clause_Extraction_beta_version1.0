@@ -22,7 +22,13 @@ from celery import shared_task
     max_retries=3,
     acks_late=True,
 )
-def publish_document_task(self, document_id: str, user_id: str):
+def publish_document_task(
+    self,
+    document_id: str,
+    user_id: str,
+    agreement_type: str = None,
+    sectorial_category: str = None,
+):
     """Embed and sync one document to the Vector DB + Postgres.
 
     Parameters
@@ -79,7 +85,20 @@ def publish_document_task(self, document_id: str, user_id: str):
         removed = delete_points([r.pk for r in to_remove])
 
         # 3. Embed and upsert the selected paragraphs.
-        embed_stats = embed_and_upsert(to_embed, document_id)
+        embed_stats = embed_and_upsert(
+            to_embed,
+            document_id,
+            agreement_type=(
+                agreement_type
+                if agreement_type is not None
+                else doc.agreement_type
+            ),
+            sectorial_category=(
+                sectorial_category
+                if sectorial_category is not None
+                else doc.sectorial_category
+            ),
+        )
         failed = embed_stats.get('failed', 0)
         embedded = embed_stats.get('embedded', 0)
         if failed or embedded != len(to_embed):

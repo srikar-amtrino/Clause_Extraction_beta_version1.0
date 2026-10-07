@@ -642,8 +642,18 @@ def workspace_publish(request, document_id):
         return _json(readiness, status=422)
 
     try:
+        body = json.loads(request.body) if request.body else {}
+    except (ValueError, TypeError):
+        body = {}
+    metadata = {
+        key: body.get(key) if isinstance(body.get(key), str) else None
+        for key in ('agreement_type', 'sectorial_category')
+    }
+
+    try:
         result = publish_document_task.apply(
             args=(str(document_id), str(user.id)),
+            kwargs=metadata,
             throw=True,
         ).get(propagate=True)
     except Exception as exc:
