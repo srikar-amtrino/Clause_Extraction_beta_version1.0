@@ -256,8 +256,6 @@ class PublishDocumentTaskTests(TestCase):
             name='Publish task test',
             extraction_status='classified',
             review_status='reviewed',
-            agreement_type='Stored Agreement',
-            sectorial_category='Stored Sector',
         )
 
         with patch(
@@ -275,22 +273,10 @@ class PublishDocumentTaskTests(TestCase):
                 'updated': 0,
                 'count_after': 0,
             },
-        ) as embed_and_upsert:
-            result = publish_document_task.run(
-                str(document.pk),
-                str(reviewer.pk),
-                agreement_type='Request Agreement',
-                sectorial_category='Request Sector',
-            )
+        ):
+            result = publish_document_task.run(str(document.pk), str(reviewer.pk))
 
         document.refresh_from_db()
         self.assertEqual(result['status'], 'PUBLISHED')
         self.assertEqual(document.extraction_status, 'published')
         self.assertEqual(document.review_status, 'published')
-        self.assertEqual(
-            embed_and_upsert.call_args.kwargs,
-            {
-                'agreement_type': 'Request Agreement',
-                'sectorial_category': 'Request Sector',
-            },
-        )
