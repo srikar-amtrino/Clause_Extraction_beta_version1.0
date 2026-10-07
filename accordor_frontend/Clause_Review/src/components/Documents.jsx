@@ -66,9 +66,15 @@ export default function Documents({
         const existing = uniqueMap.get(nameKey);
         const existingStatus = (existing.extraction_status || existing.extractionStatus || '').toLowerCase();
         const newStatus = (d.extraction_status || d.extractionStatus || '').toLowerCase();
+        const existingPublished = existingStatus === 'published' || existing.review_status === 'published' || existing.isPublished;
+        const newPublished = newStatus === 'published' || d.review_status === 'published' || d.isPublished;
         const existingClassified = existingStatus === 'classified' || Boolean(existing.stages?.classification || existing.classified);
         const newClassified = newStatus === 'classified' || Boolean(d.stages?.classification || d.classified);
-        if (!existingClassified && newClassified) {
+        if (newPublished && !existingPublished) {
+          uniqueMap.set(nameKey, d);
+        } else if (existingPublished && !newPublished) {
+          // Keep the published document and its current extraction status.
+        } else if (!existingClassified && newClassified) {
           uniqueMap.set(nameKey, d);
         } else if (existingClassified && !newClassified) {
           // Keep existing classified document
@@ -105,7 +111,9 @@ export default function Documents({
         (d.status && String(d.status).toLowerCase() === 'classified') ||
         d.classified === true ||
         Boolean(classification && (classification.status === 'succeeded' || (classification.micro_chunks && classification.micro_chunks > 0) || classification.id));
-      const extractionStatus = isClassified ? 'classified' : rawExtractionStatus;
+      const extractionStatus = rawExtractionStatus === 'published'
+        ? 'published'
+        : isClassified ? 'classified' : rawExtractionStatus;
       const needsReview = d.needsReview ?? classification?.needs_review ?? null;
       const warnings = d.warnings || extraction?.warnings || [];
       const size = d.size || (pages > 0 ? `${Math.max(12, Math.round(pages * 26.5))} KB` : '24 KB');
@@ -292,6 +300,22 @@ export default function Documents({
 
   // Extraction Status badge helper
   const renderExtractionBadge = (status, warnings = []) => {
+    if (status === 'published') {
+      return (
+        <Chip
+          label="• Published"
+          size="small"
+          sx={{
+            height: 22,
+            fontSize: '11px',
+            fontWeight: 600,
+            bgcolor: '#dcfce7',
+            color: '#166534',
+            border: '1px solid #bbf7d0',
+          }}
+        />
+      );
+    }
     if (status === 'classified') {
       return (
         <Chip

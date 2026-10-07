@@ -37,6 +37,7 @@ GET  /api/documents/queue/               -- in-flight + review-ready + unprocess
 """
 import json
 import logging
+import uuid
 
 from django.db import transaction
 from django.http import JsonResponse
@@ -91,6 +92,14 @@ def _check_editable(document_id, user):
             'Document is locked by %s. Open in read-only mode.' % lock.user.username,
             423)
     return True, None
+
+
+def _status_when_workspace_opened(status):
+    if status == 'needs_review':
+        return 'in_review'
+    if status == 'published':
+        return 'reopened_in_review'
+    return status
 
 
 def _live_records(document_id):
@@ -226,14 +235,20 @@ def lock_acquire(request, document_id):
         with transaction.atomic():
             doc = Document.objects.select_for_update().get(pk=document_id)
             existing = _get_lock(document_id)
+            new_status = _status_when_workspace_opened(doc.review_status)
 
             if existing and existing.user_id != user.id:
+                Document.objects.filter(pk=document_id).update(
+                    review_status=new_status,
+                    current_reviewer=existing.user,
+                )
                 return _json({
                     'acquired': False,
                     'is_read_only': True,
                     'locked_by': existing.user.username,
                     'locked_by_id': existing.user_id,
                     'expires_at': existing.expires_at.isoformat(),
+                    'review_status': new_status,
                 })
 
             if existing and existing.user_id == user.id:
@@ -245,13 +260,6 @@ def lock_acquire(request, document_id):
                 lock = WorkspaceLock.objects.create(
                     document_id=document_id, user=user)
                 newly_acquired = True
-
-            if doc.review_status == 'needs_review':
-                new_status = 'in_review'
-            elif doc.review_status == 'published':
-                new_status = 'reopened_in_review'
-            else:
-                new_status = doc.review_status
 
             Document.objects.filter(pk=document_id).update(
                 review_status=new_status, current_reviewer=user)
@@ -369,8 +377,7 @@ def lock_request_access(request, document_id):
 @require_auth
 @require_http_methods(['POST'])
 def lock_respond_access(request, document_id):
-    """The active lock holder grants or denies the access request."""
-    import json
+    """The active lock holder grants or denies an access request."""
     from core.models import User
     from document_pipeline.models import Document, DocumentActivityLog, WorkspaceLock
     from document_pipeline.activity import log_activity
@@ -383,54 +390,95 @@ def lock_respond_access(request, document_id):
         body = {}
 
     action = body.get('action')  # 'grant' or 'deny'
-    target_username = body.get('target_username')
     target_user_id = body.get('target_user_id')
+    if not target_user_id:
+        return _err('A target user is required.')
+    try:
+        target_user_id = uuid.UUID(str(target_user_id))
+    except (TypeError, ValueError, AttributeError):
+        return _err('Invalid target user ID.')
+    target_user = User.objects.filter(pk=target_user_id).first()
+    if not target_user:
+        return _err('The requesting user no longer exists.', 404)
+    if target_user.pk == user.pk:
+        return _err('You cannot transfer editing access to yourself.')
+    if action not in ('grant', 'deny'):
+        return _err('Invalid action. Use "grant" or "deny".', 400)
 
-    target_user = None
-    if target_user_id:
-        target_user = User.objects.filter(pk=target_user_id).first()
-    elif target_username:
-        target_user = User.objects.filter(username=target_username).first()
+    try:
+        with transaction.atomic():
+            document = Document.objects.select_for_update().get(pk=document_id)
+            lock = (
+                WorkspaceLock.objects.select_for_update()
+                .select_related('user')
+                .filter(document_id=document_id)
+                .first()
+            )
+            if lock and not lock.is_active:
+                lock.delete()
+                Document.objects.filter(pk=document_id).update(current_reviewer=None)
+                return _err('Your workspace lock has expired. Reopen the document.', 403)
+            if not lock or lock.user_id != user.pk:
+                return _err('You do not hold the active lock.', 403)
 
-    lock = _get_lock(document_id)
+            if action == 'grant':
+                lock.user = target_user
+                lock.renew()
+                lock.save(update_fields=['user'])
+                review_status = _status_when_workspace_opened(document.review_status)
+                Document.objects.filter(pk=document_id).update(
+                    current_reviewer=target_user,
+                    review_status=review_status,
+                )
+            else:
+                review_status = document.review_status
+    except Document.DoesNotExist:
+        return _err('Document not found.', 404)
+
     if action == 'grant':
-        if lock and lock.user_id == user.id:
-            WorkspaceLock.objects.filter(document_id=document_id, user_id=user.id).delete()
-            Document.objects.filter(pk=document_id).update(current_reviewer=None)
-            log_activity(
-                document_id=document_id,
-                phase=DocumentActivityLog.USER_INTERACTION,
-                action='granted_lock',
-                summary=f'{user.username} granted editing access to {target_username or "requester"}.',
-                actor_user=user,
-            )
-            publish_access_event(
-                document_id,
-                event='access_granted',
-                user=user,
-                target_user=target_user,
-            )
-            publish_document_lock(document_id, event='document_closed', user=user)
-            return _json({'status': 'granted'})
-        return _err('You do not hold the active lock.', 403)
-
-    elif action == 'deny':
         log_activity(
             document_id=document_id,
             phase=DocumentActivityLog.USER_INTERACTION,
-            action='denied_lock',
-            summary=f'{user.username} declined editing access request from {target_username or "requester"}.',
+            action='granted_lock',
+            summary=f'{user.username} granted editing access to {target_user.username}.',
             actor_user=user,
+            metadata={'target_user_id': str(target_user.pk)},
         )
         publish_access_event(
             document_id,
-            event='access_denied',
+            event='access_granted',
             user=user,
             target_user=target_user,
         )
-        return _json({'status': 'denied'})
+        publish_document_lock(
+            document_id,
+            event='document_opened',
+            user=target_user,
+            expires_at=lock.expires_at,
+        )
+        return _json({
+            'status': 'granted',
+            'locked_by': target_user.username,
+            'locked_by_id': str(target_user.pk),
+            'review_status': review_status,
+        })
 
-    return _err('Invalid action. Use "grant" or "deny".', 400)
+    log_activity(
+        document_id=document_id,
+        phase=DocumentActivityLog.USER_INTERACTION,
+        action='denied_lock',
+        summary=f'{user.username} declined editing access request from {target_user.username}.',
+        actor_user=user,
+        metadata={'target_user_id': str(target_user.pk)},
+    )
+    publish_access_event(
+        document_id,
+        event='access_denied',
+        user=user,
+        target_user=target_user,
+    )
+    return _json({'status': 'denied'})
+
 
 
 
@@ -922,4 +970,3 @@ def global_activity_feed(request):
     ]
 
     return _json({'events': events, 'count': len(events)})
-
