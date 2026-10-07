@@ -18,6 +18,7 @@ import PublicRoute from './components/auth/PublicRoute';
 import { useAuth } from './context/AuthContext';
 import { googleDriveService } from './services/googleDriveService';
 import { documentService } from './services/documentService';
+import { normalizeDocumentList, computeDocumentCounts } from './utils/documentUtils';
 
 // Deduplicate documents strictly by normalized name so a document NEVER appears twice
 function deduplicateDocs(docs) {
@@ -576,9 +577,27 @@ function AppWorkspace() {
     verifyAuthStatus();
   }, [currentUser]);
 
-  // Stats: use server-side counts when they are available (fast, accurate);
-  // fall back to deriving from the fetched document list while it loads.
+  // Stats: prioritize deriving from normalized active document list to match Documents section filter chips exactly;
+  // fall back to server-side counts if documents are not yet loaded.
   const stats = React.useMemo(() => {
+    if (extractedDocuments && extractedDocuments.length > 0) {
+      const normalized = normalizeDocumentList(extractedDocuments, driveState);
+      const docCounts = computeDocumentCounts(normalized);
+      const processing = queueDocuments.filter((d) => {
+        const s = (d.extractionStatus || d.extraction_status || 'pending').toLowerCase();
+        return s === 'pending' || s === 'extracted' || s === 'extracted_with_warnings';
+      }).length;
+      return {
+        needsReview: docCounts.needsReview,
+        processing,
+        inReview: docCounts.inReview,
+        draft: docCounts.draft,
+        reviewed: docCounts.reviewed,
+        inreviewed: docCounts.inreviewed,
+        indraft: docCounts.indraft,
+        updatedToVector: docCounts.published,
+      };
+    }
     if (serverStats && serverStats.counts) {
       const c = serverStats.counts;
       const reviewed = (c.reviewed || 0) + (c.published || 0) + (c.reopened_reviewed || 0);
@@ -588,31 +607,28 @@ function AppWorkspace() {
         processing: (c.pending || 0) + (c.pending_classification || 0),
         inReview: (c.in_review || 0) + (c.reopened_in_review || 0),
         draft,
-        // Overview reads both .reviewed and .inreviewed — keep both in sync
         reviewed,
         inreviewed: reviewed,
         indraft: draft,
         updatedToVector: (c.published || 0),
       };
     }
-    // Fallback to local derivation while document list is loading
-    const reviewed = extractedDocuments.filter((d) => d.status === 'Reviewed' || (d.extractionStatus === 'classified' && d.needsReview === 0)).length;
-    const draft = queueDocuments.filter((d) => d.extractionStatus === 'rejected').length + extractedDocuments.filter((d) => d.status === 'Draft').length;
+    // Fallback when empty
+    const processing = queueDocuments.filter((d) => {
+      const s = (d.extractionStatus || d.extraction_status || 'pending').toLowerCase();
+      return s === 'pending' || s === 'extracted' || s === 'extracted_with_warnings';
+    }).length;
     return {
-      needsReview: extractedDocuments.filter((d) => (d.needsReview > 0) || d.status === 'Needs review').length,
-      processing: queueDocuments.filter((d) => {
-        const s = (d.extractionStatus || d.extraction_status || 'pending').toLowerCase();
-        return s === 'pending' || s === 'extracted' || s === 'extracted_with_warnings';
-      }).length,
-      inReview: extractedDocuments.filter((d) => d.status === 'In review' || Boolean(d.current_reviewer)).length,
-      draft,
-      reviewed,
-      // Overview reads both .reviewed and .inreviewed — keep both in sync
-      inreviewed: reviewed,
-      indraft: draft,
-      updatedToVector: extractedDocuments.filter((d) => d.vectorDbStatus && d.vectorDbStatus.startsWith('Updated')).length,
+      needsReview: 0,
+      processing,
+      inReview: 0,
+      draft: 0,
+      reviewed: 0,
+      inreviewed: 0,
+      indraft: 0,
+      updatedToVector: 0,
     };
-  }, [serverStats, extractedDocuments, queueDocuments]);
+  }, [serverStats, extractedDocuments, queueDocuments, driveState]);
 
   // Manual Google Drive OAuth connect
   const handleConnectDrive = () => {
@@ -956,6 +972,7 @@ function AppWorkspace() {
               <Overview
                 driveState={driveState}
                 stats={stats}
+                documents={extractedDocuments}
                 queueItems={queueDocuments}
                 searchQuery={searchQuery}
                 onOpenPicker={handleOpenPicker}
@@ -963,7 +980,7 @@ function AppWorkspace() {
                 onCheckDrive={handleCheckDrive}
                 onNavigateToDocuments={() => handleNavSelect('documents')}
                 onNavigateToActivityLog={() => handleNavSelect('activity-log')}
-                isEmptyData={fetchedDocuments.length === 0}
+                isEmptyData={extractedDocuments.length === 0}
               />
             ) : activeNav === 'documents' ? (
               <Documents
@@ -988,6 +1005,7 @@ function AppWorkspace() {
               <Overview
                 driveState={driveState}
                 stats={stats}
+                documents={extractedDocuments}
                 queueItems={queueDocuments}
                 searchQuery={searchQuery}
                 onOpenPicker={handleOpenPicker}
@@ -995,7 +1013,7 @@ function AppWorkspace() {
                 onCheckDrive={handleCheckDrive}
                 onNavigateToDocuments={() => handleNavSelect('documents')}
                 onNavigateToActivityLog={() => handleNavSelect('activity-log')}
-                isEmptyData={fetchedDocuments.length === 0}
+                isEmptyData={extractedDocuments.length === 0}
               />
             )}
           </>
