@@ -65,7 +65,7 @@ https://github.com/srikar-amtrino/Clause_Extraction_beta_version1.0/pull/42/conf
       onSearchChange(val);
     }
   };
-https://github.com/srikar-amtrino/Clause_Extraction_beta_version1.0/pull/42/conflict?name=accordor_frontend%252FClause_Review%252Fsrc%252Fcomponents%252FDocuments.jsx&ancestor_oid=875ba09da17b8cc12714f746ce83a7f885285851&base_oid=4f14f7e640895acc4210a9f591667c8569e43c02&head_oid=2584f7c5a1459c2c47a65db9aa54feebefe2f764
+
   const [selectedDocId, setSelectedDocId] = useState(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(true);
   const [selectedAgreementTypes, setSelectedAgreementTypes] = useState([]);
@@ -1449,24 +1449,6 @@ https://github.com/srikar-amtrino/Clause_Extraction_beta_version1.0/pull/42/conf
                 </Typography>
                 <Typography sx={{ fontSize: '12px', fontWeight: 500, color: '#0f172a', textAlign: 'right' }}>
                   {selectedDoc.clauses ?? 0}
-                </Typography>
-              </Box>
-
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
-                <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 110 }}>
-                  Agreement type
-                </Typography>
-                <Typography sx={{ fontSize: '12px', fontWeight: 600, color: '#0f172a', textAlign: 'right' }}>
-                  {selectedDoc.agreement_type || selectedDoc.agreementType || '—'}
-                </Typography>
-              </Box>
-
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
-                <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 110 }}>
-                  Sectorial category
-                </Typography>
-                <Typography sx={{ fontSize: '12px', fontWeight: 600, color: '#0f172a', textAlign: 'right' }}>
-                  {selectedDoc.sectorial_category || selectedDoc.sectorial || '—'}
                 </Typography>
               </Box>
 
