@@ -270,7 +270,7 @@ export default function Sidebar({
         </Box>
 
         {/* Section: Audit */}
-        <Box>
+        {/* <Box>
           <Typography
             sx={{
               fontSize: '11px',
@@ -321,7 +321,7 @@ export default function Sidebar({
               />
             </ListItemButton>
           </List>
-        </Box>
+        </Box> */}
 
         {/* Section: Tools */}
         <Box>
