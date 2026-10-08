@@ -1,6 +1,6 @@
 from django.urls import path
 
-from .playground_views import playground_analyze, playground_stats
+from .playground_views import playground_analyze, playground_stats, playground_suggest
 
 from .document_views import (
 	classification_delete,
@@ -98,5 +98,6 @@ urlpatterns = [
 
 	# Vector Playground -- read-only diagnostic endpoint.
 	path('playground/stats/', playground_stats, name='playground-stats'),
+	path('playground/suggest/', playground_suggest, name='playground-suggest'),
 	path('playground/', playground_analyze, name='playground-analyze'),
 ]
