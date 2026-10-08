@@ -18,6 +18,12 @@ import BarChartOutlinedIcon from '@mui/icons-material/BarChartOutlined';
 import LayersOutlinedIcon from '@mui/icons-material/LayersOutlined';
 import ClearIcon from '@mui/icons-material/Clear';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import CheckIcon from '@mui/icons-material/Check';
+import GavelOutlinedIcon from '@mui/icons-material/GavelOutlined';
+import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined';
+
 import { getStoredToken } from '../services/authService';
 import { AGREEMENT_TYPES, SECTORIAL_OPTIONS } from './FolderMetadataModal';
 
@@ -35,6 +41,18 @@ const SECTOR_PALETTE = [
   '#8b5cf6', // Violet
   '#ec4899', // Pink
   '#64748b', // Slate
+];
+
+const THINKING_STAGES = [
+  'Analyzing clause syntax & legal semantics...',
+  'Understanding database topology & vector clusters...',
+  'Conceptualizing domain boundaries & contract hierarchy...',
+  'Auditing vector hygiene (asset vs boilerplate vs poison)...',
+  'Evaluating precedent density across active contracts...',
+  'Detecting drafting ambiguities & carve-out gaps...',
+  'Synthesizing cross-agreement ingestion roadmap...',
+  'Formulating balanced market-standard revision...',
+  'Finalizing strategic CLM advisory...',
 ];
 
 // ── sample clauses ────────────────────────────────────────────────────────────
@@ -101,6 +119,22 @@ async function callPlayground(text, topN = 10, agreementType = null, sectorialCa
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: JSON.stringify(payload),
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+  return data;
+}
+
+async function fetchPlaygroundSuggestion(params) {
+  const token = getStoredToken();
+  const resp = await fetch(`${API_BASE}/api/playground/suggest/`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(params),
   });
   const data = await resp.json();
   if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
@@ -369,6 +403,28 @@ export default function VectorPlayground() {
   const [stats, setStats] = useState(null);
   const [statsLoading, setStatsLoading] = useState(true);
 
+  // ── AI Suggestion & Thinking State ──────────────────────────────────────────
+  const [suggestionLoading, setSuggestionLoading] = useState(false);
+  const [suggestionResult, setSuggestionResult] = useState(null);
+  const [suggestionError, setSuggestionError] = useState(null);
+  const [thinkingStageIdx, setThinkingStageIdx] = useState(0);
+  const [copiedRevision, setCopiedRevision] = useState(false);
+
+  // Cycle thinking terms every 1.8s while loading
+  useEffect(() => {
+    let interval = null;
+    if (suggestionLoading) {
+      interval = setInterval(() => {
+        setThinkingStageIdx((prev) => (prev + 1) % THINKING_STAGES.length);
+      }, 1800);
+    } else {
+      setThinkingStageIdx(0);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [suggestionLoading]);
+
   const loadStats = useCallback(async () => {
     setStatsLoading(true);
     try {
@@ -397,6 +453,9 @@ export default function VectorPlayground() {
       setLoading(true);
       setError(null);
       setResult(null);
+      setSuggestionResult(null);
+      setSuggestionError(null);
+
       try {
         const data = await callPlayground(text, 10, agreement, sector);
         setResult(data);
@@ -440,6 +499,38 @@ export default function VectorPlayground() {
   const currentPoints = stats?.points_count ?? result?.collection_stats?.points_count ?? 376;
   const currentDocs = stats?.documents_count ?? 8;
   const hasActiveFilters = selectedSector !== 'All' || selectedAgreement !== 'All';
+
+  // ── Trigger Sonnet Suggestion ──────────────────────────────────────────────
+  const handleGenerateSuggestion = useCallback(async () => {
+    if (!inputText.trim()) return;
+    setSuggestionLoading(true);
+    setSuggestionError(null);
+    try {
+      const data = await fetchPlaygroundSuggestion({
+        text: inputText,
+        canonical_type: pred?.canonical_type || '',
+        top_similarity: covQual?.quality?.top_similarity || matrix?.dense_score || 0.0,
+        count_in_library: covQual?.coverage?.count_in_library || 0,
+        document_spread: covQual?.coverage?.document_spread || 0,
+        total_documents: covQual?.coverage?.total_documents || 0,
+        active_sector: selectedSector,
+        active_agreement: selectedAgreement,
+        document_names: covQual?.coverage?.document_names || [],
+      });
+      setSuggestionResult(data);
+    } catch (err) {
+      setSuggestionError(err.message || 'Failed to generate AI advisory.');
+    } finally {
+      setSuggestionLoading(false);
+    }
+  }, [inputText, pred, covQual, matrix, selectedSector, selectedAgreement]);
+
+  const handleCopyRevision = (revText) => {
+    if (!revText) return;
+    navigator.clipboard.writeText(revText);
+    setCopiedRevision(true);
+    setTimeout(() => setCopiedRevision(false), 2000);
+  };
 
   return (
     <Box
@@ -893,7 +984,7 @@ export default function VectorPlayground() {
             </Alert>
           )}
 
-          {/* ── NEW: Quality & Coverage Intelligence Scorecard ── */}
+          {/* ── Quality & Coverage Intelligence Scorecard ── */}
           {covQual && (
             <Paper
               variant="outlined"
@@ -1015,7 +1106,380 @@ export default function VectorPlayground() {
             </Paper>
           )}
 
-          {/* Prediction card */}
+          {/* ── ON-DEMAND AI VECTOR DB HYGIENE & INGESTION ADVISORY ── */}
+          <Paper
+            variant="outlined"
+            sx={{
+              p: 2.5,
+              borderRadius: '10px',
+              borderColor: suggestionResult ? '#818cf8' : '#c7d2fe',
+              background: suggestionResult
+                ? '#ffffff'
+                : 'linear-gradient(135deg, #f8faff 0%, #eff6ff 100%)',
+              boxShadow: suggestionResult ? '0 2px 8px rgba(99,102,241,0.08)' : 'none',
+              transition: 'all 0.3s ease',
+            }}
+          >
+            {/* Top Prompt / Trigger Bar */}
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 2, mb: suggestionResult || suggestionLoading ? 2.5 : 0 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                <Box
+                  sx={{
+                    width: 40,
+                    height: 40,
+                    borderRadius: '8px',
+                    bgcolor: '#e0e7ff',
+                    color: '#4338ca',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                  }}
+                >
+                  <AutoAwesomeIcon sx={{ fontSize: 22 }} />
+                </Box>
+                <Box>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                    <Typography sx={{ fontWeight: 700, fontSize: '15px', color: '#1e1b4b' }}>
+                      AI Vector DB Hygiene & Ingestion Advisor
+                    </Typography>
+                    <Chip
+                      label="Claude 3.7 Sonnet"
+                      size="small"
+                      sx={{ bgcolor: '#4338ca', color: '#ffffff', fontWeight: 600, fontSize: '10.5px', height: 20 }}
+                    />
+                    {suggestionResult?.latency_ms && (
+                      <Typography sx={{ fontSize: '11px', color: MUTED }}>
+                        &bull; Generated in {suggestionResult.latency_ms} ms
+                      </Typography>
+                    )}
+                  </Box>
+                  <Typography sx={{ fontSize: '12px', color: '#475569', mt: 0.25 }}>
+                    Evaluates if this clause is an asset or database noise, recommended contracts to ingest, and legal ambiguity analysis.
+                  </Typography>
+                </Box>
+              </Box>
+
+              <Button
+                id="vp-generate-ai-advisory-btn"
+                variant="contained"
+                disabled={suggestionLoading}
+                onClick={handleGenerateSuggestion}
+                startIcon={suggestionLoading ? <CircularProgress size={14} sx={{ color: '#fff' }} /> : <AutoAwesomeIcon sx={{ fontSize: 16 }} />}
+                sx={{
+                  bgcolor: '#4338ca',
+                  color: '#ffffff',
+                  fontWeight: 600,
+                  fontSize: '12.5px',
+                  textTransform: 'none',
+                  px: 2.75,
+                  py: 0.9,
+                  borderRadius: '7px',
+                  boxShadow: '0 2px 6px rgba(67, 56, 202, 0.2)',
+                  '&:hover': { bgcolor: '#3730a3' },
+                  '&.Mui-disabled': { bgcolor: '#a5b4fc', color: '#ffffff' },
+                }}
+              >
+                {suggestionLoading
+                  ? 'Reasoning Across Corpus…'
+                  : suggestionResult
+                  ? 'Re-evaluate with Sonnet'
+                  : '✨ Generate AI Hygiene & Ingestion Advisory'}
+              </Button>
+            </Box>
+
+            {/* Error Message */}
+            {suggestionError && (
+              <Alert severity="error" sx={{ borderRadius: '8px', fontSize: '12.5px', mt: 1.5 }}>
+                {suggestionError}
+              </Alert>
+            )}
+
+            {/* Thinking / Progress Screen (Cycles terms smoothly to keep user hooked) */}
+            {suggestionLoading && (
+              <Box sx={{ mt: 1, p: 2.5, bgcolor: '#f8faff', borderRadius: '8px', border: '1px solid #e0e7ff' }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.75 }}>
+                  <CircularProgress size={20} sx={{ color: '#4338ca' }} />
+                  <Box>
+                    <Typography sx={{ fontWeight: 700, fontSize: '13.5px', color: '#1e1b4b' }}>
+                      Claude Sonnet is reasoning across your Vector DB...
+                    </Typography>
+                    <Typography sx={{ fontSize: '12px', color: '#4f46e5', fontWeight: 600, transition: 'all 0.3s ease' }}>
+                      {THINKING_STAGES[thinkingStageIdx]}
+                    </Typography>
+                  </Box>
+                </Box>
+
+                <LinearProgress
+                  sx={{
+                    height: 5,
+                    borderRadius: 3,
+                    bgcolor: '#e0e7ff',
+                    mb: 2,
+                    '& .MuiLinearProgress-bar': { bgcolor: '#4338ca', borderRadius: 3 },
+                  }}
+                />
+
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
+                  {THINKING_STAGES.slice(0, thinkingStageIdx + 1).map((stage, idx) => (
+                    <Chip
+                      key={idx}
+                      label={stage}
+                      size="small"
+                      icon={<CheckCircleOutlineRoundedIcon sx={{ fontSize: '13px !important', color: '#4338ca !important' }} />}
+                      sx={{
+                        bgcolor: idx === thinkingStageIdx ? '#eef2ff' : '#ffffff',
+                        borderColor: idx === thinkingStageIdx ? '#6366f1' : '#e2e8f0',
+                        borderWidth: 1,
+                        borderStyle: 'solid',
+                        color: idx === thinkingStageIdx ? '#312e81' : MUTED,
+                        fontSize: '11px',
+                        fontWeight: idx === thinkingStageIdx ? 600 : 400,
+                      }}
+                    />
+                  ))}
+                </Box>
+              </Box>
+            )}
+
+            {/* Generated Suggestion Result Dashboard */}
+            {suggestionResult && !suggestionLoading && (
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+                <Divider sx={{ borderColor: '#e0e7ff' }} />
+
+                {/* Grid 1: Vector DB Hygiene & Ingestion Roadmap */}
+                <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 2.5 }}>
+                  {/* Hygiene Verdict */}
+                  <Box
+                    sx={{
+                      p: 2.25,
+                      borderRadius: '8px',
+                      bgcolor:
+                        suggestionResult.db_hygiene?.badge_type === 'asset'
+                          ? '#f0fdf4'
+                          : suggestionResult.db_hygiene?.badge_type === 'poison'
+                          ? '#fef2f2'
+                          : '#fffbeb',
+                      border: `1px solid ${
+                        suggestionResult.db_hygiene?.badge_type === 'asset'
+                          ? '#bbf7d0'
+                          : suggestionResult.db_hygiene?.badge_type === 'poison'
+                          ? '#fecaca'
+                          : '#fef08a'
+                      }`,
+                    }}
+                  >
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                        <ShieldOutlinedIcon
+                          sx={{
+                            fontSize: 18,
+                            color:
+                              suggestionResult.db_hygiene?.badge_type === 'asset'
+                                ? '#16a34a'
+                                : suggestionResult.db_hygiene?.badge_type === 'poison'
+                                ? '#dc2626'
+                                : '#d97706',
+                          }}
+                        />
+                        <Typography sx={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', color: '#334155' }}>
+                          Vector DB Hygiene Verdict
+                        </Typography>
+                      </Box>
+                      <Chip
+                        label={suggestionResult.db_hygiene?.verdict || 'Core Asset'}
+                        size="small"
+                        sx={{
+                          bgcolor:
+                            suggestionResult.db_hygiene?.badge_type === 'asset'
+                              ? '#dcfce7'
+                              : suggestionResult.db_hygiene?.badge_type === 'poison'
+                              ? '#fee2e2'
+                              : '#fef3c7',
+                          color:
+                            suggestionResult.db_hygiene?.badge_type === 'asset'
+                              ? '#15803d'
+                              : suggestionResult.db_hygiene?.badge_type === 'poison'
+                              ? '#b91c1c'
+                              : '#b45309',
+                          fontWeight: 800,
+                          fontSize: '11px',
+                        }}
+                      />
+                    </Box>
+
+                    <Typography sx={{ fontSize: '13px', fontWeight: 700, color: '#1e293b', mb: 0.75 }}>
+                      {suggestionResult.db_hygiene?.headline}
+                    </Typography>
+                    <Typography sx={{ fontSize: '12px', color: '#475569', lineHeight: 1.55 }}>
+                      {suggestionResult.db_hygiene?.rationale}
+                    </Typography>
+                  </Box>
+
+                  {/* Ingestion Roadmap */}
+                  <Box sx={{ p: 2.25, borderRadius: '8px', bgcolor: '#f8fafc', border: `1px solid ${BORDER}` }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 1.25 }}>
+                      <StorageOutlinedIcon sx={{ fontSize: 18, color: NAVY }} />
+                      <Typography sx={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', color: '#334155' }}>
+                        Recommended Ingestion Roadmap
+                      </Typography>
+                    </Box>
+
+                    <Typography sx={{ fontSize: '12px', color: '#475569', mb: 1.5, lineHeight: 1.5 }}>
+                      {suggestionResult.ingestion_roadmap?.actionable_advice}
+                    </Typography>
+
+                    <Box sx={{ mb: 1.25 }}>
+                      <Typography sx={{ fontSize: '11px', fontWeight: 600, color: MUTED, mb: 0.5 }}>
+                        CONTRACTS TO INGEST NEXT:
+                      </Typography>
+                      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                        {suggestionResult.ingestion_roadmap?.recommended_agreement_types?.map((agr, idx) => (
+                          <Chip
+                            key={idx}
+                            label={agr}
+                            size="small"
+                            sx={{ bgcolor: '#eff6ff', color: '#1d4ed8', fontSize: '10.5px', fontWeight: 600, height: 21 }}
+                          />
+                        ))}
+                      </Box>
+                    </Box>
+
+                    {suggestionResult.ingestion_roadmap?.target_sectors?.length > 0 && (
+                      <Box>
+                        <Typography sx={{ fontSize: '11px', fontWeight: 600, color: MUTED, mb: 0.5 }}>
+                          TARGET SECTORIAL DOMAINS:
+                        </Typography>
+                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                          {suggestionResult.ingestion_roadmap.target_sectors.map((sec, idx) => (
+                            <Chip
+                              key={idx}
+                              label={sec}
+                              size="small"
+                              sx={{ bgcolor: '#f1f5f9', color: '#475569', fontSize: '10.5px', height: 20 }}
+                            />
+                          ))}
+                        </Box>
+                      </Box>
+                    )}
+                  </Box>
+                </Box>
+
+                {/* Grid 2: Legal Ambiguity & Drafting Critique */}
+                <Box sx={{ p: 2.25, borderRadius: '8px', bgcolor: '#f8fafc', border: `1px solid ${BORDER}` }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5, flexWrap: 'wrap', gap: 1 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                      <GavelOutlinedIcon sx={{ fontSize: 18, color: NAVY }} />
+                      <Typography sx={{ fontSize: '13px', fontWeight: 700, color: '#1e293b' }}>
+                        Legal Ambiguity & Drafting Critique
+                      </Typography>
+                    </Box>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Typography sx={{ fontSize: '11.5px', color: MUTED }}>Party Bias:</Typography>
+                      <Chip
+                        label={suggestionResult.drafting_critique?.bias || 'Balanced'}
+                        size="small"
+                        sx={{
+                          bgcolor:
+                            suggestionResult.drafting_critique?.bias === 'Pro-Customer'
+                              ? '#eff6ff'
+                              : suggestionResult.drafting_critique?.bias === 'Pro-Vendor'
+                              ? '#fef3c7'
+                              : '#f1f5f9',
+                          color:
+                            suggestionResult.drafting_critique?.bias === 'Pro-Customer'
+                              ? '#1d4ed8'
+                              : suggestionResult.drafting_critique?.bias === 'Pro-Vendor'
+                              ? '#b45309'
+                              : '#334155',
+                          fontWeight: 700,
+                          fontSize: '11px',
+                        }}
+                      />
+                    </Box>
+                  </Box>
+
+                  {suggestionResult.drafting_critique?.legal_risk_summary && (
+                    <Typography sx={{ fontSize: '12.5px', color: '#334155', mb: 1.5, lineHeight: 1.55 }}>
+                      {suggestionResult.drafting_critique.legal_risk_summary}
+                    </Typography>
+                  )}
+
+                  {suggestionResult.drafting_critique?.ambiguity_points?.length > 0 && (
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, mb: 1.5 }}>
+                      {suggestionResult.drafting_critique.ambiguity_points.map((pt, idx) => (
+                        <Box key={idx} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
+                          <WarningAmberRoundedIcon sx={{ fontSize: 15, color: '#d97706', mt: 0.25, flexShrink: 0 }} />
+                          <Typography sx={{ fontSize: '12px', color: '#475569', lineHeight: 1.5 }}>
+                            {pt}
+                          </Typography>
+                        </Box>
+                      ))}
+                    </Box>
+                  )}
+
+                  {suggestionResult.recommended_placement && (
+                    <Box sx={{ pt: 1, borderTop: `1px solid ${BORDER}`, display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Typography sx={{ fontSize: '11.5px', fontWeight: 600, color: MUTED }}>
+                        Recommended Legal Placement:
+                      </Typography>
+                      <Chip
+                        label={suggestionResult.recommended_placement}
+                        size="small"
+                        sx={{ bgcolor: '#e2e8f0', color: '#1e293b', fontWeight: 600, fontSize: '11px' }}
+                      />
+                    </Box>
+                  )}
+                </Box>
+
+                {/* Market Standard Revision Block */}
+                {suggestionResult.market_standard_revision && (
+                  <Paper
+                    variant="outlined"
+                    sx={{
+                      p: 2,
+                      borderRadius: '8px',
+                      borderColor: '#bbf7d0',
+                      bgcolor: '#f0fdf4',
+                    }}
+                  >
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                        <CheckCircleOutlineRoundedIcon sx={{ fontSize: 17, color: '#16a34a' }} />
+                        <Typography sx={{ fontSize: '12px', fontWeight: 700, color: '#15803d', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                          Market Standard Balanced Formulation
+                        </Typography>
+                      </Box>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={() => handleCopyRevision(suggestionResult.market_standard_revision)}
+                        startIcon={copiedRevision ? <CheckIcon sx={{ fontSize: 14 }} /> : <ContentCopyIcon sx={{ fontSize: 14 }} />}
+                        sx={{
+                          textTransform: 'none',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          color: '#15803d',
+                          borderColor: '#86efac',
+                          py: 0.25,
+                          px: 1,
+                          bgcolor: '#ffffff',
+                          '&:hover': { bgcolor: '#f0fdf4', borderColor: '#16a34a' },
+                        }}
+                      >
+                        {copiedRevision ? 'Copied!' : 'Copy Clause'}
+                      </Button>
+                    </Box>
+                    <Typography sx={{ fontSize: '12.5px', color: '#1e293b', fontStyle: 'italic', lineHeight: 1.6, bgcolor: '#ffffff', p: 1.5, borderRadius: '6px', border: '1px solid #dcfce7' }}>
+                      "{suggestionResult.market_standard_revision}"
+                    </Typography>
+                  </Paper>
+                )}
+              </Box>
+            )}
+          </Paper>
+
+          {/* Classification Verdict */}
           <Paper variant="outlined" sx={{ p: 2.5, borderRadius: '10px', borderColor: BORDER, bgcolor: '#ffffff' }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
               <CheckCircleOutlineRoundedIcon sx={{ fontSize: 18, color: pred?.needs_review ? '#d97706' : '#16a34a' }} />
