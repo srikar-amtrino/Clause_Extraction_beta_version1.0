@@ -7,7 +7,7 @@ candidates, and returns a classification verdict plus diagnostic data.
 No database writes are performed -- this is a read-only diagnostic path.
 
 Pipeline (mirrors application_layerv2.ipynb):
-  1. Dense embed   - POST http://54.215.196.139:8000/embed
+  1. Dense embed   - POST {EMBEDDING_API_URL} (BAAI/bge-m3)
   2. Dense search  - Qdrant /query with "dense" named vector
   3. BM25 search   - in-process rank_bm25 against cached library payloads
   4. RRF blend     - reciprocal-rank fusion (k=60)
@@ -21,6 +21,7 @@ import os
 import re
 import threading
 import time
+from collections import Counter
 from typing import Any
 
 import requests
@@ -30,7 +31,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-EMBEDDING_URL = os.environ.get("EMBEDDING_API_URL", "http://54.215.196.139:8000/embed")
+EMBEDDING_URL = os.environ.get("EMBEDDING_API_URL", "http://18.144.172.78:8000/embed")
 EMBEDDING_TIMEOUT = float(os.environ.get("EMBEDDING_API_TIMEOUT_SECONDS", "60"))
 
 RRF_K = 60
@@ -121,7 +122,7 @@ def _fetch_library(timeout=60.0):
 
 
 def get_collection_stats():
-    """Fetch live collection statistics and number of embeddings from Qdrant."""
+    """Fetch live collection statistics, sectors, agreements, and canonical distributions from Qdrant."""
     base = _qdrant_base()
     collection = _qdrant_collection()
     headers = _qdrant_headers()
@@ -136,12 +137,46 @@ def get_collection_stats():
         points_count = data.get("points_count", 0)
         status = data.get("status", "unknown")
         vectors_count = data.get("vectors_count") or points_count
+
+        library = _fetch_library(timeout=15.0)
+        total_lib = len(library) or 1
+
+        # Sector breakdown
+        sector_counter = Counter(p.get("sectorial_category") or "Unspecified" for p in library)
+        sectors_dist = [
+            {"name": k, "count": v, "percentage": round((v / total_lib * 100), 1)}
+            for k, v in sector_counter.most_common()
+        ]
+
+        # Agreement breakdown
+        agreement_counter = Counter(p.get("agreement_type") or "Unspecified" for p in library)
+        agreements_dist = [
+            {"name": k, "count": v, "percentage": round((v / total_lib * 100), 1)}
+            for k, v in agreement_counter.most_common()
+        ]
+
+        # Top canonical types
+        canonical_counter = Counter(p.get("canonical_type") or "Unclassified" for p in library)
+        canonical_dist = [
+            {"name": k, "count": v, "percentage": round((v / total_lib * 100), 1)}
+            for k, v in canonical_counter.most_common(8)
+        ]
+
+        unique_docs = sorted(list({p.get("document_name") for p in library if p.get("document_name")}))
+
         return {
             "status": "online",
             "collection": collection,
             "points_count": points_count,
             "vectors_count": vectors_count,
             "cluster_status": status,
+            "documents_count": len(unique_docs),
+            "documents_list": unique_docs,
+            "sectors_distribution": sectors_dist,
+            "agreements_distribution": agreements_dist,
+            "top_canonical_types": canonical_dist,
+            "available_sectors": [s["name"] for s in sectors_dist if s["name"] != "Unspecified"],
+            "available_agreements": [a["name"] for a in agreements_dist if a["name"] != "Unspecified"],
         }
     except Exception as exc:
         logger.warning("Failed to get Qdrant collection stats: %s", exc)
@@ -174,6 +209,37 @@ def _embed(text, timeout=None):
     if not vectors or not isinstance(vectors[0], list):
         raise RuntimeError("Embedding API returned an unexpected response.")
     return vectors[0], int((time.perf_counter() - t0) * 1000)
+
+
+def _dense_search(dense_vec, limit=20, timeout=10.0, agreement_type=None, sectorial_category=None):
+    """Perform vector similarity search against Qdrant collection using the named 'dense' vector."""
+    base = _qdrant_base()
+    collection = _qdrant_collection()
+    headers = _qdrant_headers()
+    body = {
+        "vector": {
+            "name": "dense",
+            "vector": dense_vec,
+        },
+        "limit": limit,
+        "with_payload": True,
+    }
+    filter_must = []
+    if agreement_type and agreement_type != "All":
+        filter_must.append({"key": "agreement_type", "match": {"value": agreement_type}})
+    if sectorial_category and sectorial_category != "All":
+        filter_must.append({"key": "sectorial_category", "match": {"value": sectorial_category}})
+    if filter_must:
+        body["filter"] = {"must": filter_must}
+
+    resp = requests.post(
+        f"{base}/collections/{collection}/points/search",
+        json=body,
+        headers=headers,
+        timeout=timeout,
+    )
+    resp.raise_for_status()
+    return resp.json().get("result", [])
 
 
 # ---------------------------------------------------------------------------
@@ -278,18 +344,19 @@ def _resolve_canonical(name):
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
-def run_playground(text, top_n=TOP_N):
+def run_playground(text, top_n=TOP_N, agreement_type=None, sectorial_category=None):
     """
-    Run the full diagnostic pipeline for a single clause text.
+    Run the full diagnostic pipeline for a single clause text with optional sector/agreement filters.
 
     Returns
     -------
     dict with keys:
-      prediction       - label, canonical_type, sub_type, confidence,
-                         needs_review, blindspot_warning (Idea 1)
-      retrieval_matrix - dense / bm25 / rrf raw scores (Idea 4)
-      library_matches  - top-5 results with shared_keywords diff (Idea 2)
-      performance      - per-step latency in ms (Idea 4)
+      prediction           - label, canonical_type, sub_type, confidence,
+                             needs_review, blindspot_warning (Idea 1)
+      retrieval_matrix     - dense / bm25 / rrf raw scores (Idea 4)
+      library_matches      - top-5 results with shared_keywords diff (Idea 2)
+      coverage_and_quality - quality score, band, corpus coverage, doc spread
+      performance          - per-step latency in ms (Idea 4)
     """
     timings = {}
 
@@ -305,11 +372,17 @@ def run_playground(text, top_n=TOP_N):
         logger.warning("Dense embedding failed (%s), will fallback to BM25 keyword retrieval", exc)
         timings["embed_ms"] = 0
 
-    # Step 2: dense search
+    # Step 2: dense search with filters
     if dense_vec is not None:
         t0 = time.perf_counter()
         try:
-            dense_hits = _dense_search(dense_vec, top_n * 2, timeout=EMBEDDING_TIMEOUT)
+            dense_hits = _dense_search(
+                dense_vec,
+                top_n * 2,
+                timeout=EMBEDDING_TIMEOUT,
+                agreement_type=agreement_type,
+                sectorial_category=sectorial_category,
+            )
         except Exception as exc:
             dense_error = str(exc)
             logger.warning("Qdrant dense search failed: %s", exc)
@@ -324,30 +397,42 @@ def run_playground(text, top_n=TOP_N):
     bm25_scores = None
     try:
         library = _fetch_library(timeout=EMBEDDING_TIMEOUT)
+        
+        # Apply active filter to library candidates if provided
+        active_library = library
+        if agreement_type and agreement_type != "All":
+            at_matched = [p for p in active_library if p.get("agreement_type") == agreement_type]
+            if at_matched:
+                active_library = at_matched
+        if sectorial_category and sectorial_category != "All":
+            sc_matched = [p for p in active_library if p.get("sectorial_category") == sectorial_category]
+            if sc_matched:
+                active_library = sc_matched
+
         lib_hash = hashlib.md5(
-            f"{len(library)}:{(library[0].get('vector_id', '') if library else '')}".encode()
+            f"{len(active_library)}:{(active_library[0].get('vector_id', '') if active_library else '')}".encode()
         ).hexdigest()
-        idx_obj = _BM25Index.get(library, lib_hash)
+        idx_obj = _BM25Index.get(active_library, lib_hash)
         bm25_scores = idx_obj.bm25.get_scores(_tokenize(text))
     except Exception as exc:
         logger.warning("BM25 step failed: %s", exc)
-        library = []
+        active_library = library
         bm25_scores = None
     timings["bm25_ms"] = int((time.perf_counter() - t0) * 1000)
 
     # Step 4: RRF blend / candidate construction
     t0 = time.perf_counter()
-    if dense_hits and library and bm25_scores is not None:
-        blended = _rrf_blend(dense_hits, library, bm25_scores, top_n)
+    if dense_hits and active_library and bm25_scores is not None:
+        blended = _rrf_blend(dense_hits, active_library, bm25_scores, top_n)
         decided_by = "Hybrid Retrieval (Dense + BM25) + RRF"
-    elif library and bm25_scores is not None:
+    elif active_library and bm25_scores is not None:
         import numpy as np
         top_indices = np.argsort(bm25_scores)[::-1][:top_n]
         max_bm25 = float(np.max(bm25_scores)) if len(bm25_scores) > 0 and np.max(bm25_scores) > 0 else 1.0
         input_tokens_for_score = set(_tokenize(text))
         blended = []
         for rank, idx in enumerate(top_indices, start=1):
-            lib_entry = library[idx]
+            lib_entry = active_library[idx]
             match_tokens = set(_tokenize(lib_entry.get("text", "")))
             # Keyword overlap confidence: Jaccard of meaningful tokens (len>3)
             meaningful_input = {w for w in input_tokens_for_score if len(w) > 3}
@@ -464,11 +549,74 @@ def run_playground(text, top_n=TOP_N):
             "sub_type": p.get("sub_type") or None,
             "label": p.get("label", ""),
             "document_name": p.get("document_name", ""),
+            "agreement_type": p.get("agreement_type", ""),
+            "sectorial_category": p.get("sectorial_category", ""),
             "similarity_score": round(candidate["dense_score"], 4),
             "rrf_score": round(candidate["rrf_score"], 6),
             "found_by": candidate["found_by"],
             "shared_keywords": shared,
         })
+
+    # Coverage & Quality calculations
+    canonical_type_matches = [p for p in library if (p.get("canonical_type") or "").strip() == raw_canonical]
+    canonical_count = len(canonical_type_matches)
+    canonical_pct = round((canonical_count / len(library) * 100), 1) if library else 0.0
+
+    docs_with_canonical = sorted(list({p.get("document_name") for p in canonical_type_matches if p.get("document_name")}))
+    all_docs = sorted(list({p.get("document_name") for p in library if p.get("document_name")}))
+
+    top_score = round(top["dense_score"], 4) if top else 0.0
+    top_scores = [round(m["similarity_score"], 3) for m in library_matches[:5]]
+    top_3_avg = round(sum(top_scores[:3]) / max(1, len(top_scores[:3])), 3) if top_scores else 0.0
+
+    if top_score >= 0.72:
+        quality_band = "high"
+        quality_label = "High Semantic Alignment"
+        quality_description = "Strong market precedent. This clause phrasing aligns closely with verified provisions in the database."
+    elif top_score >= 0.55:
+        quality_band = "moderate"
+        quality_label = "Moderate Precedent"
+        quality_description = "Conceptually recognized, but phrasing or specific deal terms vary noticeably from library precedents."
+    else:
+        quality_band = "low"
+        quality_label = "Corpus Blindspot"
+        quality_description = "Weak precedent. The library has low coverage or non-standard formulation for this clause."
+
+    matched_sectors = Counter(m.get("sectorial_category") or "Unspecified" for m in library_matches)
+    matched_agreements = Counter(m.get("agreement_type") or "Unspecified" for m in library_matches)
+
+    coverage_and_quality = {
+        "quality": {
+            "top_similarity": top_score,
+            "top_3_average": top_3_avg,
+            "band": quality_band,
+            "label": quality_label,
+            "description": quality_description,
+            "score_distribution": top_scores,
+        },
+        "coverage": {
+            "canonical_type": raw_canonical,
+            "count_in_library": canonical_count,
+            "percentage_of_library": canonical_pct,
+            "document_spread": len(docs_with_canonical),
+            "total_documents": len(all_docs),
+            "document_names": docs_with_canonical,
+            "total_library_points": len(library),
+            "maturity_label": f"Testing Corpus ({len(library)} clauses across {len(all_docs)} documents)",
+        },
+        "matched_distributions": {
+            "sectors": [{"name": k, "count": v} for k, v in matched_sectors.most_common()],
+            "agreements": [{"name": k, "count": v} for k, v in matched_agreements.most_common()],
+        },
+        "filters_applied": {
+            "agreement_type": agreement_type or "All",
+            "sectorial_category": sectorial_category or "All",
+            "is_filtered": bool(
+                (agreement_type and agreement_type != "All") or 
+                (sectorial_category and sectorial_category != "All")
+            ),
+        },
+    }
 
     return {
         "prediction": {
@@ -492,6 +640,7 @@ def run_playground(text, top_n=TOP_N):
             "error": dense_error,
             "url": EMBEDDING_URL,
         },
+        "coverage_and_quality": coverage_and_quality,
         "retrieval_mode": retrieval_mode,
         "collection_stats": {
             "collection": _qdrant_collection(),
