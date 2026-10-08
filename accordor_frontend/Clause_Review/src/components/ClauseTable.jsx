@@ -379,9 +379,14 @@ export default function ClauseTable({
                   )
                 }
                 onClick={() => {
+                  const selectedKeySet = new Set((selectedRows || []).map(String));
                   const selectedList = deletedClauses.filter((r) => {
-                    const rKey = String(r.classification_id || r.id || r.clause_id);
-                    return (selectedRows || []).map(String).includes(rKey);
+                    return (
+                      selectedKeySet.has(String(r.classification_id)) ||
+                      selectedKeySet.has(String(r.id)) ||
+                      selectedKeySet.has(String(r.clause_id)) ||
+                      selectedKeySet.has(String(r.paraId))
+                    );
                   });
                   onRestoreClause?.(selectedList.length > 0 ? selectedList : selectedRows);
                 }}
@@ -407,9 +412,14 @@ export default function ClauseTable({
                 variant="contained"
                 startIcon={<DeleteOutlinedIcon sx={{ fontSize: 16 }} />}
                 onClick={() => {
+                  const selectedKeySet = new Set((selectedRows || []).map(String));
                   const selectedList = extractedClauses.filter((r) => {
-                    const rKey = String(r.classification_id || r.id || r.clause_id);
-                    return (selectedRows || []).map(String).includes(rKey);
+                    return (
+                      selectedKeySet.has(String(r.classification_id)) ||
+                      selectedKeySet.has(String(r.id)) ||
+                      selectedKeySet.has(String(r.clause_id)) ||
+                      selectedKeySet.has(String(r.paraId))
+                    );
                   });
                   onDeleteClause?.(selectedList.length > 0 ? selectedList : selectedRows);
                 }}
@@ -1116,13 +1126,17 @@ export default function ClauseTable({
                       {/* Action Cell (Preview / Delete or Restore) */}
                       <TableCell align="center" sx={{ py: 1.25, verticalAlign: 'middle' }}>
                         {activeFilter === 'deleted' ? (() => {
-                          const rowKey = String(row.classification_id || row.id || row.clause_id);
-                          const isRowRestoring = (restoringClauseIds || []).includes(rowKey) || isRestoring;
+                          const isRowRestoring = (restoringClauseIds || []).some(
+                            (id) =>
+                              (row.classification_id && String(row.classification_id) === String(id)) ||
+                              (row.id && String(row.id) === String(id)) ||
+                              (row.clause_id && String(row.clause_id) === String(id))
+                          );
                           return (
                             <Button
                               size="small"
                               variant="outlined"
-                              disabled={isRowRestoring}
+                              disabled={isRowRestoring || isRestoring}
                               startIcon={
                                 isRowRestoring ? (
                                   <CircularProgress size={13} thickness={5} sx={{ color: '#16a34a' }} />
@@ -1149,10 +1163,10 @@ export default function ClauseTable({
                                   borderColor: '#86efac',
                                 },
                                 '&.Mui-disabled': {
-                                  bgcolor: '#f0fdf4',
-                                  color: '#16a34a',
-                                  borderColor: '#bbf7d0',
-                                  opacity: 0.85,
+                                  bgcolor: isRowRestoring ? '#f0fdf4' : '#f8fafc',
+                                  color: isRowRestoring ? '#16a34a' : '#94a3b8',
+                                  borderColor: isRowRestoring ? '#bbf7d0' : '#e2e8f0',
+                                  opacity: isRowRestoring ? 0.85 : 0.6,
                                 },
                               }}
                             >
