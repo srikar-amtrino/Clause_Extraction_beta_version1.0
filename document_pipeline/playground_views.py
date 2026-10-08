@@ -6,7 +6,11 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from core.auth_helpers import require_auth
-from document_pipeline.services.playground_service import get_collection_stats, run_playground
+from document_pipeline.services.playground_service import (
+    generate_clause_suggestions,
+    get_collection_stats,
+    run_playground,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,4 +84,48 @@ def playground_analyze(request):
         return JsonResponse({"detail": "Internal server error."}, status=500)
 
     return JsonResponse(result, status=200)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@require_auth
+def playground_suggest(request):
+    """Generate on-demand AI review, Vector DB hygiene audit, and ingestion suggestions via Claude Sonnet.
+
+    POST /api/playground/suggest/
+    """
+    try:
+        body = json.loads(request.body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return _err("Request body must be valid JSON.")
+
+    text = (body.get("text") or "").strip()
+    if not text:
+        return _err("text is required and must be a non-empty string.")
+
+    canonical_type = (body.get("canonical_type") or "").strip()
+    top_similarity = float(body.get("top_similarity") or 0.0)
+    count_in_library = int(body.get("count_in_library") or 0)
+    document_spread = int(body.get("document_spread") or 0)
+    total_documents = int(body.get("total_documents") or 0)
+    active_sector = (body.get("active_sector") or "All").strip()
+    active_agreement = (body.get("active_agreement") or "All").strip()
+    document_names = body.get("document_names") or []
+
+    try:
+        suggestion = generate_clause_suggestions(
+            text=text,
+            canonical_type=canonical_type,
+            top_similarity=top_similarity,
+            count_in_library=count_in_library,
+            document_spread=document_spread,
+            total_documents=total_documents,
+            active_sector=active_sector,
+            active_agreement=active_agreement,
+            document_names=document_names,
+        )
+        return JsonResponse(suggestion, status=200)
+    except Exception as exc:
+        logger.exception("Failed to generate playground suggestions: %s", exc)
+        return JsonResponse({"detail": f"AI suggestion error: {str(exc)}"}, status=502)
 
