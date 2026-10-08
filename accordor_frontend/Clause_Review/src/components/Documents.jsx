@@ -46,7 +46,7 @@ export default function Documents({
 }) {
   const { currentUser } = useAuth();
   const currentUserName = currentUser?.username || currentUser?.name || (currentUser?.email ? currentUser.email.split('@')[0] : 'Reviewer');
-https://github.com/srikar-amtrino/Clause_Extraction_beta_version1.0/pull/42/conflict?name=document_pipeline%252Fservices%252Fexport_service.py&ancestor_oid=801d13530152b225e215dc1f3c280ffb2d092c96&base_oid=b71328dbe5158d8da01d0b1c1188500a46009672&head_oid=edf941ee913404280dfa986f187941dd563144ce
+
   // Format real documents from backend pipeline API or Google Drive using centralized normalizer
   const allDocs = useMemo(() => {
     if (!documents || documents.length === 0 || isEmptyData) {

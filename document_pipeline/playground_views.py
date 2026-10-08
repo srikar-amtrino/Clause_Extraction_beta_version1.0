@@ -62,8 +62,16 @@ def playground_analyze(request):
     except (TypeError, ValueError):
         return _err("top_n must be an integer between 1 and 20.")
 
+    agreement_type = (body.get("agreement_type") or "").strip() or None
+    sectorial_category = (body.get("sectorial_category") or "").strip() or None
+
     try:
-        result = run_playground(text=text, top_n=top_n)
+        result = run_playground(
+            text=text,
+            top_n=top_n,
+            agreement_type=agreement_type,
+            sectorial_category=sectorial_category,
+        )
     except RuntimeError as exc:
         logger.warning("Playground pipeline error: %s", exc)
         return JsonResponse({"detail": str(exc)}, status=502)
