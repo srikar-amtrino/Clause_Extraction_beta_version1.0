@@ -71,6 +71,19 @@ function mapClassificationItem(item, i, doc, classRes) {
   const reviewObj = item.review || null;
   const isItemReviewed = Boolean(reviewObj?.decision || item.needs_review === false || item.isReviewed);
   const itemNeedsReview = isItemReviewed ? false : Boolean(item.needs_review !== false && (item.needs_review || item.needsReview));
+  const isDocSavedInBackend = Boolean(
+    doc?.status === 'Saved' ||
+    doc?.status === 'Updated to vector DB' ||
+    classRes?.document?.review_status === 'published' ||
+    classRes?.document?.review_status === 'reviewed'
+  );
+  const isItemSaved = Boolean(
+    reviewObj?.decision ||
+    reviewObj?.reviewed_at ||
+    item.isSaved === true ||
+    item.is_saved === true ||
+    (isDocSavedInBackend && !item.isLocallyEdited && !item.is_text_modified)
+  );
   return {
     id: item.classification_id || item.id || `clause-${i}`,
     classification_id: item.classification_id,
@@ -93,6 +106,7 @@ function mapClassificationItem(item, i, doc, classRes) {
     needs_review: itemNeedsReview,
     needsReview: itemNeedsReview,
     isReviewed: isItemReviewed,
+    isSaved: isItemSaved,
     review_reasons: isItemReviewed ? [] : (item.review_reasons || []),
     deviated: isItemReviewed ? false : Boolean(item.deviated),
     outcome: isItemReviewed ? 'reviewed' : item.outcome,
@@ -583,6 +597,17 @@ export default function ReviewWorkspace({
     ).length;
   }, [extractedClauses]);
 
+  const allClausesSaved = useMemo(() => {
+    if (!extractedClauses || extractedClauses.length === 0) return false;
+    if (hasUnsavedChanges) return false;
+
+    // Every single clause (the reviewed clauses and the needs to review clauses) must be saved
+    return extractedClauses.every((clause) => {
+      if (clause.isLocallyEdited || clause.is_text_modified) return false;
+      return Boolean(clause.isSaved || clause.review?.decision || clause.review?.reviewed_at);
+    });
+  }, [extractedClauses, hasUnsavedChanges]);
+
   useEffect(() => {
     if (doc?.status) {
       setDocumentStatus(doc.status);
@@ -594,7 +619,7 @@ export default function ReviewWorkspace({
 
   const handlePublishToVectorDb = async () => {
     const targetDocId = doc?.documentId || doc?.id || docId;
-    if (!targetDocId || isPublishingToVectorDb) return;
+    if (!targetDocId || isPublishingToVectorDb || !allClausesSaved) return;
     setIsPublishingToVectorDb(true);
     try {
       const deletedIds = new Set(
@@ -949,6 +974,7 @@ export default function ReviewWorkspace({
             ...row,
             ...updates,
             isLocallyEdited: true,
+            isSaved: false,
             decision: updates.decision || (row.decision === 'rejected' ? 'rejected' : 'corrected'),
           };
         }
@@ -1227,7 +1253,7 @@ export default function ReviewWorkspace({
             selectedKeySet.has(String(row.paraId)) ||
             selectedKeySet.has(String(idx))
           )
-        : extractedClauses.filter((row) => row.isLocallyEdited || row.is_text_modified);
+        : extractedClauses.filter((row) => row.isLocallyEdited || row.is_text_modified || !row.isSaved);
 
       const itemsToProcess = rowsToSave.length > 0 ? rowsToSave : extractedClauses;
 
@@ -1307,6 +1333,7 @@ export default function ReviewWorkspace({
               isReviewed: true,
               isLocallyEdited: false,
               is_text_modified: false,
+              isSaved: true,
               outcome: 'reviewed',
               deviated: false,
               review_reasons: [],
@@ -1429,8 +1456,21 @@ export default function ReviewWorkspace({
   };
 
   const handleOpenDeleteModal = (targetClauses) => {
-    const list = Array.isArray(targetClauses) ? targetClauses : (targetClauses ? [targetClauses] : []);
-    if (list.length === 0) return;
+    const rawList = Array.isArray(targetClauses) ? targetClauses : (targetClauses ? [targetClauses] : []);
+    if (rawList.length === 0) return;
+    const list = rawList.map((item) => {
+      if (typeof item === 'object' && item !== null) return item;
+      const key = String(item);
+      return (
+        extractedClauses.find(
+          (c) =>
+            String(c.classification_id) === key ||
+            String(c.id) === key ||
+            String(c.clause_id) === key ||
+            String(c.paraId) === key
+        ) || { clause_id: key, breadcrumb: 'General', id: key }
+      );
+    });
     setDeleteModalState({
       open: true,
       clause: list[0] || null,
@@ -1564,7 +1604,11 @@ export default function ReviewWorkspace({
     const targetDocId = doc?.documentId || doc?.id || docId;
     if (!targetDocId) return;
 
-    const idsToRestore = list.map((item) => String(item.classification_id || item.id || item.clause_id));
+    const idsToRestore = list.flatMap((item) => [
+      item.classification_id ? String(item.classification_id) : null,
+      item.id ? String(item.id) : null,
+      item.clause_id ? String(item.clause_id) : null,
+    ].filter(Boolean));
     setIsRestoringClause(true);
     setRestoringClauseIds((prev) => [...new Set([...prev, ...idsToRestore])]);
 
@@ -1973,6 +2017,8 @@ export default function ReviewWorkspace({
               title={
                 !canEdit
                   ? 'Document is read-only. Editing access required.'
+                  : !allClausesSaved
+                  ? 'All clauses should be saved'
                   : 'Publish verified document data to Vector DB'
               }
               arrow
@@ -1988,18 +2034,18 @@ export default function ReviewWorkspace({
                       <CloudUploadOutlinedIcon sx={{ fontSize: 15 }} />
                     )
                   }
-                  disabled={!canEdit || isPublishingToVectorDb}
+                  disabled={!canEdit || !allClausesSaved || isPublishingToVectorDb}
                   onClick={handlePublishToVectorDb}
                   sx={{
                     height: 30,
                     fontSize: '12px',
                     textTransform: 'none',
-                    bgcolor: canEdit ? '#059669' : '#94a3b8',
+                    bgcolor: canEdit && allClausesSaved ? '#059669' : '#94a3b8',
                     color: '#ffffff',
                     boxShadow: 'none',
                     fontWeight: 600,
                     '&:hover': {
-                      bgcolor: canEdit ? '#047857' : '#94a3b8',
+                      bgcolor: canEdit && allClausesSaved ? '#047857' : '#94a3b8',
                       boxShadow: 'none',
                     },
                     '&.Mui-disabled': {
@@ -2082,7 +2128,7 @@ export default function ReviewWorkspace({
                     <span>Request Sent…</span>
                   </Box>
                 ) : (
-                  'Request Review Access'
+                  'Request Editing Access'
                 )}
               </Button>
             )}
@@ -2434,25 +2480,48 @@ export default function ReviewWorkspace({
               : 'Are you sure you want to delete this clause? It will be moved to the Deleted filter where it can be restored at any time.'}
           </Typography>
 
-          {deleteModalState.clause && (
+          {deleteModalState.clauses && deleteModalState.clauses.length > 0 ? (
+            <Box
+              sx={{
+                mb: 2,
+                maxHeight: 220,
+                overflowY: 'auto',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 1,
+              }}
+            >
+              {deleteModalState.clauses.map((clauseItem, idx) => {
+                const cid =
+                  clauseItem.clause_id ||
+                  clauseItem.paraId ||
+                  (clauseItem.number ? `c${clauseItem.number}` : `c${idx + 1}`);
+                const bcrumb = clauseItem.breadcrumb || clauseItem.heading_trail || 'General';
+                const key = clauseItem.classification_id || clauseItem.id || clauseItem.clause_id || idx;
+                return (
+                  <Box
+                    key={key}
+                    sx={{
+                      p: 1.5,
+                      bgcolor: '#f8fafc',
+                      border: '1px solid #e2e8f0',
+                      borderRadius: 1.5,
+                    }}
+                  >
+                    <Typography sx={{ fontSize: '12px', fontWeight: 600, color: '#1e293b' }}>
+                      {cid} · {bcrumb}
+                    </Typography>
+                  </Box>
+                );
+              })}
+            </Box>
+          ) : deleteModalState.clause ? (
             <Box sx={{ p: 1.5, bgcolor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 1.5, mb: 2 }}>
-              <Typography sx={{ fontSize: '12px', fontWeight: 600, color: '#1e293b', mb: 0.5 }}>
+              <Typography sx={{ fontSize: '12px', fontWeight: 600, color: '#1e293b' }}>
                 {deleteModalState.clause.clause_id} · {deleteModalState.clause.breadcrumb || 'General'}
               </Typography>
-              <Typography
-                sx={{
-                  fontSize: '12px',
-                  color: '#64748b',
-                  display: '-webkit-box',
-                  WebkitLineClamp: 3,
-                  WebkitBoxOrient: 'vertical',
-                  overflow: 'hidden',
-                }}
-              >
-                {deleteModalState.clause.text}
-              </Typography>
             </Box>
-          )}
+          ) : null}
 
           {/* <FormControlLabel
             control={

@@ -1114,14 +1114,14 @@ export default function App() {
           </ProtectedRoute>
         }
       />
-      <Route
+      {/* <Route
         path="/activity-log"
         element={
           <ProtectedRoute>
             <AppWorkspace />
           </ProtectedRoute>
         }
-      />
+      /> */}
       <Route
         path="/vector-playground"
         element={
