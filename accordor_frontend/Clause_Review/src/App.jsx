@@ -18,6 +18,7 @@ import PublicRoute from './components/auth/PublicRoute';
 import { useAuth } from './context/AuthContext';
 import { googleDriveService } from './services/googleDriveService';
 import { documentService } from './services/documentService';
+import { normalizeDocumentList, computeDocumentCounts } from './utils/documentUtils';
 
 // Deduplicate documents strictly by normalized name so a document NEVER appears twice
 function deduplicateDocs(docs) {
@@ -35,9 +36,15 @@ function deduplicateDocs(docs) {
       const existing = map.get(key);
       const existingStatus = (existing.extraction_status || existing.extractionStatus || '').toLowerCase();
       const newStatus = (doc.extraction_status || doc.extractionStatus || '').toLowerCase();
+      const existingPublished = existingStatus === 'published' || existing.review_status === 'published' || existing.isPublished;
+      const newPublished = newStatus === 'published' || doc.review_status === 'published' || doc.isPublished;
       const existingClassified = existingStatus === 'classified' || Boolean(existing.stages?.classification || existing.classified || (existing.stages?.classification?.micro_chunks > 0));
       const newClassified = newStatus === 'classified' || Boolean(doc.stages?.classification || doc.classified || (doc.stages?.classification?.micro_chunks > 0));
-      if (!existingClassified && newClassified) {
+      if (newPublished && !existingPublished) {
+        map.set(key, doc);
+      } else if (existingPublished && !newPublished) {
+        // Keep the published document and its current extraction status.
+      } else if (!existingClassified && newClassified) {
         map.set(key, doc);
       } else if (existingClassified && !newClassified) {
         // Keep existing classified document
@@ -90,7 +97,17 @@ function normalizeDoc(d, currentUser = null) {
     rawStatus === 'rejected' ||
     rawStatus === 'failed';
 
-  const extractionStatus = isClassified
+  const isPublished =
+    rawStatus === 'published' ||
+    d.isPublished ||
+    d.status === 'Published' ||
+    d.status === 'Updated to vector DB' ||
+    d.review_status === 'published' ||
+    (d.vectorDbStatus && (d.vectorDbStatus.startsWith('Updated') || d.vectorDbStatus === 'Published'));
+
+  const extractionStatus = isPublished
+    ? 'published'
+    : isClassified
     ? 'classified'
     : isExtracted
     ? (rawStatus === 'extracted_with_warnings' ? 'extracted_with_warnings' : 'extracted')
@@ -105,13 +122,6 @@ function normalizeDoc(d, currentUser = null) {
     ? d.current_reviewer
     : (d.rawDoc?.current_reviewer !== undefined ? d.rawDoc.current_reviewer : null);
 
-    const isPublished = Boolean(
-      d.isPublished ||
-      d.status === 'Published' ||
-      d.status === 'Updated to vector DB' ||
-      d.review_status === 'published' ||
-      (d.vectorDbStatus && (d.vectorDbStatus.startsWith('Updated') || d.vectorDbStatus === 'Published'))
-    );
     return {
       id: d.document_id || d.id,
       documentId: d.document_id || d.id,
@@ -207,6 +217,13 @@ function AppWorkspace() {
   });
   const [_isLoadingDocs, setIsLoadingDocs] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [serverStats, setServerStats] = useState(() => {
+    try {
+      const cached = sessionStorage.getItem('accordor_stats_v1');
+      if (cached) return JSON.parse(cached);
+    } catch (_) {}
+    return null;
+  });
 
   // Clear legacy cache keys
   useEffect(() => {
@@ -317,14 +334,14 @@ function AppWorkspace() {
   const queueDocuments = React.useMemo(() => {
     return fetchedDocuments.filter((d) => {
       const status = (d.extraction_status || d.extractionStatus || 'pending').toLowerCase();
-      return status !== 'classified';
+      return status !== 'classified' && status !== 'published';
     });
   }, [fetchedDocuments]);
 
   const extractedDocuments = React.useMemo(() => {
     return fetchedDocuments.filter((d) => {
       const status = (d.extraction_status || d.extractionStatus || '').toLowerCase();
-      return status === 'classified' || d.status === 'Saved' || d.isSaved;
+      return status === 'classified' || status === 'published' || d.status === 'Saved' || d.isSaved;
     });
   }, [fetchedDocuments]);
 
@@ -560,9 +577,27 @@ function AppWorkspace() {
     verifyAuthStatus();
   }, [currentUser]);
 
-  // Stats: use server-side counts when they are available (fast, accurate);
-  // fall back to deriving from the fetched document list while it loads.
+  // Stats: prioritize deriving from normalized active document list to match Documents section filter chips exactly;
+  // fall back to server-side counts if documents are not yet loaded.
   const stats = React.useMemo(() => {
+    if (extractedDocuments && extractedDocuments.length > 0) {
+      const normalized = normalizeDocumentList(extractedDocuments, driveState);
+      const docCounts = computeDocumentCounts(normalized);
+      const processing = queueDocuments.filter((d) => {
+        const s = (d.extractionStatus || d.extraction_status || 'pending').toLowerCase();
+        return s === 'pending' || s === 'extracted' || s === 'extracted_with_warnings';
+      }).length;
+      return {
+        needsReview: docCounts.needsReview,
+        processing,
+        inReview: docCounts.inReview,
+        draft: docCounts.draft,
+        reviewed: docCounts.reviewed,
+        inreviewed: docCounts.inreviewed,
+        indraft: docCounts.indraft,
+        updatedToVector: docCounts.published,
+      };
+    }
     if (serverStats && serverStats.counts) {
       const c = serverStats.counts;
       const reviewed = (c.reviewed || 0) + (c.published || 0) + (c.reopened_reviewed || 0);
@@ -572,31 +607,28 @@ function AppWorkspace() {
         processing: (c.pending || 0) + (c.pending_classification || 0),
         inReview: (c.in_review || 0) + (c.reopened_in_review || 0),
         draft,
-        // Overview reads both .reviewed and .inreviewed — keep both in sync
         reviewed,
         inreviewed: reviewed,
         indraft: draft,
         updatedToVector: (c.published || 0),
       };
     }
-    // Fallback to local derivation while document list is loading
-    const reviewed = extractedDocuments.filter((d) => d.status === 'Reviewed' || (d.extractionStatus === 'classified' && d.needsReview === 0)).length;
-    const draft = queueDocuments.filter((d) => d.extractionStatus === 'rejected').length + extractedDocuments.filter((d) => d.status === 'Draft').length;
+    // Fallback when empty
+    const processing = queueDocuments.filter((d) => {
+      const s = (d.extractionStatus || d.extraction_status || 'pending').toLowerCase();
+      return s === 'pending' || s === 'extracted' || s === 'extracted_with_warnings';
+    }).length;
     return {
-      needsReview: extractedDocuments.filter((d) => (d.needsReview > 0) || d.status === 'Needs review').length,
-      processing: queueDocuments.filter((d) => {
-        const s = (d.extractionStatus || d.extraction_status || 'pending').toLowerCase();
-        return s === 'pending' || s === 'extracted' || s === 'extracted_with_warnings';
-      }).length,
-      inReview: extractedDocuments.filter((d) => d.status === 'In review' || Boolean(d.current_reviewer)).length,
-      draft,
-      reviewed,
-      // Overview reads both .reviewed and .inreviewed — keep both in sync
-      inreviewed: reviewed,
-      indraft: draft,
-      updatedToVector: extractedDocuments.filter((d) => d.vectorDbStatus && d.vectorDbStatus.startsWith('Updated')).length,
+      needsReview: 0,
+      processing,
+      inReview: 0,
+      draft: 0,
+      reviewed: 0,
+      inreviewed: 0,
+      indraft: 0,
+      updatedToVector: 0,
     };
-  }, [serverStats, extractedDocuments, queueDocuments]);
+  }, [serverStats, extractedDocuments, queueDocuments, driveState]);
 
   // Manual Google Drive OAuth connect
   const handleConnectDrive = () => {
@@ -940,6 +972,7 @@ function AppWorkspace() {
               <Overview
                 driveState={driveState}
                 stats={stats}
+                documents={extractedDocuments}
                 queueItems={queueDocuments}
                 searchQuery={searchQuery}
                 onOpenPicker={handleOpenPicker}
@@ -947,7 +980,7 @@ function AppWorkspace() {
                 onCheckDrive={handleCheckDrive}
                 onNavigateToDocuments={() => handleNavSelect('documents')}
                 onNavigateToActivityLog={() => handleNavSelect('activity-log')}
-                isEmptyData={fetchedDocuments.length === 0}
+                isEmptyData={extractedDocuments.length === 0}
               />
             ) : activeNav === 'documents' ? (
               <Documents
@@ -972,6 +1005,7 @@ function AppWorkspace() {
               <Overview
                 driveState={driveState}
                 stats={stats}
+                documents={extractedDocuments}
                 queueItems={queueDocuments}
                 searchQuery={searchQuery}
                 onOpenPicker={handleOpenPicker}
@@ -979,7 +1013,7 @@ function AppWorkspace() {
                 onCheckDrive={handleCheckDrive}
                 onNavigateToDocuments={() => handleNavSelect('documents')}
                 onNavigateToActivityLog={() => handleNavSelect('activity-log')}
-                isEmptyData={fetchedDocuments.length === 0}
+                isEmptyData={extractedDocuments.length === 0}
               />
             )}
           </>

@@ -16,6 +16,7 @@ import {
   Checkbox,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
 import UndoOutlinedIcon from '@mui/icons-material/UndoOutlined';
 import SaveOutlinedIcon from '@mui/icons-material/SaveOutlined';
 import CloudUploadOutlinedIcon from '@mui/icons-material/CloudUploadOutlined';
@@ -120,14 +121,25 @@ export default function ReviewWorkspace({
   const docId = doc?.documentId || doc?.id || '';
 
   const currentUserIdRef = useRef(currentUserId);
+  const currentUserNameRef = useRef(currentUserName);
+  const showToastRef = useRef(showToast);
+  const lockOwnerIdRef = useRef(null);
+  const lockStateRevisionRef = useRef(0);
   const lockEffectDocumentIdRef = useRef(docId);
   const [workspaceLock, setWorkspaceLock] = useState({ status: 'connecting', documentId: docId });
   const lockOwnedRef = useRef(false);
   const heartbeatRef = useRef(null);
+  const startHeartbeatRef = useRef(null);
+  const pendingAccessRequestRef = useRef(false);
   const lockEffectGenerationRef = useRef(0);
   const socketRef = useRef(null);
   const [isRequestingAccess, setIsRequestingAccess] = useState(false);
   const [incomingAccessRequest, setIncomingAccessRequest] = useState(null);
+  const [isRespondingAccess, setIsRespondingAccess] = useState(false);
+
+  currentUserIdRef.current = currentUserId;
+  currentUserNameRef.current = currentUserName;
+  showToastRef.current = showToast;
 
   const handleHeartbeatFailure = useCallback(
     (error) => {
@@ -135,15 +147,18 @@ export default function ReviewWorkspace({
       lockOwnedRef.current = false;
       if (heartbeatRef.current) window.clearInterval(heartbeatRef.current);
       heartbeatRef.current = null;
-      setWorkspaceLock({ status: 'error', documentId: docId });
+      setWorkspaceLock((current) => (
+        current.status === 'read-only'
+          ? current
+          : { status: 'error', documentId: docId }
+      ));
     },
     [docId]
   );
 
   useEffect(() => {
-    currentUserIdRef.current = currentUserId;
     lockEffectDocumentIdRef.current = docId;
-  }, [currentUserId, docId]);
+  }, [docId]);
 
   // Clean legacy local storage caches on workspace mount
   useEffect(() => {
@@ -167,6 +182,8 @@ export default function ReviewWorkspace({
     let reconnectAttempts = 0;
     let releasedDuringCleanup = false;
     const token = getStoredToken();
+    pendingAccessRequestRef.current = false;
+    const initialLockRevision = lockStateRevisionRef.current;
 
     const setHeartbeat = () => {
       if (heartbeatRef.current) window.clearInterval(heartbeatRef.current);
@@ -174,6 +191,7 @@ export default function ReviewWorkspace({
         documentService.heartbeatWorkspaceLock(docId).catch(handleHeartbeatFailure);
       }, 60000);
     };
+    startHeartbeatRef.current = setHeartbeat;
 
     const connectSocket = () => {
       if (!active || !token) return;
@@ -181,6 +199,10 @@ export default function ReviewWorkspace({
       socketRef.current = socket;
       socket.onopen = () => {
         reconnectAttempts = 0;
+        if (pendingAccessRequestRef.current) {
+          socket.send(JSON.stringify({ event: 'request_access' }));
+          pendingAccessRequestRef.current = false;
+        }
       };
       socket.onmessage = (message) => {
         let update;
@@ -192,12 +214,12 @@ export default function ReviewWorkspace({
 
         // Access handover events
         if (update.event === 'access_requested') {
-          // If I am the active editor and someone else requested access
           const requester = update.requested_by;
           if (
             lockOwnedRef.current &&
+            String(update.target_user_id) === String(currentUserIdRef.current) &&
             requester &&
-            String(requester).toLowerCase() !== String(currentUserName).toLowerCase()
+            String(requester).toLowerCase() !== String(currentUserNameRef.current).toLowerCase()
           ) {
             setIncomingAccessRequest({
               requestedBy: requester,
@@ -207,33 +229,61 @@ export default function ReviewWorkspace({
           return;
         }
 
+        if (update.event === 'access_request_unavailable' || update.event === 'access_request_self') {
+          setIsRequestingAccess(false);
+          if (update.event === 'access_request_unavailable') {
+            setWorkspaceLock({ status: 'available', documentId: docId });
+            lockOwnerIdRef.current = null;
+            showToastRef.current?.('No reviewer is currently holding the document. You can take editing access.', 'info');
+          }
+          return;
+        }
+
         if (update.event === 'access_granted') {
           const isTargetedToMe =
-            String(update.target_user_id) === String(currentUserIdRef.current) ||
-            (update.target_user && String(update.target_user).toLowerCase() === String(currentUserName).toLowerCase());
+            (update.target_user_id && String(update.target_user_id) === String(currentUserIdRef.current)) ||
+            (update.target_user && String(update.target_user).toLowerCase() === String(currentUserNameRef.current).toLowerCase());
           if (isTargetedToMe) {
             setIsRequestingAccess(false);
-            showToast?.(`${update.granted_by || 'The editor'} granted editing access! Taking over…`, 'success');
-            handleTakeEditingAccess();
+            lockStateRevisionRef.current += 1;
+            lockOwnedRef.current = true;
+            lockOwnerIdRef.current = currentUserIdRef.current;
+            startHeartbeatRef.current?.();
+            setWorkspaceLock({
+              status: 'editing',
+              lockedBy: currentUserNameRef.current,
+              lockedById: currentUserIdRef.current,
+              documentId: docId,
+            });
+            showToastRef.current?.(`${update.granted_by || 'The reviewer'} granted review access.`, 'success');
           }
           return;
         }
 
         if (update.event === 'access_denied') {
           const isTargetedToMe =
-            String(update.target_user_id) === String(currentUserIdRef.current) ||
-            (update.target_user && String(update.target_user).toLowerCase() === String(currentUserName).toLowerCase());
+            (update.target_user_id && String(update.target_user_id) === String(currentUserIdRef.current)) ||
+            (update.target_user && String(update.target_user).toLowerCase() === String(currentUserNameRef.current).toLowerCase());
           if (isTargetedToMe) {
             setIsRequestingAccess(false);
-            showToast?.(`${update.denied_by || 'The editor'} is currently editing and declined the handover request.`, 'warning');
+            showToastRef.current?.(`${update.denied_by || 'The reviewer'} is currently editing and declined the handover request.`, 'warning');
           }
           return;
         }
 
         if (!['lock_state', 'document_opened', 'document_closed'].includes(update.event)) return;
+        lockStateRevisionRef.current += 1;
 
         if (update.event === 'document_closed') {
+          if (lockOwnedRef.current) return;
+          if (
+            lockOwnerIdRef.current &&
+            (!update.closed_by_id || String(lockOwnerIdRef.current) !== String(update.closed_by_id))
+          ) {
+            return;
+          }
           lockOwnedRef.current = false;
+          lockOwnerIdRef.current = null;
           if (heartbeatRef.current) window.clearInterval(heartbeatRef.current);
           heartbeatRef.current = null;
           setWorkspaceLock({ status: 'available', closedBy: update.closed_by, documentId: docId });
@@ -243,9 +293,15 @@ export default function ReviewWorkspace({
         if (update.locked) {
           const isMine =
             String(update.locked_by_id) === String(currentUserIdRef.current) ||
-            (update.locked_by && String(update.locked_by).toLowerCase() === String(currentUserName).toLowerCase());
+            (update.locked_by && String(update.locked_by).toLowerCase() === String(currentUserNameRef.current).toLowerCase());
           lockOwnedRef.current = isMine;
-          if (isMine) setHeartbeat();
+          lockOwnerIdRef.current = update.locked_by_id || null;
+          if (isMine) {
+            setHeartbeat();
+          } else {
+            if (heartbeatRef.current) window.clearInterval(heartbeatRef.current);
+            heartbeatRef.current = null;
+          }
           setWorkspaceLock({
             status: isMine ? 'editing' : 'read-only',
             lockedBy: update.locked_by,
@@ -253,6 +309,7 @@ export default function ReviewWorkspace({
           });
         } else {
           lockOwnedRef.current = false;
+          lockOwnerIdRef.current = null;
           setWorkspaceLock({ status: 'available', closedBy: update.closed_by, documentId: docId });
         }
       };
@@ -274,10 +331,10 @@ export default function ReviewWorkspace({
           result?.acquired === true ||
           result?.is_read_only === false ||
           result?.status === 'editing' ||
-          (result?.locked_by && String(result.locked_by).toLowerCase() === String(currentUserName).toLowerCase())
+          (result?.locked_by && String(result.locked_by).toLowerCase() === String(currentUserNameRef.current).toLowerCase())
         );
         const finalStatus = isEditing ? 'editing' : (result?.status || 'read-only');
-        const finalLockedBy = isEditing ? currentUserName : (result?.locked_by || '');
+        const finalLockedBy = isEditing ? currentUserNameRef.current : (result?.locked_by || '');
 
         if (!active) {
           const replayedForSameDocument =
@@ -288,11 +345,16 @@ export default function ReviewWorkspace({
           }
           return;
         }
+        if (lockStateRevisionRef.current !== initialLockRevision) return;
         lockOwnedRef.current = finalStatus === 'editing';
+        lockOwnerIdRef.current = isEditing
+          ? currentUserIdRef.current
+          : (result?.locked_by_id || null);
         if (finalStatus === 'editing') setHeartbeat();
         setWorkspaceLock({
           status: finalStatus,
           lockedBy: finalLockedBy,
+          lockedById: lockOwnerIdRef.current,
           closedBy: result?.closed_by,
           documentId: docId,
         });
@@ -300,12 +362,15 @@ export default function ReviewWorkspace({
       .catch((error) => {
         if (!active) return;
         lockOwnedRef.current = false;
+        lockOwnerIdRef.current = null;
         setWorkspaceLock({ status: 'error', documentId: docId });
-        showToast?.(error.message || 'Could not acquire document access.');
+        showToastRef.current?.(error.message || 'Could not acquire document access.');
       });
 
     return () => {
       active = false;
+      pendingAccessRequestRef.current = false;
+      startHeartbeatRef.current = null;
       if (heartbeatRef.current) window.clearInterval(heartbeatRef.current);
       heartbeatRef.current = null;
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
@@ -319,7 +384,7 @@ export default function ReviewWorkspace({
         documentService.releaseWorkspaceLock(docId, { keepalive: true }).catch(() => {});
       }
     };
-  }, [docId, handleHeartbeatFailure, showToast, currentUserName]);
+  }, [docId, handleHeartbeatFailure]);
 
   // Fire a lock-release beacon on hard page unload (tab close, browser close,
   // direct URL navigation). navigator.sendBeacon is queued by the browser and
@@ -357,77 +422,89 @@ export default function ReviewWorkspace({
       const finalLockedBy = isEditing ? currentUserName : (result?.locked_by || '');
 
       lockOwnedRef.current = finalStatus === 'editing';
-      if (finalStatus === 'editing') setHeartbeat();
-      setWorkspaceLock({ status: finalStatus, lockedBy: finalLockedBy, documentId: docId });
-      showToast?.('Editing access acquired.', 'success');
+      lockOwnerIdRef.current = isEditing
+        ? currentUserIdRef.current
+        : (result?.locked_by_id || null);
+      if (finalStatus === 'editing') startHeartbeatRef.current?.();
+      setWorkspaceLock({
+        status: finalStatus,
+        lockedBy: finalLockedBy,
+        lockedById: lockOwnerIdRef.current,
+        documentId: docId,
+      });
+      if (finalStatus === 'editing') {
+        showToast?.('Editing access acquired.', 'success');
+      } else {
+        showToast?.(`This document is currently being reviewed by ${finalLockedBy || 'another reviewer'}.`, 'warning');
+      }
     } catch (err) {
       showToast?.(err.message || 'Could not take editing access.', 'error');
     }
   };
 
   const handleRequestEditingAccess = async () => {
-    setIsRequestingAccess(true);
-    try {
-      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-        socketRef.current.send(JSON.stringify({ event: 'request_access' }));
-      }
-      const res = await documentService.requestWorkspaceAccess(docId);
-      if (res?.status === 'available') {
-        showToast?.('Document is now available. Acquiring editing access…', 'success');
-        handleTakeEditingAccess();
-        setIsRequestingAccess(false);
-        return;
-      }
-      showToast?.(`Access request sent to ${workspaceLock.lockedBy || 'the reviewer'}. Waiting for response…`, 'info');
-    } catch (err) {
-      setIsRequestingAccess(false);
-      showToast?.(err.message || 'Could not send access request.', 'error');
+    const socket = socketRef.current;
+    if (!socket || socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
+      showToast?.('The live connection is unavailable. Reconnect before requesting review access.', 'error');
+      return;
     }
+    setIsRequestingAccess(true);
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ event: 'request_access' }));
+    } else {
+      pendingAccessRequestRef.current = true;
+    }
+    showToast?.(`Access request sent to ${workspaceLock.lockedBy || 'the reviewer'}. Waiting for response…`, 'info');
   };
 
   const handleGrantAccessToRequester = async () => {
     if (!incomingAccessRequest) return;
     const { requestedBy, requestedById } = incomingAccessRequest;
+    setIsRespondingAccess(true);
     try {
-      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-        socketRef.current.send(JSON.stringify({
-          event: 'grant_access',
-          target_user: requestedBy,
-          target_user_id: requestedById,
-        }));
+      if (hasUnsavedChanges) {
+        const saved = await handleSaveClassification();
+        if (!saved) return;
       }
-      await documentService.respondWorkspaceAccess(docId, 'grant', requestedById, requestedBy);
+      await documentService.respondWorkspaceAccess(docId, 'grant', requestedById);
       lockOwnedRef.current = false;
+      lockOwnerIdRef.current = requestedById;
       if (heartbeatRef.current) window.clearInterval(heartbeatRef.current);
       heartbeatRef.current = null;
-      setWorkspaceLock({ status: 'read-only', lockedBy: requestedBy, documentId: docId });
+      setWorkspaceLock({
+        status: 'read-only',
+        lockedBy: requestedBy,
+        lockedById: requestedById,
+        documentId: docId,
+      });
       setIncomingAccessRequest(null);
       showToast?.(`Editing access granted to ${requestedBy}. Document is now read-only.`, 'success');
     } catch (err) {
       showToast?.(err.message || 'Could not grant editing access.', 'error');
+    } finally {
+      setIsRespondingAccess(false);
     }
   };
 
   const handleDeclineAccessRequest = async () => {
     if (!incomingAccessRequest) return;
     const { requestedBy, requestedById } = incomingAccessRequest;
+    setIsRespondingAccess(true);
     try {
-      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-        socketRef.current.send(JSON.stringify({
-          event: 'deny_access',
-          target_user: requestedBy,
-          target_user_id: requestedById,
-        }));
-      }
-      await documentService.respondWorkspaceAccess(docId, 'deny', requestedById, requestedBy);
+      await documentService.respondWorkspaceAccess(docId, 'deny', requestedById);
       setIncomingAccessRequest(null);
       showToast?.(`Declined access request from ${requestedBy}.`, 'info');
-    } catch {
-      setIncomingAccessRequest(null);
+    } catch (err) {
+      showToast?.(err.message || 'Could not decline the access request.', 'error');
+    } finally {
+      setIsRespondingAccess(false);
     }
   };
 
   const canEdit = workspaceLock.status === 'editing';
+  const activeReviewerName = workspaceLock.status === 'editing'
+    ? currentUserName
+    : workspaceLock.lockedBy;
 
   // Navigation tabs: 'review' | 'history' | 'note'
   const [activeTab, setActiveTab] = useState('review');
@@ -491,6 +568,8 @@ export default function ReviewWorkspace({
   const [lastSavedTimestamp, setLastSavedTimestamp] = useState(doc?.lastSaved || null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [isSavingClassification, setIsSavingClassification] = useState(false);
+  const [isRestoringClause, setIsRestoringClause] = useState(false);
+  const [restoringClauseIds, setRestoringClauseIds] = useState([]);
 
   const needsReviewCount = useMemo(() => {
     return extractedClauses.filter(
@@ -557,6 +636,7 @@ export default function ReviewWorkspace({
       const updatedPublishDoc = {
         ...doc,
         status: 'Updated to vector DB',
+        extraction_status: 'published',
         review_status: 'published',
         vectorDbStatus: 'Updated to vector DB',
         isPublished: true,
@@ -1102,7 +1182,7 @@ export default function ReviewWorkspace({
     const targetDocId = doc?.documentId || doc?.id || docId;
     if (!targetDocId) {
       showToast?.('No document ID found.', 'error');
-      return;
+      return false;
     }
 
     if (!canEdit) {
@@ -1120,7 +1200,7 @@ export default function ReviewWorkspace({
         }
       } catch (_) {
         showToast?.('Document is read-only. Cannot save changes.', 'warning');
-        return;
+        return false;
       }
     }
 
@@ -1276,17 +1356,14 @@ export default function ReviewWorkspace({
               (r) => !r.isReviewed && !r.review?.decision && (r.needs_review || r.needsReview)
             ).length;
 
-      const liveNeedsReviewCount = (freshDocRow?.stages?.classification?.needs_review !== undefined && freshDocRow?.stages?.classification?.needs_review !== null)
-        ? freshDocRow.stages.classification.needs_review
-        : remainingNeedsReview;
+      const liveNeedsReviewCount = remainingNeedsReview;
 
       const updatedDoc = {
         ...doc,
-        ...(freshDocRow || {}),
         status: displayStatus,
         review_status: backendStatus,
-        needsReview: remainingNeedsReview,
-        needs_review: remainingNeedsReview,
+        needsReview: liveNeedsReviewCount,
+        needs_review: liveNeedsReviewCount,
         lastSaved: 'Today',
         modifiedTime: nowFormatted,
         isSaved: true,
@@ -1332,6 +1409,7 @@ export default function ReviewWorkspace({
       } catch (_) {}
 
       showToast?.(`Saved ${savedCount} clause decisions to database. Updated data loaded!`, 'success');
+      return true;
     } catch (err) {
       console.error('Error saving classification:', err);
       if (err.status === 409) {
@@ -1344,6 +1422,7 @@ export default function ReviewWorkspace({
         const problem = specificErrors ? `${baseDetail}: ${specificErrors}` : baseDetail;
         showToast?.(`Save error: ${problem}`, 'error');
       }
+      return false;
     } finally {
       setIsSavingClassification(false);
     }
@@ -1485,6 +1564,10 @@ export default function ReviewWorkspace({
     const targetDocId = doc?.documentId || doc?.id || docId;
     if (!targetDocId) return;
 
+    const idsToRestore = list.map((item) => String(item.classification_id || item.id || item.clause_id));
+    setIsRestoringClause(true);
+    setRestoringClauseIds((prev) => [...new Set([...prev, ...idsToRestore])]);
+
     let runId = classificationRunId;
     if (!runId) {
       const classInfo = await documentService.classification(targetDocId).catch(() => null);
@@ -1608,6 +1691,9 @@ export default function ReviewWorkspace({
     } catch (err) {
       console.error('Restore clause error:', err);
       showToast?.(err?.data?.detail || err?.message || err?.detail || 'Failed to restore clause', 'error');
+    } finally {
+      setIsRestoringClause(false);
+      setRestoringClauseIds((prev) => prev.filter((id) => !idsToRestore.includes(id)));
     }
   };
 
@@ -1765,6 +1851,22 @@ export default function ReviewWorkspace({
                   ...getStatusBadgeStyle(documentStatus),
                 }}
               />
+              {activeReviewerName && (
+                <Chip
+                  icon={<FiberManualRecordIcon sx={{ fontSize: '10px !important' }} />}
+                  label={`${activeReviewerName} · Online`}
+                  size="small"
+                  sx={{
+                    height: 22,
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    bgcolor: '#ecfdf5',
+                    color: '#15803d',
+                    border: '1px solid #bbf7d0',
+                    '& .MuiChip-icon': { color: '#16a34a', ml: '6px', mr: '-3px' },
+                  }}
+                />
+              )}
             </Box>
 
             {/* Agreement Type and Sectorial Category */}
@@ -1796,18 +1898,33 @@ export default function ReviewWorkspace({
                 border: '1px solid #bbf7d0',
               }}
             />
-            <Chip
-              label={`${needsReviewCount} Needs review`}
-              size="small"
-              sx={{
-                height: 24,
-                fontSize: '11px',
-                fontWeight: 600,
-                bgcolor: '#fef3c7',
-                color: '#b45309',
-                border: '1px solid #fde68a',
-              }}
-            />
+            {needsReviewCount > 0 ? (
+              <Chip
+                label={`${needsReviewCount} Needs review`}
+                size="small"
+                sx={{
+                  height: 24,
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  bgcolor: '#fef3c7',
+                  color: '#b45309',
+                  border: '1px solid #fde68a',
+                }}
+              />
+            ) : (
+              <Chip
+                label="Reviewed"
+                size="small"
+                sx={{
+                  height: 24,
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  bgcolor: '#dcfce7',
+                  color: '#15803d',
+                  border: '1px solid #bbf7d0',
+                }}
+              />
+            )}
 
             {lastSavedTimestamp && (
               <Typography sx={{ fontSize: '11.5px', color: '#64748b', ml: 0.5, mr: 0.5 }}>
@@ -1965,7 +2082,7 @@ export default function ReviewWorkspace({
                     <span>Request Sent…</span>
                   </Box>
                 ) : (
-                  'Request Access'
+                  'Request Review Access'
                 )}
               </Button>
             )}
@@ -1985,7 +2102,7 @@ export default function ReviewWorkspace({
             color: '#7b838c',
           }}
         >
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+          {/* <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
             <span>
               pages: {doc.pages ?? 1} · clauses: {doc.clauses ?? totalChunks} · paragraphs:{' '}
               {doc.paragraphs ?? totalChunks} · {doc.size || 'Document'}
@@ -1994,7 +2111,7 @@ export default function ReviewWorkspace({
             <span>
               Current reviewer <strong style={{ color: '#1b1f24' }}>{currentUserName}</strong>
             </span>
-          </Box>
+          </Box> */}
         </Box>
       </Box>
 
@@ -2125,6 +2242,8 @@ export default function ReviewWorkspace({
             deletedClauses={deletedClauses}
             onDeleteClause={handleOpenDeleteModal}
             onRestoreClause={handleRestoreClause}
+            isRestoring={isRestoringClause}
+            restoringClauseIds={restoringClauseIds}
           />
 
           {/* Right: Document Preview Panel */}
@@ -2412,7 +2531,7 @@ export default function ReviewWorkspace({
           </Typography>
           <Typography sx={{ fontSize: '12px', color: '#64748b', mt: 1.2 }}>
             {hasUnsavedChanges
-              ? 'Your pending unsaved changes will be saved to the database before handing over.'
+              ? 'Your pending changes will be saved before the handover.'
               : 'Granting access will transfer the edit lock and switch your view to read-only.'}
           </Typography>
         </DialogContent>
@@ -2421,6 +2540,7 @@ export default function ReviewWorkspace({
             onClick={handleDeclineAccessRequest}
             variant="outlined"
             size="small"
+            disabled={isRespondingAccess}
             sx={{ textTransform: 'none', color: '#64748b', borderColor: '#cbd5e1', fontWeight: 600 }}
           >
             Decline
@@ -2429,6 +2549,7 @@ export default function ReviewWorkspace({
             variant="contained"
             size="small"
             onClick={handleGrantAccessToRequester}
+            disabled={isRespondingAccess}
             sx={{
               textTransform: 'none',
               bgcolor: '#16a34a',
@@ -2438,7 +2559,7 @@ export default function ReviewWorkspace({
               px: 2,
             }}
           >
-            Grant Access
+            {isRespondingAccess ? 'Saving and granting…' : 'Grant Access'}
           </Button>
         </DialogActions>
       </Dialog>

@@ -32,7 +32,11 @@ class EmbeddingServiceTests(unittest.TestCase):
             sub_type='Duration',
             confidence=0.95,
             chunk=None,
-            document=SimpleNamespace(name='Agreement.docx'),
+            document=SimpleNamespace(
+                name='Agreement.docx',
+                agreement_type='Services Agreement',
+                sectorial_category='Technology',
+            ),
         )
         embedding_response = Mock()
         embedding_response.json.return_value = {'embeddings': [[0.1, 0.2]]}
@@ -55,7 +59,7 @@ class EmbeddingServiceTests(unittest.TestCase):
             'updated': 0,
         })
         post.assert_called_once_with(
-            'http://54.215.196.139:8000/embed',
+            'http://18.144.172.78:8000/embed',
             json={'texts': ['Reviewed clause text']},
             headers={'Accept': '*/*'},
             timeout=60,
@@ -71,6 +75,8 @@ class EmbeddingServiceTests(unittest.TestCase):
         self.assertEqual(point['payload']['vector_id'], 'document-id::P-001')
         self.assertEqual(point['payload']['document_id'], 'document-id')
         self.assertEqual(point['payload']['document_name'], 'Agreement.docx')
+        self.assertEqual(point['payload']['agreement_type'], 'Services Agreement')
+        self.assertEqual(point['payload']['sectorial_category'], 'Technology')
         self.assertEqual(point['payload']['embedding_dim'], 2)
         self.assertEqual(point['payload']['paragraph_id'], 'P-001')
         self.assertEqual(point['payload']['text'], 'Reviewed clause text')

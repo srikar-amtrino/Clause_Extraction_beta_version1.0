@@ -21,6 +21,7 @@ class Document(models.Model):
         ('extracted', 'extracted'),
         ('extracted_with_warnings', 'extracted_with_warnings'),
         ('classified', 'classified'),
+        ('published', 'published'),
         ('rejected', 'rejected'),
         ('failed', 'failed'),
     ]

@@ -147,6 +147,13 @@ export const documentService = {
     return post(`/api/documents/${documentId}/workspace/lock/release/`, {}, options);
   },
 
+  respondWorkspaceAccess(documentId, action, targetUserId) {
+    return post(`/api/documents/${documentId}/workspace/lock/respond/`, {
+      action,
+      target_user_id: targetUserId,
+    });
+  },
+
   publishToVectorDb(documentId, data = {}) {
     return post(`/api/documents/${documentId}/workspace/publish/`, data);
   },
