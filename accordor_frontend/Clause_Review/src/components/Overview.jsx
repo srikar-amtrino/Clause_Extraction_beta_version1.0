@@ -57,8 +57,8 @@ export default function Overview({
     needsReview: docCounts ? docCounts.needsReview : (stats?.needsReview ?? 0),
     processing: stats?.processing ?? (queueItems?.length ?? 0),
     inReview: docCounts ? docCounts.inReview : (stats?.inReview ?? 0),
-    draft: docCounts ? docCounts.draft : (stats?.draft ?? stats?.indraft ?? 0),
-    indraft: docCounts ? docCounts.indraft : (stats?.indraft ?? stats?.draft ?? 0),
+    // draft: docCounts ? docCounts.draft : (stats?.draft ?? stats?.indraft ?? 0),
+    // indraft: docCounts ? docCounts.indraft : (stats?.indraft ?? stats?.draft ?? 0),
     reviewed: docCounts ? docCounts.reviewed : (stats?.reviewed ?? stats?.inreviewed ?? 0),
     inreviewed: docCounts ? docCounts.inreviewed : (stats?.inreviewed ?? stats?.reviewed ?? 0),
     updatedToVector: docCounts ? docCounts.published : (stats?.updatedToVector ?? 0),
@@ -186,7 +186,7 @@ export default function Overview({
                     >
                       📁 {driveState.folderPath}
                     </Box>
-                    {/* {driveState.agreementType && (
+                    {driveState.agreementType && (
                       <Chip
                         label={driveState.agreementType}
                         size="small"
@@ -199,7 +199,7 @@ export default function Overview({
                         size="small"
                         sx={{ height: 20, fontSize: '11px', bgcolor: '#f5f5f2', color: '#4a5159' }}
                       />
-                    )} */}
+                    )}
                     <span>— new files appear here automatically.</span>
                     {driveState.lastChecked && <span>Last checked {driveState.lastChecked}.</span>}
                   </>
@@ -381,7 +381,7 @@ export default function Overview({
             {safeStats.inreviewed}
           </Typography>
           <Typography sx={{ fontSize: '11.5px', color: '#7b838c' }}>
-            ready to extract & export
+            ready to publish
           </Typography>
         </Box>
 
@@ -397,7 +397,7 @@ export default function Overview({
             {safeStats.updatedToVector}
           </Typography>
           <Typography sx={{ fontSize: '11.5px', color: '#7b838c' }}>
-            live in retrieval index
+            live in vector db
           </Typography>
         </Box>
       </Paper>
@@ -407,7 +407,7 @@ export default function Overview({
         sx={{
           flexShrink: 0,
           display: 'grid',
-          gridTemplateColumns: { xs: '1fr', lg: '1fr 1fr' },
+          // gridTemplateColumns: { xs: '1fr', lg: '1fr 1fr' },
           gap: 2.5,
           alignItems: 'stretch',
           width: '100%',
@@ -741,31 +741,12 @@ export default function Overview({
                   ? 'All files from your connected Google Drive have been classified. Classified files appear in Documents.'
                   : 'Connect your Google Drive account to fetch files. Pending, extracted, and rejected files will appear here.'}
               </Typography>
-              {onNavigateToDocuments && (
-                <Button
-                  variant="contained"
-                  size="small"
-                  onClick={onNavigateToDocuments}
-                  startIcon={<DescriptionOutlinedIcon sx={{ fontSize: 16 }} />}
-                  sx={{
-                    mt: 0.5,
-                    bgcolor: '#1e3a5f',
-                    textTransform: 'none',
-                    fontSize: '12.5px',
-                    fontWeight: 600,
-                    px: 2,
-                    py: 0.8,
-                  }}
-                >
-                  Browse Documents
-                </Button>
-              )}
             </Box>
           )}
         </Paper>
 
         {/* Right Side: Activity Template (Empty state matching Activity Log) */}
-        <Paper
+        {/* <Paper
           elevation={0}
           sx={{
             display: 'flex',
@@ -875,7 +856,7 @@ export default function Overview({
               </Button>
             )}
           </Box>
-        </Paper>
+        </Paper> */}
       </Box>
     </Box>
   );
