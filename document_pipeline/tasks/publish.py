@@ -93,14 +93,14 @@ def publish_document_task(
             to_embed,
             document_id,
             agreement_type=(
-                resolve_agreement_type(agreement_type).name
-                if agreement_type not in (None, '')
-                else (doc.agreement_type.name if doc.agreement_type else '')
+                agreement_type
+                if agreement_type is not None
+                else doc.agreement_type
             ),
             sectorial_category=(
-                resolve_sector_type(sectorial_category).name
-                if sectorial_category not in (None, '')
-                else (doc.sectorial_category.name if doc.sectorial_category else '')
+                sectorial_category
+                if sectorial_category is not None
+                else doc.sectorial_category
             ),
         )
         failed = embed_stats.get('failed', 0)
