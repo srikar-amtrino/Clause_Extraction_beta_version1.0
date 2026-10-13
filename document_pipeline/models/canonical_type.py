@@ -3,6 +3,8 @@ import uuid
 
 from django.db import models
 
+from .agreement_type import AgreementType
+
 
 class CanonicalType(models.Model):
     """A type a classification may assign.
@@ -31,6 +33,14 @@ class CanonicalType(models.Model):
     key = models.SlugField(max_length=64)
     name = models.CharField(max_length=128)
     definition = models.TextField()
+    aliases = models.JSONField(blank=True, default=list)
+    agreement_type = models.ForeignKey(
+        AgreementType,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='canonical_types',
+    )
     is_active = models.BooleanField(default=True)
     sort_order = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)

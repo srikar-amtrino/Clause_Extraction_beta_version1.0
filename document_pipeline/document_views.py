@@ -8,10 +8,12 @@ from django.views.decorators.http import require_GET, require_POST
 
 from core.auth_helpers import require_auth
 from .models import (
+    AgreementType,
     CanonicalType,
     ClassificationRun,
     Document,
     ExtractionRun,
+    SectorType,
 )
 from .services import export_service, review_service
 from .services.ingestion_service import GOOGLE_DRIVE
@@ -56,7 +58,9 @@ def _get_document(document_id):
     """-> (document, error response). Not get_object_or_404, so an unknown id
     answers with the same JSON shape as every other error here instead of
     Django's HTML 404 page."""
-    document = Document.objects.filter(pk=document_id).select_related('current_reviewer').first()
+    document = Document.objects.filter(pk=document_id).select_related(
+        'current_reviewer', 'agreement_type', 'sectorial_category',
+    ).first()
     if document is None:
         return None, JsonResponse({'detail': 'No document with that id.'}, status=404)
     return document, None
@@ -191,8 +195,12 @@ def _document_row(document, extraction_run, classification_run, review_counts=No
         'document_id': str(document.id),
         'name': document.name,
         'title': document.document_title,
-        'agreement_type': document.agreement_type,
-        'sectorial_category': document.sectorial_category,
+        'agreement_type': document.agreement_type.name if document.agreement_type else '',
+        'agreement_type_id': document.agreement_type_id,
+        'sectorial_category': (
+            document.sectorial_category.name if document.sectorial_category else ''
+        ),
+        'sectorial_category_id': document.sectorial_category_id,
         'drive_file_id': document.source_external_id,
         'drive_folder_id': document.source_parent_id,
         'drive_web_link': document.drive_web_link or None,
@@ -278,8 +286,10 @@ def document_list(request):
     # Joined by name rather than through google_drive_source(): its
     # get_or_create costs a round trip per call, and a source row that does not
     # exist yet has no documents anyway.
-    documents = Document.objects.filter(ingestion_source__name=GOOGLE_DRIVE,
-                                        deleted_at__isnull=True).select_related('current_reviewer')
+    documents = Document.objects.filter(
+        ingestion_source__name=GOOGLE_DRIVE,
+        deleted_at__isnull=True,
+    ).select_related('current_reviewer', 'agreement_type', 'sectorial_category')
 
     folder_ids = [f for f in request.GET.getlist('folder_id') if f]
     if folder_ids:
@@ -614,7 +624,21 @@ def _json_body(request):
 
 
 @require_GET
-def taxonomy(request):
+def document_metadata(request):
+    return JsonResponse({
+        'agreement_types': [
+            {'id': item.pk, 'name': item.name}
+            for item in AgreementType.objects.all()
+        ],
+        'sector_types': [
+            {'id': item.pk, 'name': item.name}
+            for item in SectorType.objects.all()
+        ],
+    })
+
+
+@require_GET
+def taxonomy(request, document_id=None):
     """The types a verdict can carry, for filter menus and legends.
 
       version=<v>              defaults to v1, the version the current runs use
@@ -623,7 +647,23 @@ def taxonomy(request):
     `key` is what a classification item's `type` holds; `name` is what to show.
     """
     version = request.GET.get('version') or 'v1'
+    agreement_type = None
+    if document_id is not None:
+        document = Document.objects.select_related('agreement_type').filter(
+            pk=document_id,
+        ).first()
+        if document is None:
+            return JsonResponse({'detail': 'No document with that id.'}, status=404)
+        agreement_type = document.agreement_type
+        if agreement_type is None:
+            return JsonResponse({
+                'detail': 'The document has no agreement type.',
+            }, status=400)
     types = CanonicalType.objects.filter(version=version)
+    if not types.exists():
+        return JsonResponse({'detail': 'No taxonomy seeded for version %s.' % version}, status=404)
+    if agreement_type is not None:
+        types = types.filter(agreement_type=agreement_type)
     if _bool_param(request, 'include_inactive') is not True:
         types = types.filter(is_active=True)
     rows = [{
@@ -634,10 +674,16 @@ def taxonomy(request):
         'definition': t.definition,
         'is_active': t.is_active,
     } for t in types.order_by('applies_to', 'sort_order')]
-    if not rows:
+    if not rows and document_id is None:
         return JsonResponse({'detail': 'No taxonomy seeded for version %s.' % version}, status=404)
-    return JsonResponse({
+    response = {
         'version': version,
         'clause_types': [r for r in rows if r['applies_to'] == 'clause'],
         'non_clause_types': [r for r in rows if r['applies_to'] == 'non_clause'],
-    }, json_dumps_params=PRETTY)
+    }
+    if agreement_type is not None:
+        response['agreement_type'] = {
+            'id': agreement_type.pk,
+            'name': agreement_type.name,
+        }
+    return JsonResponse(response, json_dumps_params=PRETTY)

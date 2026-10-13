@@ -727,9 +727,12 @@ export default function ReviewWorkspace({
 
   useEffect(() => {
     let isMounted = true;
+    taxonomyMapRef.current = new Map();
+    setAvailableCanonicalTypes(['Unassigned']);
+    if (!docId) return undefined;
     if (typeof documentService?.taxonomy === 'function') {
       documentService
-        .taxonomy()
+        .taxonomy(docId)
         .then((res) => {
           if (!isMounted || !res) return;
           const clauseList = Array.isArray(res.clause_types) ? res.clause_types : [];
@@ -745,17 +748,17 @@ export default function ReviewWorkspace({
           });
           taxonomyMapRef.current = map;
 
-          if (clauseList.length > 0) {
-            const names = clauseList.map((t) => t.name).filter(Boolean);
-            setAvailableCanonicalTypes(['Unassigned', ...names]);
-          }
+          const names = clauseList.map((t) => t.name).filter(Boolean);
+          setAvailableCanonicalTypes(['Unassigned', ...names]);
         })
-        .catch(() => {});
+        .catch((error) => {
+          console.error('Failed to load document taxonomy:', error);
+        });
     }
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [docId]);
 
   // Immediately initialize clauses if pre-fetched classification or sessionStorage cache is available (0ms buffering)
   useEffect(() => {

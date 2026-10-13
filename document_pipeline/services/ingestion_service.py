@@ -31,6 +31,10 @@ from document_pipeline.services.drive_service import (
 )
 from document_pipeline.services.parse_service import rejected_result, stream_and_parse
 from document_pipeline.services.persistence_service import persist_parse_result
+from document_pipeline.services.document_metadata import (
+    resolve_agreement_type,
+    resolve_sector_type,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -204,8 +208,8 @@ def _create_document(ingestion_source, file_id, meta, agreement_type=None,
         source_external_id=file_id,
         source_parent_id=meta.get('parent_id') or '',
         name=meta.get('name') or '',
-        agreement_type=agreement_type or '',
-        sectorial_category=sectorial_category or '',
+        agreement_type=resolve_agreement_type(agreement_type),
+        sectorial_category=resolve_sector_type(sectorial_category),
         mime_type=meta.get('mimeType') or '',
         file_size_bytes=_int_or_none(meta.get('size')),
         source_modified_time=parse_datetime(meta.get('modifiedTime') or '') or None,
@@ -222,11 +226,13 @@ def _reconcile(document, meta, outcome, agreement_type=None, sectorial_category=
     parent = meta.get('parent_id') or ''
     modified = parse_datetime(meta.get('modifiedTime') or '') or None
     metadata_fields = []
-    if agreement_type is not None and document.agreement_type != agreement_type:
-        document.agreement_type = agreement_type
+    agreement = resolve_agreement_type(agreement_type) if agreement_type is not None else None
+    if agreement is not None and document.agreement_type_id != agreement.pk:
+        document.agreement_type = agreement
         metadata_fields.append('agreement_type')
-    if sectorial_category is not None and document.sectorial_category != sectorial_category:
-        document.sectorial_category = sectorial_category
+    sector = resolve_sector_type(sectorial_category) if sectorial_category is not None else None
+    if sector is not None and document.sectorial_category_id != sector.pk:
+        document.sectorial_category = sector
         metadata_fields.append('sectorial_category')
 
     bucket = None
