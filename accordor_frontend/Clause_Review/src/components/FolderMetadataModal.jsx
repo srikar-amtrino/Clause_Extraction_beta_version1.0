@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Dialog,
   DialogTitle,
@@ -11,21 +11,100 @@ import {
   Button,
   IconButton,
   CircularProgress,
+  Alert,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
+import { documentService } from '../services/documentService';
 
 export const AGREEMENT_TYPES = [
-  'Master Services Agreement (MSA)',
-  'Non-Disclosure Agreement (NDA)',
-  'Service Level Agreement (SLA)',
-  'Statement of Work (SOW)',
-  'Employment Agreement',
+  'Software as a Service Agreement (SaaS)',
   'Software License Agreement',
-  'Vendor / Supplier Agreement',
+  'Cloud Services Agreement',
+  'Information Technology (IT) Services Agreement / Master Services Agreement (MSA)',
+  'Subscription Agreement',
+  'Application Programming Interface (API) / Technology Integration Agreement',
+  'End User License Agreement (EULA)',
+  'Software Development Agreement',
+  'Maintenance & Support Agreement',
+  'Hosting Agreement',
+  'Technology Reseller Agreement',
+  'Office Lease Agreement',
+  'Retail Lease Agreement',
+  'Industrial Lease Agreement',
   'Commercial Lease Agreement',
-  'Data Processing Agreement (DPA)',
-  'General Commercial Contract',
+  'Sublease Agreement',
+  'Property Management Agreement',
+  'Facilities Management Agreement',
+  'Facilities Maintenance Agreement',
+  'Construction Agreement',
+  'Retail Supply Agreement',
+  'E-Commerce Services Agreement',
+  'Retail Distribution Agreement',
+  'Healthcare Services Agreement / Master Services Agreement (MSA)',
+  'Healthcare Provider Agreement',
+  'Pharmaceutical Supply Agreement',
+  'Business Associate Agreement (BAA)',
+  'Manufacturing Agreement',
+  'Loan Agreement',
+  'Credit Facility Agreement',
+  'Financial Technology (FinTech) Services Agreement',
+  'Asset Management Agreement',
+  'Financing Agreement',
+  'Insurance Services Agreement',
+  'Reinsurance Agreement',
+  'Master Manufacturing Agreement',
+  'Original Equipment Manufacturer (OEM) Agreement',
+  'Product Supply Agreement',
+  'Warehousing Agreement',
+  'Third-Party Logistics (3PL) Agreement',
+  'Freight Services Agreement',
+  'Cold Chain Logistics Agreement',
+  'Professional Services Agreement',
+  'Consulting Services Agreement',
+  'General Master Services Agreement (MSA)',
+  'Implementation Agreement',
+  'Managed Services Agreement',
+  'Business Process Outsourcing (BPO) Agreement',
+  'Agency Agreement',
+  'Staff Augmentation Agreement',
+  'Subcontractor Agreement',
+  'Sales Agreement',
+  'Sales Representative Agreement',
+  'Distribution Agreement',
+  'Channel Partner Agreement',
+  'Reseller Agreement',
+  'Value-Added Reseller (VAR) Agreement',
+  'Referral Agreement',
+  'Strategic Alliance Agreement',
+  'Co-Selling Agreement',
+  'Marketplace Agreement',
+  'Data Processing / Data Protection Agreement (DPA)',
+  'Data Sharing Agreement',
+  'Data Protection Addendum',
+  'Security Addendum',
+  'Information Security Agreement',
+  'Sub-processor Agreement',
+  'Vendor Agreement',
+  'Procurement Services Agreement',
+  'Purchase Agreement',
+  'Master Supplier Agreement',
+  'Supply Agreement',
+  'Contract Manufacturing Agreement',
+  'Partnership / Limited Liability Company (LLC) Agreement',
+  'Shareholder Agreement',
+  'Investment Agreement',
+  'Mergers & Acquisitions (M&A) Agreement',
+  'Amendment Agreement',
+  'Renewal / Extension Agreement',
+  'Termination Agreement',
+  'Novation Agreement',
+  'Assignment Agreement',
+  'Waiver Agreement',
+  'Independent Contractor / Consultant Agreement',
+  'Non-Compete Agreement',
+  'Non-Solicitation Agreement',
+  'Staffing Services Agreement',
 ];
 
 export const SECTORIAL_OPTIONS = [
@@ -62,8 +141,29 @@ export default function FolderMetadataModal({
   onSave,
   isSaving = false,
 }) {
-  const [agreementType, setAgreementType] = useState(AGREEMENT_TYPES[0]);
-  const [sectorial, setSectorial] = useState(SECTORIAL_OPTIONS[0]);
+  const [agreementTypes, setAgreementTypes] = useState([]);
+  const [sectorTypes, setSectorTypes] = useState([]);
+  const [agreementType, setAgreementType] = useState('');
+  const [sectorial, setSectorial] = useState('');
+  const [metadataError, setMetadataError] = useState('');
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    let active = true;
+    documentService.metadata()
+      .then((metadata) => {
+        if (!active) return;
+        setAgreementTypes(metadata.agreement_types || []);
+        setSectorTypes(metadata.sector_types || []);
+        setAgreementType((current) => current || metadata.agreement_types?.[0]?.id || '');
+        setSectorial((current) => current || metadata.sector_types?.[0]?.id || '');
+        setMetadataError('');
+      })
+      .catch((error) => {
+        if (active) setMetadataError(error.message);
+      });
+    return () => { active = false; };
+  }, [isOpen]);
 
   if (!isOpen || !folder) return null;
 
@@ -74,6 +174,8 @@ export default function FolderMetadataModal({
         folder,
         agreementType,
         sectorial,
+        agreementTypeName: agreementTypes.find((item) => item.id === Number(agreementType))?.name || '',
+        sectorialName: sectorTypes.find((item) => item.id === Number(sectorial))?.name || '',
       });
     }
   };
@@ -118,6 +220,7 @@ export default function FolderMetadataModal({
 
       <Box component="form" onSubmit={handleSubmit}>
         <DialogContent sx={{ p: 2.5, display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {metadataError && <Alert severity="error">{metadataError}</Alert>}
           {/* Selected Folder Highlight */}
           <Box
             sx={{
@@ -177,9 +280,9 @@ export default function FolderMetadataModal({
               onChange={(e) => setAgreementType(e.target.value)}
               disabled={isSaving}
             >
-              {AGREEMENT_TYPES.map((type) => (
-                <MenuItem key={type} value={type} sx={{ fontSize: '13px' }}>
-                  {type}
+              {agreementTypes.map((type) => (
+                <MenuItem key={type.id} value={type.id} sx={{ fontSize: '13px' }}>
+                  {type.name}
                 </MenuItem>
               ))}
             </TextField>
@@ -198,9 +301,9 @@ export default function FolderMetadataModal({
               onChange={(e) => setSectorial(e.target.value)}
               disabled={isSaving}
             >
-              {SECTORIAL_OPTIONS.map((sec) => (
-                <MenuItem key={sec} value={sec} sx={{ fontSize: '13px' }}>
-                  {sec}
+              {sectorTypes.map((sec) => (
+                <MenuItem key={sec.id} value={sec.id} sx={{ fontSize: '13px' }}>
+                  {sec.name}
                 </MenuItem>
               ))}
             </TextField>
@@ -225,7 +328,7 @@ export default function FolderMetadataModal({
           <Button
             type="submit"
             variant="contained"
-            disabled={isSaving}
+            disabled={isSaving || !agreementTypes.length || !sectorTypes.length || Boolean(metadataError)}
             size="small"
             sx={{
               bgcolor: '#1e3a5f',

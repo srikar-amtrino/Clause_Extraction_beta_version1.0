@@ -689,16 +689,18 @@ def generate_clause_suggestions(
     db_sectors = []
     try:
         from document_pipeline.models import Document
-        db_agreements = sorted(list({
-            d.agreement_type.strip()
-            for d in Document.objects.all()
-            if d.agreement_type and d.agreement_type.strip()
-        }))
-        db_sectors = sorted(list({
-            d.sectorial_category.strip()
-            for d in Document.objects.all()
-            if d.sectorial_category and d.sectorial_category.strip()
-        }))
+        db_agreements = list(
+            Document.objects.exclude(agreement_type__isnull=True)
+            .values_list('agreement_type__name', flat=True)
+            .distinct()
+            .order_by('agreement_type__name')
+        )
+        db_sectors = list(
+            Document.objects.exclude(sectorial_category__isnull=True)
+            .values_list('sectorial_category__name', flat=True)
+            .distinct()
+            .order_by('sectorial_category__name')
+        )
     except Exception as exc:
         logger.warning("Could not fetch dynamic document categories: %s", exc)
 

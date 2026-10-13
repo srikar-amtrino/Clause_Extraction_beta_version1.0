@@ -138,12 +138,18 @@ def embed_and_upsert(
                     'agreement_type': (
                         agreement_type
                         if agreement_type is not None
-                        else getattr(document, 'agreement_type', '')
+                        else (
+                            document.agreement_type.name
+                            if document.agreement_type else ''
+                        )
                     ),
                     'sectorial_category': (
                         sectorial_category
                         if sectorial_category is not None
-                        else getattr(document, 'sectorial_category', '')
+                        else (
+                            document.sectorial_category.name
+                            if document.sectorial_category else ''
+                        )
                     ),
                     'run_id': str(chunk.chunk_run_id) if chunk else None,
                     'parent_id': chunk.parent_local_id if chunk else None,

@@ -95,6 +95,11 @@ function toQuery(filters = {}) {
 }
 
 export const documentService = {
+  /** Reference options for Drive ingestion; documents retain the selected ids. */
+  metadata() {
+    return get('/api/document-metadata/');
+  },
+
   websocketUrl(documentId) {
     const backendOrigin = API_BASE || window.location.origin;
     const url = new URL(`/ws/documents/${documentId}/`, backendOrigin);
@@ -223,7 +228,7 @@ export const documentService = {
     return get(`/api/documents/${documentId}/workspace/`);
   },
 
-  taxonomy() {
-    return get('/api/taxonomy/');
+  taxonomy(documentId) {
+    return get(`/api/${documentId}/taxonomy/`);
   },
 };
