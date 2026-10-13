@@ -11,6 +11,7 @@ from .document_views import (
 	document_detail,
 	document_extraction,
 	document_list,
+	document_metadata,
 	taxonomy,
 )
 from .review_views import (
@@ -54,6 +55,7 @@ urlpatterns = [
 
 	# Results: what the pipeline produced. Reads only.
 	path('documents/', document_list, name='document-list'),
+	path('document-metadata/', document_metadata, name='document-metadata'),
 	path('documents/<uuid:document_id>/', document_detail, name='document-detail'),
 	path('documents/<uuid:document_id>/extraction/', document_extraction,
 	     name='document-extraction'),
@@ -70,6 +72,7 @@ urlpatterns = [
 	     classification_delete, name='document-classification-delete'),
 	path('documents/<uuid:document_id>/classification/<uuid:classification_id>/restore/',
 	     classification_restore, name='document-classification-restore'),
+	path('<uuid:document_id>/taxonomy/', taxonomy, name='document-taxonomy'),
 	path('taxonomy/', taxonomy, name='taxonomy'),
 
 	# Review workspace -- overview helpers.

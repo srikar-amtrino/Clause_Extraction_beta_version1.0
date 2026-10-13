@@ -1,3 +1,5 @@
+from .agreement_type import AgreementType
+from .agreement_type_prompt import AgreementTypePrompt
 from .canonical_type import CanonicalType
 from .canonical_type_alias import CanonicalTypeAlias
 from .canonical_type_exclusion import CanonicalTypeExclusion
@@ -15,11 +17,15 @@ from .extracted_paragraph import ExtractedParagraph
 from .extraction_run import ExtractionRun
 from .pipeline_stage_log import PipelineStageLog
 from .review_draft import ReviewDraft
+from .sector_type import SectorType
 from .vector_sync_run import VectorSyncRun
 from .workspace_lock import WorkspaceLock
 
 __all__ = [
     'Document',
+    'AgreementType',
+    'AgreementTypePrompt',
+    'SectorType',
     'ExtractionRun',
     'ExtractedClause',
     'ExtractedParagraph',

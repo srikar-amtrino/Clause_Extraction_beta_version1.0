@@ -672,9 +672,15 @@ function AppWorkspace() {
   };
 
   // Handle Save in the second modal (Folder + Agreement Type + Sectorial)
-  const handleSaveFolderConfig = async ({ folder, agreementType, sectorial }) => {
+  const handleSaveFolderConfig = async ({
+    folder,
+    agreementType,
+    sectorial,
+    agreementTypeName,
+    sectorialName,
+  }) => {
     setIsSavingConfig(true);
-    showToast(`Configuring "${folder.name}" (${agreementType} / ${sectorial})...`);
+    showToast(`Configuring "${folder.name}" (${agreementTypeName} / ${sectorialName})...`);
 
     try {
       setDriveState((prev) => {
@@ -683,8 +689,8 @@ function AppWorkspace() {
           isConnected: true,
           folderPath: folder.name,
           folderIds: [folder.id],
-          agreementType: agreementType,
-          sectorial: sectorial,
+          agreementType: agreementTypeName,
+          sectorial: sectorialName,
           isSyncing: true,
           lastChecked: 'just now',
         };
@@ -722,8 +728,8 @@ function AppWorkspace() {
                 document_id: file.id,
                 name: file.name,
                 folder: f.name || folder.name,
-                agreementType,
-                sectorial,
+                agreementType: agreementTypeName,
+                sectorial: sectorialName,
                 extraction_status: 'pending',
                 extractionStatus: 'pending',
                 size: file.size ? `${Math.round(file.size / 1024)} KB` : '24 KB',

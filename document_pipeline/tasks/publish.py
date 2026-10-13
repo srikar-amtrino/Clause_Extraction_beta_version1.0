@@ -11,6 +11,10 @@ The task is triggered explicitly by a reviewer clicking Publish --
 never automatically after classification.
 """
 from celery import shared_task
+from document_pipeline.services.document_metadata import (
+    resolve_agreement_type,
+    resolve_sector_type,
+)
 
 
 @shared_task(

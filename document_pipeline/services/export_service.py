@@ -52,6 +52,12 @@ def _document_header(document, run):
         'document_id': str(document.id),
         'name': document.name,
         'title': (run.document_title if run else None) or document.document_title,
+        'agreement_type_id': document.agreement_type_id,
+        'agreement_type': document.agreement_type.name if document.agreement_type else '',
+        'sectorial_category_id': document.sectorial_category_id,
+        'sectorial_category': (
+            document.sectorial_category.name if document.sectorial_category else ''
+        ),
         'drive_file_id': document.source_external_id,
         'drive_folder_id': document.source_parent_id,
         'extraction_status': document.extraction_status,
