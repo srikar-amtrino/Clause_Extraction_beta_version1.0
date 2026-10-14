@@ -705,30 +705,12 @@ export default function ReviewWorkspace({
   const taxonomyMapRef = useRef(new Map());
 
   // Available canonical taxonomy types
-  const [availableCanonicalTypes, setAvailableCanonicalTypes] = useState([
-    'Unassigned',
-    'Definitions & Interpretation',
-    'Purpose & Scope of Services',
-    'Customer Obligations',
-    'Service Provider Obligations',
-    'Term & Renewal',
-    'Fees & Payment',
-    'Confidentiality',
-    'Data Protection & Privacy',
-    'Intellectual Property',
-    'Representations & Warranties',
-    'Indemnification',
-    'Limitation of Liability',
-    'Suspension & Termination',
-    'Force Majeure',
-    'Governing Law & Dispute Resolution',
-    'Notices',
-  ]);
+  const [availableCanonicalTypes, setAvailableCanonicalTypes] = useState([]);
 
   useEffect(() => {
     let isMounted = true;
     taxonomyMapRef.current = new Map();
-    setAvailableCanonicalTypes(['Unassigned']);
+    setAvailableCanonicalTypes([]);
     if (!docId) return undefined;
     if (typeof documentService?.taxonomy === 'function') {
       documentService
@@ -749,7 +731,7 @@ export default function ReviewWorkspace({
           taxonomyMapRef.current = map;
 
           const names = clauseList.map((t) => t.name).filter(Boolean);
-          setAvailableCanonicalTypes(['Unassigned', ...names]);
+          setAvailableCanonicalTypes(names);
         })
         .catch((error) => {
           console.error('Failed to load document taxonomy:', error);
