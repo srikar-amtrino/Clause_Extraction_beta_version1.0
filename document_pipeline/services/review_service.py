@@ -14,6 +14,7 @@ Every rejected payload raises ReviewError carrying a sentence meant to be read
 by the person who caused it. The view turns that into a 400 without knowing
 anything about the rules.
 """
+import re
 import uuid
 
 from django.db import transaction
@@ -25,9 +26,44 @@ C = Classification
 
 LABELS = {C.CLAUSE: CanonicalType.CLAUSE, C.NON_CLAUSE: CanonicalType.NON_CLAUSE}
 
+def normalize_exhibit_type(raw):
+    """Normalize a reviewer's free-form exhibit label for grouping / Qdrant.
+
+    Strips common prefixes (Exhibit, Schedule, Annex, Appendix, Attachment,
+    Addendum) and separators, lowercases, collapses whitespace, and strips a
+    trailing 's' for simple plural/singular equivalence.
+
+    Examples
+    --------
+    "Exhibit Definition"  -> "definition"
+    "Exhibit Definitions" -> "definition"
+    "Exhibit A - SOW"     -> "a sow"
+    "Schedule 1"          -> "1"
+    """
+    if not raw or not raw.strip():
+        return None
+    text = raw.strip()
+    # Strip leading prefix words (case-insensitive).
+    text = re.sub(
+        r'^(exhibit|schedule|annex|appendix|attachment|addendum)\s*',
+        '',
+        text,
+        flags=re.IGNORECASE,
+    )
+    # Strip leading punctuation / separators that remain after prefix removal.
+    text = re.sub(r'^[\s:\-–—]+', '', text)
+    # Lowercase and collapse internal whitespace.
+    text = re.sub(r'\s+', ' ', text).strip().lower()
+    # Simple singular: strip trailing 's' unless the word is 1-2 chars.
+    if len(text) > 2 and text.endswith('s'):
+        text = text[:-1]
+    return text or None
+
+
 # The row's review columns, as one Save writes them.
 REVIEW_FIELDS = ['text', 'review_decision', 'reviewed_label', 'reviewed_canonical_type',
-                 'reviewed_sub_type', 'review_note', 'reviewed_by', 'reviewed_at', 'needs_review']
+                 'reviewed_sub_type', 'review_note', 'reviewed_by', 'reviewed_at', 'needs_review',
+                 'is_exhibit', 'exhibit_type', 'exhibit_type_normalized']
 
 
 class ReviewError(ValueError):
@@ -283,6 +319,8 @@ def _state(classification):
         'sub_type': sub_type,
         'note': c.review_note or '',
         'text': current_text(c),
+        'is_exhibit': c.is_exhibit,
+        'exhibit_type': c.exhibit_type,
     }
 
 
@@ -290,7 +328,8 @@ def _changes(classification, before, after):
     """What one Save changed on one item, for the activity log: the fields that
     moved, each with its value before and after."""
     shown = {'decision': 'decision', 'label': 'label', 'type': 'type',
-             'sub_type': 'sub_type', 'note': 'note', 'text': 'text'}
+             'sub_type': 'sub_type', 'note': 'note', 'text': 'text',
+             'is_exhibit': 'is_exhibit', 'exhibit_type': 'exhibit_type'}
     moved = {name: {'from': before[key], 'to': after[key]}
              for key, name in shown.items() if before[key] != after[key]}
     return {'classification_id': str(classification.id),
@@ -357,7 +396,8 @@ def _run_for_write(document, classification_run_id):
 # bulk_update skips auto_now.
 MIRROR_FIELDS = ['chunk', 'classification', 'label', 'canonical_type', 'sub_type',
                  'reviewed_text', 'is_reviewed', 'reviewed_by', 'is_modified',
-                 'last_edited_by', 'last_edited_at', 'updated_at']
+                 'last_edited_by', 'last_edited_at', 'updated_at',
+                 'is_exhibit', 'exhibit_type', 'exhibit_type_normalized']
 
 
 def _record_defaults(classification):
@@ -434,15 +474,24 @@ def _apply_mirror(record, classification, user, now):
               current_text(c))
     changed = (record.label, record.canonical_type, record.sub_type,
                record.reviewed_text) != values
+    # Exhibit fields also trigger a vector-DB re-sync if they changed.
+    exhibit_changed = (
+        record.is_exhibit != c.is_exhibit
+        or record.exhibit_type != c.exhibit_type
+        or record.exhibit_type_normalized != c.exhibit_type_normalized
+    )
     record.chunk = chunk
     record.classification = c
     record.label, record.canonical_type, record.sub_type, record.reviewed_text = values
+    record.is_exhibit = c.is_exhibit
+    record.exhibit_type = c.exhibit_type
+    record.exhibit_type_normalized = c.exhibit_type_normalized
     record.is_reviewed = True
     record.reviewed_by = user
     # Pending for the vector DB when its values moved, or when it has never
     # been synced at all. A verdict accepted unchanged after a sync is not.
-    record.is_modified = record.is_modified or changed or record.last_synced_at is None
-    if changed:
+    record.is_modified = record.is_modified or changed or exhibit_changed or record.last_synced_at is None
+    if changed or exhibit_changed:
         record.last_edited_by = user
         record.last_edited_at = now
 
@@ -514,10 +563,28 @@ def save_document(document, classification_run_id, items, user):
         except ReviewError as problem:
             errors.append({'classification_id': cid, 'detail': str(problem)})
             continue
+
+        # --- Exhibit fields -------------------------------------------------
+        # is_exhibit: absent key -> keep existing; explicit null -> clear both.
+        if 'is_exhibit' in entry:
+            raw_is_exhibit = entry.get('is_exhibit')
+            is_exhibit = bool(raw_is_exhibit) if raw_is_exhibit is not None else None
+        else:
+            is_exhibit = c.is_exhibit
+        # When the reviewer unchecks [E], clear exhibit_type automatically.
+        if not is_exhibit:
+            exhibit_type = None
+            exhibit_type_normalized = None
+        else:
+            raw_exhibit_type = entry.get('exhibit_type') if 'exhibit_type' in entry else c.exhibit_type
+            exhibit_type = (raw_exhibit_type or '').strip() or None
+            exhibit_type_normalized = normalize_exhibit_type(exhibit_type)
+
         before = _state(c)
         after = {'decision': decision, 'label': label,
                  'type': canonical_type.key if canonical_type else None,
-                 'sub_type': sub_type, 'note': note, 'text': text}
+                 'sub_type': sub_type, 'note': note, 'text': text,
+                 'is_exhibit': is_exhibit, 'exhibit_type': exhibit_type}
         if before == after:
             counts['unchanged'] += 1
             continue
@@ -532,6 +599,9 @@ def save_document(document, classification_run_id, items, user):
         c.reviewed_by = user
         c.reviewed_at = now
         c.needs_review = False
+        c.is_exhibit = is_exhibit
+        c.exhibit_type = exhibit_type
+        c.exhibit_type_normalized = exhibit_type_normalized
         changed.append(c)
 
     if errors:

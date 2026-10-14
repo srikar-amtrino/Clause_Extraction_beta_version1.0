@@ -4,6 +4,7 @@ from .playground_views import playground_analyze, playground_stats, playground_s
 
 from .document_views import (
 	classification_delete,
+	classification_exhibit_set,
 	classification_restore,
 	classification_save,
 	document_classification,
@@ -72,6 +73,9 @@ urlpatterns = [
 	     classification_delete, name='document-classification-delete'),
 	path('documents/<uuid:document_id>/classification/<uuid:classification_id>/restore/',
 	     classification_restore, name='document-classification-restore'),
+	# Bulk exhibit flag setter -- Option A + batch action toolbar.
+	path('documents/<uuid:document_id>/classification/exhibit/set/',
+	     classification_exhibit_set, name='document-classification-exhibit-set'),
 	path('<uuid:document_id>/taxonomy/', taxonomy, name='document-taxonomy'),
 	path('taxonomy/', taxonomy, name='taxonomy'),
 
