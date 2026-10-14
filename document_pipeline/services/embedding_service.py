@@ -157,6 +157,10 @@ def embed_and_upsert(
                     'canonical_type': record.canonical_type,
                     'sub_type': record.sub_type,
                     'confidence': record.confidence,
+                    # Exhibit flag set only by a reviewer; never by the pipeline.
+                    'is_exhibit': bool(record.is_exhibit) if record.is_exhibit is not None else False,
+                    'exhibit_type': record.exhibit_type or '',
+                    'exhibit_type_normalized': record.exhibit_type_normalized or '',
                     'embedding_model': 'BAAI/bge-m3',
                     'embedding_dim': len(vector),
                     'max_length': 1024,

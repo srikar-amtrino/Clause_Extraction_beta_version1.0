@@ -193,6 +193,10 @@ export const documentService = {
     return post(`/api/documents/${documentId}/classification/${classificationId}/restore/`, data);
   },
 
+  setExhibit(documentId, data) {
+    return post(`/api/documents/${documentId}/classification/exhibit/set/`, data);
+  },
+
   getDocumentNote(documentId) {
     return get(`/api/documents/${documentId}/note/`);
   },

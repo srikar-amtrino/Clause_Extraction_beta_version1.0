@@ -244,6 +244,10 @@ def classification_json(document):
                 'sub_type': c.sub_type,
             },
             'review': review_json(c),
+            # Reviewer-assigned exhibit flag.  NULL = not assessed yet.
+            'is_exhibit': c.is_exhibit,
+            'exhibit_type': c.exhibit_type,
+            'exhibit_type_normalized': c.exhibit_type_normalized,
         })
 
     r = classification_run

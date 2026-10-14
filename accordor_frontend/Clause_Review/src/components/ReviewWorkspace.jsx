@@ -117,6 +117,8 @@ function mapClassificationItem(item, i, doc, classRes) {
     merged_into: item.merged_into || null,
     deleted_at: item.deleted_at || null,
     deleted_by: item.deleted_by || null,
+    is_exhibit: item.is_exhibit !== undefined ? item.is_exhibit : null,
+    exhibit_type: item.exhibit_type || '',
   };
 }
 
@@ -1260,6 +1262,7 @@ export default function ReviewWorkspace({
           const isModified = Boolean(
             row.isLocallyEdited ||
             row.is_text_modified ||
+            row.is_exhibit_modified ||
             (row.reviewed_text && row.text && row.reviewed_text.trim() !== row.text.trim())
           );
           let decision = 'accepted';
@@ -1279,6 +1282,8 @@ export default function ReviewWorkspace({
             text: origText || textVal,
             reviewed_text: textVal || origText,
             decision: decision,
+            is_exhibit: row.is_exhibit !== undefined ? row.is_exhibit : null,
+            exhibit_type: row.exhibit_type || null,
           };
           if (row.note && row.note.trim()) {
             itemPayload.note = row.note.trim();
@@ -1412,6 +1417,8 @@ export default function ReviewWorkspace({
             sub_type: c.sub_type,
             needs_review: c.needs_review,
             review: c.review,
+            is_exhibit: c.is_exhibit,
+            exhibit_type: c.exhibit_type,
           })),
           deleted_items: deletedClauses,
           summary: classificationSummary,
@@ -1723,6 +1730,98 @@ export default function ReviewWorkspace({
     } finally {
       setIsRestoringClause(false);
       setRestoringClauseIds((prev) => prev.filter((id) => !idsToRestore.includes(id)));
+    }
+  };
+
+  const handleBulkSetExhibit = async (targetClauses, isExhibit, exhibitType) => {
+    const rawList = Array.isArray(targetClauses) ? targetClauses : (targetClauses ? [targetClauses] : []);
+    if (rawList.length === 0) return;
+    const targetDocId = doc?.documentId || doc?.id || docId;
+    if (!targetDocId) return;
+
+    const classIds = [];
+    const keySet = new Set(rawList.map(String));
+    extractedClauses.forEach((c) => {
+      if (
+        keySet.has(String(c.classification_id)) ||
+        keySet.has(String(c.id)) ||
+        keySet.has(String(c.clause_id)) ||
+        keySet.has(String(c.paraId))
+      ) {
+        if (c.classification_id) classIds.push(String(c.classification_id));
+        else if (c.id) classIds.push(String(c.id));
+      }
+    });
+
+    if (classIds.length === 0) return;
+
+    let runId = classificationRunId;
+    if (!runId) {
+      const classInfo = await documentService.classification(targetDocId).catch(() => null);
+      runId =
+        classInfo?.classification_run?.classification_run_id ||
+        classInfo?.classification_run?.id ||
+        classInfo?.classification_run_id ||
+        classInfo?.summary?.classification_run_id;
+      if (runId) setClassificationRunId(runId);
+    }
+
+    try {
+      const res = await documentService.setExhibit(targetDocId, {
+        classification_run_id: runId,
+        classification_ids: classIds,
+        is_exhibit: isExhibit,
+        exhibit_type: isExhibit ? (exhibitType || '') : '',
+      });
+
+      const updatedSet = new Set(classIds.map(String));
+      setExtractedClauses((prev) =>
+        prev.map((c) => {
+          if (updatedSet.has(String(c.classification_id)) || updatedSet.has(String(c.id))) {
+            return {
+              ...c,
+              is_exhibit: isExhibit,
+              exhibit_type: isExhibit ? exhibitType : null,
+              is_exhibit_modified: false,
+              isSaved: true,
+            };
+          }
+          return c;
+        })
+      );
+      setSelectedRows([]);
+      if (res?.summary) {
+        setClassificationSummary(res.summary);
+      }
+      showToast?.(
+        isExhibit
+          ? `Marked ${classIds.length} clause(s) as ${exhibitType || 'Exhibit'}.`
+          : `Cleared exhibit flag on ${classIds.length} clause(s).`,
+        'success'
+      );
+    } catch (err) {
+      console.error('Bulk exhibit error:', err);
+      const updatedSet = new Set(classIds.map(String));
+      setExtractedClauses((prev) =>
+        prev.map((c) => {
+          if (updatedSet.has(String(c.classification_id)) || updatedSet.has(String(c.id))) {
+            return {
+              ...c,
+              is_exhibit: isExhibit,
+              exhibit_type: isExhibit ? exhibitType : null,
+              is_exhibit_modified: true,
+              isLocallyEdited: true,
+              isSaved: false,
+            };
+          }
+          return c;
+        })
+      );
+      setHasUnsavedChanges(true);
+      showToast?.(
+        err?.data?.detail || err?.message || 'Updated exhibit locally. Click Save to persist.',
+        'info'
+      );
     }
   };
 
@@ -2275,6 +2374,7 @@ export default function ReviewWorkspace({
             onRestoreClause={handleRestoreClause}
             isRestoring={isRestoringClause}
             restoringClauseIds={restoringClauseIds}
+            onBulkSetExhibit={handleBulkSetExhibit}
           />
 
           {/* Right: Document Preview Panel */}

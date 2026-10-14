@@ -687,3 +687,77 @@ def taxonomy(request, document_id=None):
             'name': agreement_type.name,
         }
     return JsonResponse(response, json_dumps_params=PRETTY)
+
+
+@require_POST
+@require_auth
+def classification_exhibit_set(request, document_id):
+    """Bulk-set (or clear) the exhibit flag on one or more classification rows.
+
+    Accepts::
+
+        {
+          "classification_run_id": "<from GET /classification/>",
+          "classification_ids": ["<uuid>", ...],
+          "is_exhibit": true | false | null,
+          "exhibit_type": "Exhibit A - Pricing Schedule"  // required when is_exhibit=true
+        }
+
+    Internally this converts the request into items that review_service.save_document
+    understands, so normalization, mirror, activity-log, and is_modified marking all
+    happen identically to a normal Save.  The reviewer's decision (accept / correct)
+    for each item is preserved from whatever the row already holds.
+
+    -> 200 { "updated": <count>, "items": [...fresh rows touched...] }
+    -> 400 on bad input
+    -> 403/423 without the workspace lock
+    """
+    document, error = _get_document(document_id)
+    if error:
+        return error
+    from .review_views import _check_editable
+    editable, resp = _check_editable(document.id, request.user)
+    if not editable:
+        return resp
+
+    payload, err = _json_body(request)
+    if err:
+        return err
+    if not isinstance(payload, dict):
+        return JsonResponse({'detail': 'Body must be a JSON object.'}, status=400)
+
+    classification_run_id = payload.get('classification_run_id')
+    ids = payload.get('classification_ids')
+    is_exhibit = payload.get('is_exhibit')
+    exhibit_type = payload.get('exhibit_type', '')
+
+    if not isinstance(ids, list) or not ids:
+        return JsonResponse({'detail': 'classification_ids must be a non-empty list.'}, status=400)
+    if is_exhibit is True and not (exhibit_type or '').strip():
+        return JsonResponse({'detail': 'exhibit_type is required when is_exhibit is true.'}, status=400)
+
+    # Build synthetic items that save_document accepts, carrying only the
+    # exhibit change; save_document computes decision from the row itself.
+    items = [
+        {'classification_id': str(cid), 'is_exhibit': is_exhibit, 'exhibit_type': exhibit_type}
+        for cid in ids
+    ]
+
+    try:
+        result = review_service.save_document(
+            document, classification_run_id, items, request.user)
+    except SaveError as problem:
+        body = dict({'detail': str(problem)}, **problem.extra)
+        if problem.errors:
+            body['errors'] = problem.errors
+        return JsonResponse(body, status=problem.status)
+
+    saved_ids = set(result['classification_ids'])
+    fresh = export_service.classification_json(document)
+    return JsonResponse({
+        'updated': len(saved_ids),
+        'saved': result['saved'],
+        'review_status': result['review_status'],
+        'items': [item for item in fresh['items'] if item['classification_id'] in saved_ids],
+        'summary': fresh['summary'],
+    }, json_dumps_params=PRETTY)
