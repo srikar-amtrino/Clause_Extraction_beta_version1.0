@@ -34,7 +34,6 @@ import UploadFileOutlinedIcon from '@mui/icons-material/UploadFileOutlined';
 import FileDownloadOutlinedIcon from '@mui/icons-material/FileDownloadOutlined';
 import CloseIcon from '@mui/icons-material/Close';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
-import DeleteOutlineOutlinedIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import GavelIcon from '@mui/icons-material/Gavel';
@@ -43,34 +42,20 @@ import { documentService } from '../services/documentService';
 import { AGREEMENT_TYPES } from './FolderMetadataModal';
 
 // Storage key for custom / persistent taxonomy
-const TAXONOMY_STORAGE_KEY = 'accordor_taxonomy_definitions_v1';
+const TAXONOMY_STORAGE_KEY = 'accordor_taxonomy_definitions_v2';
 
-// Standard baseline taxonomy items
-const INITIAL_TAXONOMY = [
-  // --- Clauses ---
- 
-  // {
-  //   id: 'c-2',
-  //   category: 'clause',
-  //   applies_to: 'All Agreements',
-  //   number: '2.0',
-  //   key: 'limitation_of_liability',
-  //   name: 'Limitation of Liability',
-  //   definition: 'Caps aggregate monetary damages recoverable by either party and disclaims indirect, special, consequential, or punitive damages.',
-  //   aliases: 'Liability Cap, Aggregate Liability, Consequential Damages Waiver, Cap on Damages',
-  //   excludes: 'Gross negligence exceptions, willful misconduct exclusions, indemnification carve-outs',
-  // },
-  
-];
+// Standard baseline taxonomy items (empty template)
+const INITIAL_TAXONOMY = [];
 
 export default function Taxonomy({ showToast = () => {} }) {
-  // Taxonomy items state (loaded from cache, API, or initial baseline)
+  // Taxonomy items state (empty template, loaded from cache if user added items)
   const [items, setItems] = useState(() => {
     try {
+      localStorage.removeItem('accordor_taxonomy_definitions_v1');
       const cached = localStorage.getItem(TAXONOMY_STORAGE_KEY);
       if (cached) {
         const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch (_) {}
     return INITIAL_TAXONOMY;
@@ -109,71 +94,7 @@ export default function Taxonomy({ showToast = () => {} }) {
     } catch (_) {}
   }, [items]);
 
-  // Try to load any remote taxonomy from backend if available
-  useEffect(() => {
-    let isMounted = true;
-    if (typeof documentService?.taxonomy === 'function') {
-      documentService
-        .taxonomy()
-        .then((res) => {
-          if (!isMounted || !res) return;
-          const remoteClauses = Array.isArray(res.clause_types) ? res.clause_types : [];
-          const remoteNonClauses = Array.isArray(res.non_clause_types) ? res.non_clause_types : [];
 
-          if (remoteClauses.length > 0 || remoteNonClauses.length > 0) {
-            setItems((prev) => {
-              const existingKeys = new Set(prev.map((i) => (i.key || '').toLowerCase().trim()));
-              const newlyAdded = [];
-
-              remoteClauses.forEach((c, idx) => {
-                const key = (c.key || c.name || `clause_${idx}`).toLowerCase().trim();
-                if (!existingKeys.has(key)) {
-                  existingKeys.add(key);
-                  newlyAdded.push({
-                    id: `remote-c-${idx}`,
-                    category: 'clause',
-                    applies_to: c.applies_to || 'All Agreements',
-                    number: c.number || `${idx + 1}.0`,
-                    key: c.key || key,
-                    name: c.name || c.key,
-                    definition: c.definition || 'Standard contractual clause taxonomy definition.',
-                    aliases: Array.isArray(c.aliases) ? c.aliases.join(', ') : c.aliases || '',
-                    excludes: Array.isArray(c.excludes) ? c.excludes.join(', ') : c.excludes || '',
-                  });
-                }
-              });
-
-              remoteNonClauses.forEach((nc, idx) => {
-                const key = (nc.key || nc.name || `non_clause_${idx}`).toLowerCase().trim();
-                if (!existingKeys.has(key)) {
-                  existingKeys.add(key);
-                  newlyAdded.push({
-                    id: `remote-nc-${idx}`,
-                    category: 'non_clause',
-                    applies_to: nc.applies_to || 'All Agreements',
-                    number: nc.number || `0.${idx + 1}`,
-                    key: nc.key || key,
-                    name: nc.name || nc.key,
-                    definition: nc.definition || 'Standard non-clause classification.',
-                    aliases: Array.isArray(nc.aliases) ? nc.aliases.join(', ') : nc.aliases || '',
-                    excludes: Array.isArray(nc.excludes) ? nc.excludes.join(', ') : nc.excludes || '',
-                  });
-                }
-              });
-
-              if (newlyAdded.length > 0) {
-                return [...prev, ...newlyAdded];
-              }
-              return prev;
-            });
-          }
-        })
-        .catch(() => {});
-    }
-    return () => {
-      isMounted = false;
-    };
-  }, []);
 
   // Compute stats
   const stats = useMemo(() => {
@@ -533,29 +454,6 @@ export default function Taxonomy({ showToast = () => {} }) {
 
         {/* Right side Actions: Upload File & Export */}
         <Stack direction="row" spacing={1.5} alignItems="center">
-          <Button
-            variant="outlined"
-            size="small"
-            startIcon={<FileDownloadOutlinedIcon sx={{ fontSize: 18 }} />}
-            onClick={handleExportJSON}
-            sx={{
-              textTransform: 'none',
-              fontSize: '13px',
-              fontWeight: 600,
-              color: '#475569',
-              borderColor: '#cbd5e1',
-              borderRadius: '8px',
-              px: 1.8,
-              py: 0.7,
-              bgcolor: '#ffffff',
-              '&:hover': {
-                borderColor: '#94a3b8',
-                bgcolor: '#f8fafc',
-              },
-            }}
-          >
-            Export
-          </Button>
 
           {/* User Request: Upload file button in right side */}
           <Button
@@ -839,7 +737,7 @@ export default function Taxonomy({ showToast = () => {} }) {
                   <TableCell width="200">Applies To</TableCell>
                   <TableCell>Definition</TableCell>
                   <TableCell width="220">Aliases & Excludes</TableCell>
-                  <TableCell width="90" align="right">Actions</TableCell>
+                  <TableCell width="70" align="right">Actions</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -849,10 +747,12 @@ export default function Taxonomy({ showToast = () => {} }) {
                       <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.5 }}>
                         <AccountTreeOutlinedIcon sx={{ fontSize: 44, color: '#94a3b8' }} />
                         <Typography sx={{ fontSize: '15px', fontWeight: 600, color: '#334155' }}>
-                          No taxonomy definitions match your filter
+                          {items.length === 0 ? 'Taxonomy is empty' : 'No taxonomy definitions match your filter'}
                         </Typography>
-                        <Typography sx={{ fontSize: '13px', color: '#64748b', maxWidth: 400 }}>
-                          Try choosing another agreement type, resetting your search term, or click the + Add button to register a new clause or non-clause definition.
+                        <Typography sx={{ fontSize: '13px', color: '#64748b', maxWidth: 420 }}>
+                          {items.length === 0
+                            ? 'Click "Add Clause" or "Add Non-Clause" to register definitions, or use "Upload File" to import taxonomy definitions.'
+                            : 'Try choosing another agreement type, resetting your search term, or click the + Add button to register a new clause or non-clause definition.'}
                         </Typography>
                         <Button
                           variant="contained"
@@ -1043,15 +943,6 @@ export default function Taxonomy({ showToast = () => {} }) {
                                 sx={{ color: '#64748b', '&:hover': { color: '#1e3a5f', bgcolor: '#f1f5f9' } }}
                               >
                                 <EditOutlinedIcon sx={{ fontSize: 16 }} />
-                              </IconButton>
-                            </Tooltip>
-                            <Tooltip title="Delete" arrow>
-                              <IconButton
-                                size="small"
-                                onClick={() => handleDeleteItem(item.id, item.name)}
-                                sx={{ color: '#94a3b8', '&:hover': { color: '#ef4444', bgcolor: '#fef2f2' } }}
-                              >
-                                <DeleteOutlineOutlinedIcon sx={{ fontSize: 16 }} />
                               </IconButton>
                             </Tooltip>
                           </Stack>
