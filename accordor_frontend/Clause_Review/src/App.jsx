@@ -9,6 +9,7 @@ import Documents from './components/Documents';
 import ReviewWorkspace from './components/ReviewWorkspace';
 import ActivityLog from './components/ActivityLog';
 import VectorPlayground from './components/VectorPlayground';
+import Taxonomy from './components/Taxonomy';
 import FolderMetadataModal from './components/FolderMetadataModal';
 import ErrorBoundary from './components/ErrorBoundary';
 import Login from './components/auth/Login';
@@ -183,6 +184,8 @@ function AppWorkspace() {
     ? 'documents'
     : location.pathname.includes('/documents')
     ? 'documents'
+    : location.pathname.includes('/taxonomy')
+    ? 'taxonomy'
     : location.pathname.includes('/activity-log')
     ? 'activity-log'
     : location.pathname.includes('/vector-playground')
@@ -421,6 +424,7 @@ function AppWorkspace() {
   const handleNavSelect = (nav) => {
     if (nav === 'overview') navigate('/overview');
     else if (nav === 'documents') navigate('/documents');
+    else if (nav === 'taxonomy') navigate('/taxonomy');
     else if (nav === 'activity-log') navigate('/activity-log');
     else if (nav === 'vector-playground') navigate('/vector-playground');
   };
@@ -959,7 +963,7 @@ function AppWorkspace() {
         ) : (
           <>
             <TopNav
-              title={activeNav === 'overview' ? 'Overview' : activeNav === 'documents' ? 'Documents' : activeNav === 'activity-log' ? 'Activity Log' : activeNav.replace('-', ' ')}
+              title={activeNav === 'overview' ? 'Overview' : activeNav === 'documents' ? 'Documents' : activeNav === 'taxonomy' ? 'Taxonomy' : activeNav === 'activity-log' ? 'Activity Log' : activeNav.replace('-', ' ')}
               searchQuery={searchQuery}
               onSearchChange={setSearchQuery}
               onCheckDrive={handleCheckDrive}
@@ -997,6 +1001,8 @@ function AppWorkspace() {
                 queueCount={queueDocuments.length}
                 onNavigateToOverview={() => handleNavSelect('overview')}
               />
+            ) : activeNav === 'taxonomy' ? (
+              <Taxonomy showToast={showToast} />
             ) : activeNav === 'activity-log' ? (
               <ActivityLog />
             ) : activeNav === 'vector-playground' ? (
@@ -1092,6 +1098,14 @@ export default function App() {
       />
       <Route
         path="/documents"
+        element={
+          <ProtectedRoute>
+            <AppWorkspace />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/taxonomy"
         element={
           <ProtectedRoute>
             <AppWorkspace />
