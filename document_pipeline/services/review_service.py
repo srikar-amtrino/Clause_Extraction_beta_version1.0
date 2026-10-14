@@ -540,7 +540,13 @@ def save_document(document, classification_run_id, items, user):
                                    .select_related('chunk', 'chunk__clause', 'canonical_type',
                                                    'reviewed_canonical_type', 'run'))}
 
-    types = {t.key: t for t in CanonicalType.objects.filter(version=run.taxonomy_version)}
+    types = {
+        t.key: t
+        for t in CanonicalType.objects.filter(
+            version=run.taxonomy_version,
+            agreement_type_id=document.agreement_type_id,
+        )
+    }
     now = timezone.now()
     counts = {'accepted': 0, 'corrected': 0, 'rejected': 0, 'unchanged': 0,
               'deleted_skipped': 0}

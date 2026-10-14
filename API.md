@@ -157,6 +157,58 @@ input:
 Send these IDs as `agreement_type` and `sectorial_category` when configuring a
 Google Drive folder. Existing display names remain accepted for compatibility.
 
+## Canonical taxonomy management
+
+`GET /api/taxonomy/types/` returns all canonical types, their agreement type
+IDs and names, alias and exclusion details, and the agreement/sector choices:
+
+```json
+{
+  "canonical_types": [
+    {
+      "id": "7b616032-f048-4ec6-8eac-7a9f2810bfbd",
+      "version": "v1",
+      "applies_to": "clause",
+      "number": 29,
+      "key": "force-majeure",
+      "name": "Force Majeure",
+      "definition": "Relief from performance due to events beyond reasonable control.",
+      "aliases": ["Force Majeure", "Acts of God"],
+      "alias_details": [],
+      "excludes": [],
+      "agreement_type": {"id": 4, "name": "Master Services Agreement"},
+      "agreement_type_id": 4,
+      "is_active": true,
+      "sort_order": 29,
+      "created_at": "2026-10-14T06:18:22+00:00"
+    }
+  ],
+  "agreement_types": [{"id": 4, "name": "Master Services Agreement"}],
+  "sector_types": [{"id": 1, "name": "IT and Technology"}]
+}
+```
+
+`POST /api/taxonomy/types/` creates an entry and requires a valid Bearer token
+and `agreement_type_id`. `version` defaults to `v1`; aliases are strings and
+exclusions are keys or `{ "key", "note" }` objects. `PATCH
+/api/taxonomy/types/<canonical-type-id>/` updates an existing entry; omitted
+fields remain unchanged. Both writes return the saved canonical type. Keys,
+names, numbers, and literal aliases must be unique within the agreement type
+and version; duplicate values return `409`.
+
+```json
+{
+  "agreement_type_id": 4,
+  "applies_to": "clause",
+  "number": 29,
+  "key": "force-majeure",
+  "name": "Force Majeure",
+  "definition": "Relief from performance due to events beyond reasonable control.",
+  "aliases": ["Force Majeure", "Acts of God"],
+  "excludes": []
+}
+```
+
 ## Agreement-specific classification prompts
 
 `agreement_type_prompts` stores one prompt per agreement type using

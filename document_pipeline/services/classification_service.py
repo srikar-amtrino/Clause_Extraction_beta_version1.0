@@ -135,7 +135,11 @@ def classify_chunk_run(chunk_run, *, force=False, classifier=None, concurrency=N
     """
     _check_classifiable(chunk_run)
     classifier = classifier or classifier_from_settings()
-    vocab = load_vocabulary(settings.CLASSIFY_TAXONOMY_VERSION)
+    agreement_type_id = chunk_run.extraction_run.document.agreement_type_id
+    vocab = load_vocabulary(
+        settings.CLASSIFY_TAXONOMY_VERSION,
+        agreement_type_id=agreement_type_id,
+    )
     _routing_settings(vocab)
 
     current = ClassificationRun.objects.filter(chunk_run=chunk_run, is_current=True).first()
@@ -286,7 +290,9 @@ def classify_batch(run_id, chunk_ids, batch_index=0, *, classifier=None):
     Idempotent: chunks that already have a row in the run are skipped, so a
     retried task writes nothing twice.
     """
-    run = ClassificationRun.objects.select_related('chunk_run__extraction_run').get(pk=run_id)
+    run = ClassificationRun.objects.select_related(
+        'chunk_run__extraction_run__document',
+    ).get(pk=run_id)
     if run.status != ClassificationRun.RUNNING:
         raise ValueError('ClassificationRun %s is %s, not running.' % (run.id, run.status))
     classifier = classifier or classifier_from_settings()
@@ -298,7 +304,11 @@ def classify_batch(run_id, chunk_ids, batch_index=0, *, classifier=None):
     todo = [str(c) for c in chunk_ids if str(c) not in done]
     if not todo:
         return 0
-    vocab = load_vocabulary(run.taxonomy_version)
+    agreement_type_id = run.chunk_run.extraction_run.document.agreement_type_id
+    vocab = load_vocabulary(
+        run.taxonomy_version,
+        agreement_type_id=agreement_type_id,
+    )
     batch = Batch(batch_index, tuple(_groups_for(run.chunk_run, only=todo)))
 
     from document_pipeline.pipeline_logger import (
@@ -707,8 +717,11 @@ def write_resolution(run, resolution, *, vocab):
     """One resolved batch -> Classification and ClassificationCall rows, in one
     transaction. Paragraphs that already have a row in the run are skipped."""
     batch = resolution.batch
-    type_pks = dict(CanonicalType.objects.filter(version=vocab.version)
-                    .values_list('key', 'id'))
+    type_query = CanonicalType.objects.filter(version=vocab.version)
+    if run.chunk_run_id is not None:
+        agreement_type_id = run.chunk_run.extraction_run.document.agreement_type_id
+        type_query = type_query.filter(agreement_type_id=agreement_type_id)
+    type_pks = dict(type_query.values_list('key', 'id'))
     chunk_ids = [p.chunk_id for p in batch.paragraphs]
     existing = {str(pk) for pk in Classification.objects.filter(
         run=run, chunk_id__in=chunk_ids).values_list('chunk_id', flat=True)}
