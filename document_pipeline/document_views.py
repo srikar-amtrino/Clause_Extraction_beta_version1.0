@@ -8,10 +8,12 @@ from django.views.decorators.http import require_GET, require_POST
 
 from core.auth_helpers import require_auth
 from .models import (
+    AgreementType,
     CanonicalType,
     ClassificationRun,
     Document,
     ExtractionRun,
+    SectorType,
 )
 from .services import export_service, review_service
 from .services.ingestion_service import GOOGLE_DRIVE
@@ -56,7 +58,9 @@ def _get_document(document_id):
     """-> (document, error response). Not get_object_or_404, so an unknown id
     answers with the same JSON shape as every other error here instead of
     Django's HTML 404 page."""
-    document = Document.objects.filter(pk=document_id).select_related('current_reviewer').first()
+    document = Document.objects.filter(pk=document_id).select_related(
+        'current_reviewer', 'agreement_type', 'sectorial_category',
+    ).first()
     if document is None:
         return None, JsonResponse({'detail': 'No document with that id.'}, status=404)
     return document, None
@@ -191,8 +195,12 @@ def _document_row(document, extraction_run, classification_run, review_counts=No
         'document_id': str(document.id),
         'name': document.name,
         'title': document.document_title,
-        'agreement_type': document.agreement_type,
-        'sectorial_category': document.sectorial_category,
+        'agreement_type': document.agreement_type.name if document.agreement_type else '',
+        'agreement_type_id': document.agreement_type_id,
+        'sectorial_category': (
+            document.sectorial_category.name if document.sectorial_category else ''
+        ),
+        'sectorial_category_id': document.sectorial_category_id,
         'drive_file_id': document.source_external_id,
         'drive_folder_id': document.source_parent_id,
         'drive_web_link': document.drive_web_link or None,
@@ -278,8 +286,10 @@ def document_list(request):
     # Joined by name rather than through google_drive_source(): its
     # get_or_create costs a round trip per call, and a source row that does not
     # exist yet has no documents anyway.
-    documents = Document.objects.filter(ingestion_source__name=GOOGLE_DRIVE,
-                                        deleted_at__isnull=True).select_related('current_reviewer')
+    documents = Document.objects.filter(
+        ingestion_source__name=GOOGLE_DRIVE,
+        deleted_at__isnull=True,
+    ).select_related('current_reviewer', 'agreement_type', 'sectorial_category')
 
     folder_ids = [f for f in request.GET.getlist('folder_id') if f]
     if folder_ids:
@@ -614,7 +624,21 @@ def _json_body(request):
 
 
 @require_GET
-def taxonomy(request):
+def document_metadata(request):
+    return JsonResponse({
+        'agreement_types': [
+            {'id': item.pk, 'name': item.name}
+            for item in AgreementType.objects.all()
+        ],
+        'sector_types': [
+            {'id': item.pk, 'name': item.name}
+            for item in SectorType.objects.all()
+        ],
+    })
+
+
+@require_GET
+def taxonomy(request, document_id=None):
     """The types a verdict can carry, for filter menus and legends.
 
       version=<v>              defaults to v1, the version the current runs use
@@ -623,7 +647,23 @@ def taxonomy(request):
     `key` is what a classification item's `type` holds; `name` is what to show.
     """
     version = request.GET.get('version') or 'v1'
+    agreement_type = None
+    if document_id is not None:
+        document = Document.objects.select_related('agreement_type').filter(
+            pk=document_id,
+        ).first()
+        if document is None:
+            return JsonResponse({'detail': 'No document with that id.'}, status=404)
+        agreement_type = document.agreement_type
+        if agreement_type is None:
+            return JsonResponse({
+                'detail': 'The document has no agreement type.',
+            }, status=400)
     types = CanonicalType.objects.filter(version=version)
+    if not types.exists():
+        return JsonResponse({'detail': 'No taxonomy seeded for version %s.' % version}, status=404)
+    if agreement_type is not None:
+        types = types.filter(agreement_type=agreement_type)
     if _bool_param(request, 'include_inactive') is not True:
         types = types.filter(is_active=True)
     rows = [{
@@ -634,10 +674,90 @@ def taxonomy(request):
         'definition': t.definition,
         'is_active': t.is_active,
     } for t in types.order_by('applies_to', 'sort_order')]
-    if not rows:
+    if not rows and document_id is None:
         return JsonResponse({'detail': 'No taxonomy seeded for version %s.' % version}, status=404)
-    return JsonResponse({
+    response = {
         'version': version,
         'clause_types': [r for r in rows if r['applies_to'] == 'clause'],
         'non_clause_types': [r for r in rows if r['applies_to'] == 'non_clause'],
+    }
+    if agreement_type is not None:
+        response['agreement_type'] = {
+            'id': agreement_type.pk,
+            'name': agreement_type.name,
+        }
+    return JsonResponse(response, json_dumps_params=PRETTY)
+
+
+@require_POST
+@require_auth
+def classification_exhibit_set(request, document_id):
+    """Bulk-set (or clear) the exhibit flag on one or more classification rows.
+
+    Accepts::
+
+        {
+          "classification_run_id": "<from GET /classification/>",
+          "classification_ids": ["<uuid>", ...],
+          "is_exhibit": true | false | null,
+          "exhibit_type": "Exhibit A - Pricing Schedule"  // required when is_exhibit=true
+        }
+
+    Internally this converts the request into items that review_service.save_document
+    understands, so normalization, mirror, activity-log, and is_modified marking all
+    happen identically to a normal Save.  The reviewer's decision (accept / correct)
+    for each item is preserved from whatever the row already holds.
+
+    -> 200 { "updated": <count>, "items": [...fresh rows touched...] }
+    -> 400 on bad input
+    -> 403/423 without the workspace lock
+    """
+    document, error = _get_document(document_id)
+    if error:
+        return error
+    from .review_views import _check_editable
+    editable, resp = _check_editable(document.id, request.user)
+    if not editable:
+        return resp
+
+    payload, err = _json_body(request)
+    if err:
+        return err
+    if not isinstance(payload, dict):
+        return JsonResponse({'detail': 'Body must be a JSON object.'}, status=400)
+
+    classification_run_id = payload.get('classification_run_id')
+    ids = payload.get('classification_ids')
+    is_exhibit = payload.get('is_exhibit')
+    exhibit_type = payload.get('exhibit_type', '')
+
+    if not isinstance(ids, list) or not ids:
+        return JsonResponse({'detail': 'classification_ids must be a non-empty list.'}, status=400)
+    if is_exhibit is True and not (exhibit_type or '').strip():
+        return JsonResponse({'detail': 'exhibit_type is required when is_exhibit is true.'}, status=400)
+
+    # Build synthetic items that save_document accepts, carrying only the
+    # exhibit change; save_document computes decision from the row itself.
+    items = [
+        {'classification_id': str(cid), 'is_exhibit': is_exhibit, 'exhibit_type': exhibit_type}
+        for cid in ids
+    ]
+
+    try:
+        result = review_service.save_document(
+            document, classification_run_id, items, request.user)
+    except SaveError as problem:
+        body = dict({'detail': str(problem)}, **problem.extra)
+        if problem.errors:
+            body['errors'] = problem.errors
+        return JsonResponse(body, status=problem.status)
+
+    saved_ids = set(result['classification_ids'])
+    fresh = export_service.classification_json(document)
+    return JsonResponse({
+        'updated': len(saved_ids),
+        'saved': result['saved'],
+        'review_status': result['review_status'],
+        'items': [item for item in fresh['items'] if item['classification_id'] in saved_ids],
+        'summary': fresh['summary'],
     }, json_dumps_params=PRETTY)

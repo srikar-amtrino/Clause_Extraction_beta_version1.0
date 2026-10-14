@@ -42,12 +42,14 @@ from document_pipeline.classification.bedrock_client import classifier_from_sett
 from document_pipeline.classification.schema import output_schema
 from document_pipeline.classification.taxonomy import CLAUSE, NON_CLAUSE, load_vocabulary
 from document_pipeline.models import (
+    AgreementTypePrompt,
     CanonicalType,
     Chunk,
     ChunkRun,
     Classification,
     ClassificationCall,
     ClassificationRun,
+    Document,
     PipelineStageLog,
 )
 
@@ -137,10 +139,24 @@ def classify_chunk_run(chunk_run, *, force=False, classifier=None, concurrency=N
     _routing_settings(vocab)
 
     current = ClassificationRun.objects.filter(chunk_run=chunk_run, is_current=True).first()
-    if not force and is_up_to_date(current, vocab.version, classifier.model_id):
+    system_text = system_prompt_for_document(
+        chunk_run.extraction_run.document_id,
+        vocab,
+    )
+    if not force and is_up_to_date(
+        current,
+        vocab.version,
+        classifier.model_id,
+        prompts.prompt_sha256(system_text),
+    ):
         return ClassificationOutcome(chunk_run=chunk_run, run=current, skipped=True)
 
-    run = start_run(chunk_run, classifier=classifier, vocab=vocab)
+    run = start_run(
+        chunk_run,
+        classifier=classifier,
+        vocab=vocab,
+        system_text=system_text,
+    )
     try:
         batches = plan_run_batches(run)
         context = _context(run, vocab)
@@ -153,12 +169,29 @@ def classify_chunk_run(chunk_run, *, force=False, classifier=None, concurrency=N
     return ClassificationOutcome(chunk_run=chunk_run, run=run, created=True)
 
 
-def is_up_to_date(run, taxonomy_version, model_id):
+def is_up_to_date(run, taxonomy_version, model_id, system_prompt_sha256=None):
     """True when `run` was produced by exactly the current configuration."""
     return bool(run is not None
                 and run.taxonomy_version == taxonomy_version
                 and run.prompt_version == prompts.PROMPT_VERSION
-                and run.model_id == model_id)
+                and run.model_id == model_id
+                and (system_prompt_sha256 is None
+                     or run.system_prompt_sha256 == system_prompt_sha256))
+
+
+def system_prompt_for_document(document_id, vocab):
+    """Return the stored agreement prompt, or the generated taxonomy prompt."""
+    agreement_type_id = Document.objects.values_list(
+        'agreement_type_id',
+        flat=True,
+    ).get(pk=document_id)
+    if agreement_type_id is not None:
+        stored_prompt = AgreementTypePrompt.objects.filter(
+            agreement_type_id=agreement_type_id,
+        ).values_list('prompt', flat=True).first()
+        if stored_prompt:
+            return stored_prompt
+    return prompts.render_system_prompt(vocab)
 
 
 def _check_classifiable(chunk_run):
@@ -186,9 +219,13 @@ def _routing_settings(vocab):
 
 # ------------------------------------------------------------------ run lifecycle
 
-def start_run(chunk_run, *, classifier, vocab):
+def start_run(chunk_run, *, classifier, vocab, system_text=None):
     """Open a new run: running, not current, with the exact prompt recorded."""
-    system_text = prompts.render_system_prompt(vocab)
+    if system_text is None:
+        system_text = system_prompt_for_document(
+            chunk_run.extraction_run.document_id,
+            vocab,
+        )
     micro_count = Chunk.objects.filter(chunk_run=chunk_run, kind=Chunk.MICRO).count()
     now = timezone.now()
     with transaction.atomic():

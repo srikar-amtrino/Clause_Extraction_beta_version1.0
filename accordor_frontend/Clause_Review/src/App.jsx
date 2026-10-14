@@ -9,6 +9,7 @@ import Documents from './components/Documents';
 import ReviewWorkspace from './components/ReviewWorkspace';
 import ActivityLog from './components/ActivityLog';
 import VectorPlayground from './components/VectorPlayground';
+import Taxonomy from './components/Taxonomy';
 import FolderMetadataModal from './components/FolderMetadataModal';
 import ErrorBoundary from './components/ErrorBoundary';
 import Login from './components/auth/Login';
@@ -18,6 +19,7 @@ import PublicRoute from './components/auth/PublicRoute';
 import { useAuth } from './context/AuthContext';
 import { googleDriveService } from './services/googleDriveService';
 import { documentService } from './services/documentService';
+import { normalizeDocumentList, computeDocumentCounts } from './utils/documentUtils';
 
 // Deduplicate documents strictly by normalized name so a document NEVER appears twice
 function deduplicateDocs(docs) {
@@ -182,6 +184,8 @@ function AppWorkspace() {
     ? 'documents'
     : location.pathname.includes('/documents')
     ? 'documents'
+    : location.pathname.includes('/taxonomy')
+    ? 'taxonomy'
     : location.pathname.includes('/activity-log')
     ? 'activity-log'
     : location.pathname.includes('/vector-playground')
@@ -420,6 +424,7 @@ function AppWorkspace() {
   const handleNavSelect = (nav) => {
     if (nav === 'overview') navigate('/overview');
     else if (nav === 'documents') navigate('/documents');
+    else if (nav === 'taxonomy') navigate('/taxonomy');
     else if (nav === 'activity-log') navigate('/activity-log');
     else if (nav === 'vector-playground') navigate('/vector-playground');
   };
@@ -576,9 +581,27 @@ function AppWorkspace() {
     verifyAuthStatus();
   }, [currentUser]);
 
-  // Stats: use server-side counts when they are available (fast, accurate);
-  // fall back to deriving from the fetched document list while it loads.
+  // Stats: prioritize deriving from normalized active document list to match Documents section filter chips exactly;
+  // fall back to server-side counts if documents are not yet loaded.
   const stats = React.useMemo(() => {
+    if (extractedDocuments && extractedDocuments.length > 0) {
+      const normalized = normalizeDocumentList(extractedDocuments, driveState);
+      const docCounts = computeDocumentCounts(normalized);
+      const processing = queueDocuments.filter((d) => {
+        const s = (d.extractionStatus || d.extraction_status || 'pending').toLowerCase();
+        return s === 'pending' || s === 'extracted' || s === 'extracted_with_warnings';
+      }).length;
+      return {
+        needsReview: docCounts.needsReview,
+        processing,
+        inReview: docCounts.inReview,
+        draft: docCounts.draft,
+        reviewed: docCounts.reviewed,
+        inreviewed: docCounts.inreviewed,
+        indraft: docCounts.indraft,
+        updatedToVector: docCounts.published,
+      };
+    }
     if (serverStats && serverStats.counts) {
       const c = serverStats.counts;
       const reviewed = (c.reviewed || 0) + (c.published || 0) + (c.reopened_reviewed || 0);
@@ -588,31 +611,28 @@ function AppWorkspace() {
         processing: (c.pending || 0) + (c.pending_classification || 0),
         inReview: (c.in_review || 0) + (c.reopened_in_review || 0),
         draft,
-        // Overview reads both .reviewed and .inreviewed — keep both in sync
         reviewed,
         inreviewed: reviewed,
         indraft: draft,
         updatedToVector: (c.published || 0),
       };
     }
-    // Fallback to local derivation while document list is loading
-    const reviewed = extractedDocuments.filter((d) => d.status === 'Reviewed' || (d.extractionStatus === 'classified' && d.needsReview === 0)).length;
-    const draft = queueDocuments.filter((d) => d.extractionStatus === 'rejected').length + extractedDocuments.filter((d) => d.status === 'Draft').length;
+    // Fallback when empty
+    const processing = queueDocuments.filter((d) => {
+      const s = (d.extractionStatus || d.extraction_status || 'pending').toLowerCase();
+      return s === 'pending' || s === 'extracted' || s === 'extracted_with_warnings';
+    }).length;
     return {
-      needsReview: extractedDocuments.filter((d) => (d.needsReview > 0) || d.status === 'Needs review').length,
-      processing: queueDocuments.filter((d) => {
-        const s = (d.extractionStatus || d.extraction_status || 'pending').toLowerCase();
-        return s === 'pending' || s === 'extracted' || s === 'extracted_with_warnings';
-      }).length,
-      inReview: extractedDocuments.filter((d) => d.status === 'In review' || Boolean(d.current_reviewer)).length,
-      draft,
-      reviewed,
-      // Overview reads both .reviewed and .inreviewed — keep both in sync
-      inreviewed: reviewed,
-      indraft: draft,
-      updatedToVector: extractedDocuments.filter((d) => d.vectorDbStatus && d.vectorDbStatus.startsWith('Updated')).length,
+      needsReview: 0,
+      processing,
+      inReview: 0,
+      draft: 0,
+      reviewed: 0,
+      inreviewed: 0,
+      indraft: 0,
+      updatedToVector: 0,
     };
-  }, [serverStats, extractedDocuments, queueDocuments]);
+  }, [serverStats, extractedDocuments, queueDocuments, driveState]);
 
   // Manual Google Drive OAuth connect
   const handleConnectDrive = () => {
@@ -656,9 +676,15 @@ function AppWorkspace() {
   };
 
   // Handle Save in the second modal (Folder + Agreement Type + Sectorial)
-  const handleSaveFolderConfig = async ({ folder, agreementType, sectorial }) => {
+  const handleSaveFolderConfig = async ({
+    folder,
+    agreementType,
+    sectorial,
+    agreementTypeName,
+    sectorialName,
+  }) => {
     setIsSavingConfig(true);
-    showToast(`Configuring "${folder.name}" (${agreementType} / ${sectorial})...`);
+    showToast(`Configuring "${folder.name}" (${agreementTypeName} / ${sectorialName})...`);
 
     try {
       setDriveState((prev) => {
@@ -667,8 +693,8 @@ function AppWorkspace() {
           isConnected: true,
           folderPath: folder.name,
           folderIds: [folder.id],
-          agreementType: agreementType,
-          sectorial: sectorial,
+          agreementType: agreementTypeName,
+          sectorial: sectorialName,
           isSyncing: true,
           lastChecked: 'just now',
         };
@@ -706,8 +732,8 @@ function AppWorkspace() {
                 document_id: file.id,
                 name: file.name,
                 folder: f.name || folder.name,
-                agreementType,
-                sectorial,
+                agreementType: agreementTypeName,
+                sectorial: sectorialName,
                 extraction_status: 'pending',
                 extractionStatus: 'pending',
                 size: file.size ? `${Math.round(file.size / 1024)} KB` : '24 KB',
@@ -943,7 +969,7 @@ function AppWorkspace() {
         ) : (
           <>
             <TopNav
-              title={activeNav === 'overview' ? 'Overview' : activeNav === 'documents' ? 'Documents' : activeNav === 'activity-log' ? 'Activity Log' : activeNav.replace('-', ' ')}
+              title={activeNav === 'overview' ? 'Overview' : activeNav === 'documents' ? 'Documents' : activeNav === 'taxonomy' ? 'Taxonomy' : activeNav === 'activity-log' ? 'Activity Log' : activeNav.replace('-', ' ')}
               searchQuery={searchQuery}
               onSearchChange={setSearchQuery}
               onCheckDrive={handleCheckDrive}
@@ -956,6 +982,7 @@ function AppWorkspace() {
               <Overview
                 driveState={driveState}
                 stats={stats}
+                documents={extractedDocuments}
                 queueItems={queueDocuments}
                 searchQuery={searchQuery}
                 onOpenPicker={handleOpenPicker}
@@ -963,7 +990,7 @@ function AppWorkspace() {
                 onCheckDrive={handleCheckDrive}
                 onNavigateToDocuments={() => handleNavSelect('documents')}
                 onNavigateToActivityLog={() => handleNavSelect('activity-log')}
-                isEmptyData={fetchedDocuments.length === 0}
+                isEmptyData={extractedDocuments.length === 0}
               />
             ) : activeNav === 'documents' ? (
               <Documents
@@ -980,6 +1007,8 @@ function AppWorkspace() {
                 queueCount={queueDocuments.length}
                 onNavigateToOverview={() => handleNavSelect('overview')}
               />
+            ) : activeNav === 'taxonomy' ? (
+              <Taxonomy showToast={showToast} />
             ) : activeNav === 'activity-log' ? (
               <ActivityLog />
             ) : activeNav === 'vector-playground' ? (
@@ -988,6 +1017,7 @@ function AppWorkspace() {
               <Overview
                 driveState={driveState}
                 stats={stats}
+                documents={extractedDocuments}
                 queueItems={queueDocuments}
                 searchQuery={searchQuery}
                 onOpenPicker={handleOpenPicker}
@@ -995,7 +1025,7 @@ function AppWorkspace() {
                 onCheckDrive={handleCheckDrive}
                 onNavigateToDocuments={() => handleNavSelect('documents')}
                 onNavigateToActivityLog={() => handleNavSelect('activity-log')}
-                isEmptyData={fetchedDocuments.length === 0}
+                isEmptyData={extractedDocuments.length === 0}
               />
             )}
           </>
@@ -1081,6 +1111,14 @@ export default function App() {
         }
       />
       <Route
+        path="/taxonomy"
+        element={
+          <ProtectedRoute>
+            <AppWorkspace />
+          </ProtectedRoute>
+        }
+      />
+      <Route
         path="/review"
         element={
           <ProtectedRoute>
@@ -1096,14 +1134,14 @@ export default function App() {
           </ProtectedRoute>
         }
       />
-      <Route
+      {/* <Route
         path="/activity-log"
         element={
           <ProtectedRoute>
             <AppWorkspace />
           </ProtectedRoute>
         }
-      />
+      /> */}
       <Route
         path="/vector-playground"
         element={

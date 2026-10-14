@@ -29,6 +29,7 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { useAuth } from '../context/AuthContext';
 import { documentService } from '../services/documentService';
 import { AGREEMENT_TYPES, SECTORIAL_OPTIONS } from './FolderMetadataModal';
+import { normalizeDocumentList, computeDocumentCounts } from '../utils/documentUtils';
 
 export default function Documents({
   documents = [],
@@ -46,130 +47,12 @@ export default function Documents({
   const { currentUser } = useAuth();
   const currentUserName = currentUser?.username || currentUser?.name || (currentUser?.email ? currentUser.email.split('@')[0] : 'Reviewer');
 
-  // Format real documents from backend pipeline API or Google Drive and strictly deduplicate by document name
+  // Format real documents from backend pipeline API or Google Drive using centralized normalizer
   const allDocs = useMemo(() => {
     if (!documents || documents.length === 0 || isEmptyData) {
       return [];
     }
-
-    // Deduplicate by normalized document name to ensure every document appears at most ONCE
-    const uniqueMap = new Map();
-    documents.forEach((d, idx) => {
-      const nameKey = (d.name || d.fileName || '').trim().toLowerCase();
-      if (!nameKey) {
-        uniqueMap.set(String(d.id || d.document_id || idx), d);
-        return;
-      }
-      if (!uniqueMap.has(nameKey)) {
-        uniqueMap.set(nameKey, d);
-      } else {
-        const existing = uniqueMap.get(nameKey);
-        const existingStatus = (existing.extraction_status || existing.extractionStatus || '').toLowerCase();
-        const newStatus = (d.extraction_status || d.extractionStatus || '').toLowerCase();
-        const existingPublished = existingStatus === 'published' || existing.review_status === 'published' || existing.isPublished;
-        const newPublished = newStatus === 'published' || d.review_status === 'published' || d.isPublished;
-        const existingClassified = existingStatus === 'classified' || Boolean(existing.stages?.classification || existing.classified);
-        const newClassified = newStatus === 'classified' || Boolean(d.stages?.classification || d.classified);
-        if (newPublished && !existingPublished) {
-          uniqueMap.set(nameKey, d);
-        } else if (existingPublished && !newPublished) {
-          // Keep the published document and its current extraction status.
-        } else if (!existingClassified && newClassified) {
-          uniqueMap.set(nameKey, d);
-        } else if (existingClassified && !newClassified) {
-          // Keep existing classified document
-        } else {
-          const existingPages = existing.pages ?? existing.stages?.extraction?.pages ?? 0;
-          const newPages = d.pages ?? d.stages?.extraction?.pages ?? 0;
-          const isExistingExtracted = existingStatus === 'extracted' || existingStatus === 'extracted_with_warnings';
-          const isNewExtracted = newStatus === 'extracted' || newStatus === 'extracted_with_warnings';
-          if (!isExistingExtracted && isNewExtracted) {
-            uniqueMap.set(nameKey, d);
-          } else if (newPages > existingPages) {
-            uniqueMap.set(nameKey, d);
-          }
-        }
-      }
-    });
-
-    const uniqueDocs = Array.from(uniqueMap.values());
-
-    return uniqueDocs.map((d, i) => {
-      const extraction = d.stages?.extraction;
-      const classification = d.stages?.classification;
-      const pages = d.pages ?? extraction?.pages ?? 0;
-      const clauses = d.clauses ?? extraction?.clauses ?? 0;
-      const paragraphs = d.paragraphs ?? extraction?.paragraphs ?? 0;
-      const rawExtractionStatus = (
-        d.extraction_status ||
-        d.extractionStatus ||
-        extraction?.status ||
-        'pending'
-      ).toLowerCase();
-      const isClassified =
-        rawExtractionStatus === 'classified' ||
-        (d.status && String(d.status).toLowerCase() === 'classified') ||
-        d.classified === true ||
-        Boolean(classification && (classification.status === 'succeeded' || (classification.micro_chunks && classification.micro_chunks > 0) || classification.id));
-      const extractionStatus = rawExtractionStatus === 'published'
-        ? 'published'
-        : isClassified ? 'classified' : rawExtractionStatus;
-      const needsReview = d.needsReview ?? classification?.needs_review ?? null;
-      const warnings = d.warnings || extraction?.warnings || [];
-      const size = d.size || (pages > 0 ? `${Math.max(12, Math.round(pages * 26.5))} KB` : '24 KB');
-      const currentReviewer = d.current_reviewer !== undefined
-        ? d.current_reviewer
-        : (d.rawDoc?.current_reviewer !== undefined ? d.rawDoc.current_reviewer : null);
-
-      // Persistent list of all users who saved edits (from API's reviewers field)
-      const reviewers = d.reviewers || d.rawDoc?.reviewers || [];
-
-      return {
-        id: d.id || d.document_id || `doc-${i}`,
-        documentId: d.document_id || d.id || `doc-${i}`,
-        name: d.name || 'Untitled Document',
-        fileName: d.name || 'document.docx',
-        title: d.title || d.name,
-        agreement_type: d.agreement_type || d.agreementType || d.rawDoc?.agreement_type || d.rawDoc?.metadata?.agreement_type || '',
-        sectorial_category: d.sectorial_category || d.sectorial || d.rawDoc?.sectorial_category || d.rawDoc?.metadata?.sectorial_category || '',
-        agreementType: d.agreement_type || d.agreementType || d.rawDoc?.agreement_type || d.rawDoc?.metadata?.agreement_type || '',
-        sectorial: d.sectorial_category || d.sectorial || d.rawDoc?.sectorial_category || d.rawDoc?.metadata?.sectorial_category || '',
-        pages,
-        clauses,
-        paragraphs,
-        size,
-        extractionStatus,
-        needsReview,
-        warnings,
-        stages: d.stages || {},
-        current_reviewer: currentReviewer,
-        currentReviewer: currentReviewer,
-        // All distinct users who clicked Save (the persistent reviewer list)
-        reviewers,
-        status: (d.status === 'Saved' || d.isSaved) ? 'Saved' : (d.status || (currentReviewer ? 'In review' : (isClassified ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted' ? (needsReview > 0 ? 'Needs review' : 'Reviewed') : extractionStatus === 'extracted_with_warnings' ? 'Needs review' : extractionStatus === 'rejected' ? 'Draft' : 'Needs review'))),
-        statusTag: d.statusTag || (warnings.length > 0 ? `${warnings.length} warning${warnings.length > 1 ? 's' : ''}` : null),
-        vectorDbStatus: d.vectorDbStatus || 'Not sent yet',
-        vectorDbDetail: d.vectorDbDetail || '',
-        parties: d.parties || (d.folder || driveState.folderPath ? `Folder: ${d.folder || driveState.folderPath}` : 'Parties to Agreement'),
-        inDriveSince: d.inDriveSince || (d.last_extracted_at ? new Date(d.last_extracted_at).toLocaleDateString() : (d.modifiedTime || 'Recently')),
-        reviewer: currentReviewer || d.reviewer || currentUserName || driveState.user?.name || driveState.user?.email || 'Reviewer',
-        lastSaved: d.lastSaved || (d.last_extracted_at ? new Date(d.last_extracted_at).toLocaleDateString() : (d.modifiedTime || 'Today')),
-        lastExtracted: d.lastExtracted || (d.last_extracted_at ? new Date(d.last_extracted_at).toLocaleString() : null),
-        folder: d.folder || driveState.folderPath || 'Google Drive',
-        issues: d.issues || {
-          duplicateParaId: 0,
-          canonicalTypeMissing: needsReview ?? 0,
-          paragraphsToReview: needsReview ?? (paragraphs - clauses > 0 ? paragraphs - clauses : 0),
-          warnings,
-        },
-        recentActivity: d.recentActivity || {
-          user: driveState.user?.name || 'System',
-          action: isClassified ? 'Pipeline classification completed' : extractionStatus === 'extracted' ? 'Last extraction completed' : extractionStatus === 'rejected' ? 'Document rejected by parser' : 'File ready from Google Drive',
-          timestamp: d.modifiedTime || (d.last_extracted_at ? new Date(d.last_extracted_at).toLocaleDateString() : 'Today'),
-        },
-        webViewLink: d.webViewLink || d.drive_web_link,
-      };
-    });
+    return normalizeDocumentList(documents, driveState, currentUserName);
   }, [documents, driveState, isEmptyData, currentUserName]);
 
   const [activeFilter, setActiveFilter] = useState('all');
@@ -185,8 +68,8 @@ export default function Documents({
 
   const [selectedDocId, setSelectedDocId] = useState(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(true);
-  const [selectedAgreementType, setSelectedAgreementType] = useState('all');
-  const [selectedSectorial, setSelectedSectorial] = useState('all');
+  const [selectedAgreementTypes, setSelectedAgreementTypes] = useState([]);
+  const [selectedSectorials, setSelectedSectorials] = useState([]);
   const [agreementMenuAnchor, setAgreementMenuAnchor] = useState(null);
   const [sectorialMenuAnchor, setSectorialMenuAnchor] = useState(null);
 
@@ -200,33 +83,9 @@ export default function Documents({
     return allDocs[0];
   }, [allDocs, selectedDocId]);
 
-  // Counts for tabs
+  // Counts for tabs - computed via shared utility
   const counts = useMemo(() => {
-    const draftCount = allDocs.filter((d) => d.status === 'Draft' || d.extractionStatus === 'rejected').length;
-    const reviewedCount = allDocs.filter((d) => d.status === 'Reviewed').length;
-    const publishedCount = allDocs.filter(
-      (d) =>
-        d.status === 'Published' ||
-        d.status === 'Updated to vector DB' ||
-        d.review_status === 'published' ||
-        (d.vectorDbStatus && (d.vectorDbStatus.startsWith('Updated') || d.vectorDbStatus === 'Published')) ||
-        d.isPublished
-    ).length;
-    return {
-      all: allDocs.length,
-      needsReview: allDocs.filter((d) => (d.needsReview && d.needsReview > 0) || d.status === 'Needs review').length,
-      inReview: allDocs.filter((d) => d.status === 'In review' || Boolean(d.current_reviewer)).length,
-      draft: draftCount,
-      indraft: draftCount,
-      saved: allDocs.filter((d) => d.status === 'Saved').length,
-      reviewed: reviewedCount,
-      inreviewed: reviewedCount,
-      published: publishedCount,
-      extracted: allDocs.filter((d) => d.extractionStatus === 'extracted').length,
-      warnings: allDocs.filter((d) => d.extractionStatus === 'extracted_with_warnings' || (d.warnings && d.warnings.length > 0)).length,
-      rejected: allDocs.filter((d) => d.extractionStatus === 'rejected').length,
-      updated: publishedCount,
-    };
+    return computeDocumentCounts(allDocs);
   }, [allDocs]);
 
   // Filtered documents
@@ -253,18 +112,24 @@ export default function Documents({
       )
         return false;
 
-      // Agreement Type filter
-      if (selectedAgreementType !== 'all') {
+      // Multi-select Agreement Type filter
+      if (selectedAgreementTypes.length > 0) {
         const docAg = (d.agreement_type || d.agreementType || '').trim().toLowerCase();
-        const filterAg = selectedAgreementType.trim().toLowerCase();
-        if (docAg !== filterAg) return false;
+        const matchesAg = selectedAgreementTypes.some((sel) => {
+          const sVal = sel.trim().toLowerCase();
+          return docAg === sVal || docAg.includes(sVal) || sVal.includes(docAg);
+        });
+        if (!matchesAg) return false;
       }
 
-      // Sectorial Category filter
-      if (selectedSectorial !== 'all') {
+      // Multi-select Sectorial Category filter
+      if (selectedSectorials.length > 0) {
         const docSec = (d.sectorial_category || d.sectorial || '').trim().toLowerCase();
-        const filterSec = selectedSectorial.trim().toLowerCase();
-        if (docSec !== filterSec) return false;
+        const matchesSec = selectedSectorials.some((sel) => {
+          const sVal = sel.trim().toLowerCase();
+          return docSec === sVal || docSec.includes(sVal) || sVal.includes(docSec);
+        });
+        if (!matchesSec) return false;
       }
 
       // Search filter across name, title, parties, reviewer, folder, agreement type, and sectorial category
@@ -281,7 +146,7 @@ export default function Documents({
       }
       return true;
     });
-  }, [allDocs, activeFilter, activeSearch, selectedAgreementType, selectedSectorial]);
+  }, [allDocs, activeFilter, activeSearch, selectedAgreementTypes, selectedSectorials]);
 
   // Handle document row selection
   const handleSelectDoc = (doc) => {
@@ -449,14 +314,15 @@ export default function Documents({
     }
     return (
       <Chip
-        label="0"
+        label="Reviewed"
         size="small"
         sx={{
           height: 22,
           fontSize: '11px',
           fontWeight: 600,
-          bgcolor: '#f1f5f9',
-          color: '#64748b',
+          bgcolor: '#dcfce7',
+          color: '#166534',
+          border: '1px solid #bbf7d0',
         }}
       />
     );
@@ -720,7 +586,7 @@ export default function Documents({
               { id: 'all', label: `All ${counts.all}` },
               { id: 'needs-review', label: `Needs review ${counts.needsReview}` },
               { id: 'in-review', label: `In review ${counts.inReview}` },
-              { id: 'saved', label: `Saved ${counts.saved}` },
+              // { id: 'saved', label: `Saved ${counts.saved}` },
               { id: 'reviewed', label: `Reviewed ${counts.inreviewed}` },
               { id: 'published', label: `Published ${counts.published}` },
             ].map((tab) => {
@@ -754,9 +620,9 @@ export default function Documents({
             })}
           </Box>
 
-          {/* Dropdown Filters: Agreement Type and Sectorial Category */}
+          {/* Multi-Select Dropdown Filters: Agreement Type and Sectorial Category */}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-            {/* Agreement Type Filter */}
+            {/* Agreement Type Multi-select Filter */}
             <Button
               size="small"
               endIcon={<KeyboardArrowDownIcon sx={{ fontSize: 14 }} />}
@@ -764,59 +630,157 @@ export default function Documents({
               sx={{
                 height: 28,
                 fontSize: '11.5px',
-                fontWeight: selectedAgreementType !== 'all' ? 600 : 500,
+                fontWeight: selectedAgreementTypes.length > 0 ? 600 : 500,
                 textTransform: 'none',
                 px: 1.25,
-                bgcolor: selectedAgreementType !== 'all' ? '#eff6ff' : '#ffffff',
-                color: selectedAgreementType !== 'all' ? '#1d4ed8' : '#475569',
+                bgcolor: selectedAgreementTypes.length > 0 ? '#eff6ff' : '#ffffff',
+                color: selectedAgreementTypes.length > 0 ? '#1d4ed8' : '#475569',
                 border: '1px solid',
-                borderColor: selectedAgreementType !== 'all' ? '#bfdbfe' : '#e2e8f0',
+                borderColor: selectedAgreementTypes.length > 0 ? '#bfdbfe' : '#e2e8f0',
                 borderRadius: 1.5,
-                maxWidth: 220,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                '&:hover': { bgcolor: selectedAgreementType !== 'all' ? '#dbeafe' : '#f8fafc' },
+                maxWidth: 240,
+                '&:hover': { bgcolor: selectedAgreementTypes.length > 0 ? '#dbeafe' : '#f8fafc' },
               }}
             >
-              {selectedAgreementType === 'all'
-                ? 'All agreement types'
-                : selectedAgreementType.length > 22
-                  ? `${selectedAgreementType.slice(0, 20)}...`
-                  : selectedAgreementType}
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, overflow: 'hidden' }}>
+                <Typography
+                  noWrap
+                  sx={{
+                    fontSize: '11.5px',
+                    fontWeight: 'inherit',
+                    color: 'inherit',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}
+                >
+                  {selectedAgreementTypes.length === 0
+                    ? 'All agreement types'
+                    : selectedAgreementTypes.length === 1
+                      ? selectedAgreementTypes[0]
+                      : `${selectedAgreementTypes.length} agreement types`}
+                </Typography>
+                {selectedAgreementTypes.length > 1 && (
+                  <Box
+                    component="span"
+                    sx={{
+                      bgcolor: '#1d4ed8',
+                      color: '#ffffff',
+                      borderRadius: '10px',
+                      px: 0.7,
+                      py: 0.1,
+                      fontSize: '10px',
+                      fontWeight: 700,
+                      lineHeight: 1.2,
+                      flexShrink: 0,
+                    }}
+                  >
+                    {selectedAgreementTypes.length}
+                  </Box>
+                )}
+              </Box>
             </Button>
             <Menu
               anchorEl={agreementMenuAnchor}
               open={Boolean(agreementMenuAnchor)}
               onClose={() => setAgreementMenuAnchor(null)}
-              slotProps={{ paper: { sx: { maxHeight: 320, width: 280 } } }}
+              slotProps={{
+                paper: {
+                  sx: {
+                    maxHeight: 380,
+                    width: 320,
+                    borderRadius: 2,
+                    boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.05)',
+                    border: '1px solid #e2e8f0',
+                    p: 0,
+                  },
+                },
+              }}
             >
-              <MenuItem
-                selected={selectedAgreementType === 'all'}
-                onClick={() => {
-                  setSelectedAgreementType('all');
-                  setAgreementMenuAnchor(null);
-                }}
-                sx={{ fontSize: '12.5px', fontWeight: selectedAgreementType === 'all' ? 600 : 400 }}
-              >
-                All agreement types
-              </MenuItem>
-              {AGREEMENT_TYPES.map((type) => (
+              <Box sx={{ p: 1, pb: 0.5, borderBottom: '1px solid #f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <Typography sx={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em', px: 1 }}>
+                  Agreement Types {selectedAgreementTypes.length > 0 ? `(${selectedAgreementTypes.length} selected)` : ''}
+                </Typography>
+                {selectedAgreementTypes.length > 0 && (
+                  <Button
+                    size="small"
+                    onClick={() => setSelectedAgreementTypes([])}
+                    sx={{ fontSize: '11px', textTransform: 'none', py: 0.25, px: 0.75, minWidth: 0, color: '#dc2626' }}
+                  >
+                    Clear all
+                  </Button>
+                )}
+              </Box>
+              <Box sx={{ maxHeight: 260, overflowY: 'auto', py: 0.5 }}>
                 <MenuItem
-                  key={type}
-                  selected={selectedAgreementType === type}
-                  onClick={() => {
-                    setSelectedAgreementType(type);
-                    setAgreementMenuAnchor(null);
+                  onClick={() => setSelectedAgreementTypes([])}
+                  sx={{
+                    fontSize: '12.5px',
+                    fontWeight: selectedAgreementTypes.length === 0 ? 600 : 400,
+                    bgcolor: selectedAgreementTypes.length === 0 ? '#f0f9ff' : 'transparent',
+                    py: 0.75,
                   }}
-                  sx={{ fontSize: '12.5px', fontWeight: selectedAgreementType === type ? 600 : 400 }}
                 >
-                  {type}
+                  <Checkbox
+                    checked={selectedAgreementTypes.length === 0}
+                    size="small"
+                    sx={{ p: 0.5, mr: 1, color: '#cbd5e1', '&.Mui-checked': { color: '#0284c7' } }}
+                  />
+                  <Typography sx={{ fontSize: '12.5px', fontWeight: selectedAgreementTypes.length === 0 ? 600 : 400 }}>
+                    All agreement types
+                  </Typography>
                 </MenuItem>
-              ))}
+                {AGREEMENT_TYPES.map((type) => {
+                  const isChecked = selectedAgreementTypes.includes(type);
+                  return (
+                    <MenuItem
+                      key={type}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        setSelectedAgreementTypes((prev) =>
+                          prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type]
+                        );
+                      }}
+                      sx={{
+                        fontSize: '12.5px',
+                        fontWeight: isChecked ? 600 : 400,
+                        bgcolor: isChecked ? '#eff6ff' : 'transparent',
+                        py: 0.75,
+                        '&:hover': { bgcolor: isChecked ? '#dbeafe' : '#f8fafc' },
+                      }}
+                    >
+                      <Checkbox
+                        checked={isChecked}
+                        size="small"
+                        sx={{ p: 0.5, mr: 1, color: '#cbd5e1', '&.Mui-checked': { color: '#1d4ed8' } }}
+                      />
+                      <Typography sx={{ fontSize: '12.5px', fontWeight: isChecked ? 600 : 400 }}>
+                        {type}
+                      </Typography>
+                    </MenuItem>
+                  );
+                })}
+              </Box>
+              <Box sx={{ p: 1, borderTop: '1px solid #f1f5f9', display: 'flex', justifyContent: 'flex-end', bgcolor: '#fafafa' }}>
+                <Button
+                  variant="contained"
+                  size="small"
+                  onClick={() => setAgreementMenuAnchor(null)}
+                  sx={{
+                    height: 26,
+                    fontSize: '11.5px',
+                    textTransform: 'none',
+                    bgcolor: '#1e3a5f',
+                    fontWeight: 600,
+                    px: 2,
+                    '&:hover': { bgcolor: '#0f172a' },
+                  }}
+                >
+                  Done
+                </Button>
+              </Box>
             </Menu>
 
-            {/* Sectorial Category Filter */}
+            {/* Sectorial Category Multi-select Filter */}
             <Button
               size="small"
               endIcon={<KeyboardArrowDownIcon sx={{ fontSize: 14 }} />}
@@ -824,78 +788,179 @@ export default function Documents({
               sx={{
                 height: 28,
                 fontSize: '11.5px',
-                fontWeight: selectedSectorial !== 'all' ? 600 : 500,
+                fontWeight: selectedSectorials.length > 0 ? 600 : 500,
                 textTransform: 'none',
                 px: 1.25,
-                bgcolor: selectedSectorial !== 'all' ? '#f0fdf4' : '#ffffff',
-                color: selectedSectorial !== 'all' ? '#166534' : '#475569',
+                bgcolor: selectedSectorials.length > 0 ? '#f0fdf4' : '#ffffff',
+                color: selectedSectorials.length > 0 ? '#166534' : '#475569',
                 border: '1px solid',
-                borderColor: selectedSectorial !== 'all' ? '#bbf7d0' : '#e2e8f0',
+                borderColor: selectedSectorials.length > 0 ? '#bbf7d0' : '#e2e8f0',
                 borderRadius: 1.5,
-                maxWidth: 220,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                '&:hover': { bgcolor: selectedSectorial !== 'all' ? '#dcfce7' : '#f8fafc' },
+                maxWidth: 240,
+                '&:hover': { bgcolor: selectedSectorials.length > 0 ? '#dcfce7' : '#f8fafc' },
               }}
             >
-              {selectedSectorial === 'all'
-                ? 'All sectorial categories'
-                : selectedSectorial.length > 22
-                  ? `${selectedSectorial.slice(0, 20)}...`
-                  : selectedSectorial}
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, overflow: 'hidden' }}>
+                <Typography
+                  noWrap
+                  sx={{
+                    fontSize: '11.5px',
+                    fontWeight: 'inherit',
+                    color: 'inherit',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}
+                >
+                  {selectedSectorials.length === 0
+                    ? 'All sectorial categories'
+                    : selectedSectorials.length === 1
+                      ? selectedSectorials[0]
+                      : `${selectedSectorials.length} sectorial categories`}
+                </Typography>
+                {selectedSectorials.length > 1 && (
+                  <Box
+                    component="span"
+                    sx={{
+                      bgcolor: '#166534',
+                      color: '#ffffff',
+                      borderRadius: '10px',
+                      px: 0.7,
+                      py: 0.1,
+                      fontSize: '10px',
+                      fontWeight: 700,
+                      lineHeight: 1.2,
+                      flexShrink: 0,
+                    }}
+                  >
+                    {selectedSectorials.length}
+                  </Box>
+                )}
+              </Box>
             </Button>
             <Menu
               anchorEl={sectorialMenuAnchor}
               open={Boolean(sectorialMenuAnchor)}
               onClose={() => setSectorialMenuAnchor(null)}
-              slotProps={{ paper: { sx: { maxHeight: 320, width: 300 } } }}
+              slotProps={{
+                paper: {
+                  sx: {
+                    maxHeight: 380,
+                    width: 340,
+                    borderRadius: 2,
+                    boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.05)',
+                    border: '1px solid #e2e8f0',
+                    p: 0,
+                  },
+                },
+              }}
             >
-              <MenuItem
-                selected={selectedSectorial === 'all'}
-                onClick={() => {
-                  setSelectedSectorial('all');
-                  setSectorialMenuAnchor(null);
-                }}
-                sx={{ fontSize: '12.5px', fontWeight: selectedSectorial === 'all' ? 600 : 400 }}
-              >
-                All sectorial categories
-              </MenuItem>
-              {SECTORIAL_OPTIONS.map((sec) => (
+              <Box sx={{ p: 1, pb: 0.5, borderBottom: '1px solid #f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <Typography sx={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em', px: 1 }}>
+                  Sectorial Categories {selectedSectorials.length > 0 ? `(${selectedSectorials.length} selected)` : ''}
+                </Typography>
+                {selectedSectorials.length > 0 && (
+                  <Button
+                    size="small"
+                    onClick={() => setSelectedSectorials([])}
+                    sx={{ fontSize: '11px', textTransform: 'none', py: 0.25, px: 0.75, minWidth: 0, color: '#dc2626' }}
+                  >
+                    Clear all
+                  </Button>
+                )}
+              </Box>
+              <Box sx={{ maxHeight: 260, overflowY: 'auto', py: 0.5 }}>
                 <MenuItem
-                  key={sec}
-                  selected={selectedSectorial === sec}
-                  onClick={() => {
-                    setSelectedSectorial(sec);
-                    setSectorialMenuAnchor(null);
+                  onClick={() => setSelectedSectorials([])}
+                  sx={{
+                    fontSize: '12.5px',
+                    fontWeight: selectedSectorials.length === 0 ? 600 : 400,
+                    bgcolor: selectedSectorials.length === 0 ? '#f0fdf4' : 'transparent',
+                    py: 0.75,
                   }}
-                  sx={{ fontSize: '12.5px', fontWeight: selectedSectorial === sec ? 600 : 400 }}
                 >
-                  {sec}
+                  <Checkbox
+                    checked={selectedSectorials.length === 0}
+                    size="small"
+                    sx={{ p: 0.5, mr: 1, color: '#cbd5e1', '&.Mui-checked': { color: '#16a34a' } }}
+                  />
+                  <Typography sx={{ fontSize: '12.5px', fontWeight: selectedSectorials.length === 0 ? 600 : 400 }}>
+                    All sectorial categories
+                  </Typography>
                 </MenuItem>
-              ))}
+                {SECTORIAL_OPTIONS.map((sec) => {
+                  const isChecked = selectedSectorials.includes(sec);
+                  return (
+                    <MenuItem
+                      key={sec}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        setSelectedSectorials((prev) =>
+                          prev.includes(sec) ? prev.filter((s) => s !== sec) : [...prev, sec]
+                        );
+                      }}
+                      sx={{
+                        fontSize: '12.5px',
+                        fontWeight: isChecked ? 600 : 400,
+                        bgcolor: isChecked ? '#f0fdf4' : 'transparent',
+                        py: 0.75,
+                        '&:hover': { bgcolor: isChecked ? '#dcfce7' : '#f8fafc' },
+                      }}
+                    >
+                      <Checkbox
+                        checked={isChecked}
+                        size="small"
+                        sx={{ p: 0.5, mr: 1, color: '#cbd5e1', '&.Mui-checked': { color: '#166534' } }}
+                      />
+                      <Typography sx={{ fontSize: '12.5px', fontWeight: isChecked ? 600 : 400 }}>
+                        {sec}
+                      </Typography>
+                    </MenuItem>
+                  );
+                })}
+              </Box>
+              <Box sx={{ p: 1, borderTop: '1px solid #f1f5f9', display: 'flex', justifyContent: 'flex-end', bgcolor: '#fafafa' }}>
+                <Button
+                  variant="contained"
+                  size="small"
+                  onClick={() => setSectorialMenuAnchor(null)}
+                  sx={{
+                    height: 26,
+                    fontSize: '11.5px',
+                    textTransform: 'none',
+                    bgcolor: '#1e3a5f',
+                    fontWeight: 600,
+                    px: 2,
+                    '&:hover': { bgcolor: '#0f172a' },
+                  }}
+                >
+                  Done
+                </Button>
+              </Box>
             </Menu>
 
             {/* Clear Filters Button if any active */}
-            {(selectedAgreementType !== 'all' || selectedSectorial !== 'all') && (
+            {(selectedAgreementTypes.length > 0 || selectedSectorials.length > 0) && (
               <Button
                 size="small"
                 onClick={() => {
-                  setSelectedAgreementType('all');
-                  setSelectedSectorial('all');
+                  setSelectedAgreementTypes([]);
+                  setSelectedSectorials([]);
                 }}
+                startIcon={<CloseIcon sx={{ fontSize: 13 }} />}
                 sx={{
                   height: 28,
                   fontSize: '11px',
                   textTransform: 'none',
                   color: '#dc2626',
                   fontWeight: 600,
-                  p: 0.5,
-                  minWidth: 'auto',
-                  '&:hover': { bgcolor: '#fef2f2' },
+                  bgcolor: '#fef2f2',
+                  border: '1px solid #fecaca',
+                  borderRadius: 1.5,
+                  px: 1,
+                  '&:hover': { bgcolor: '#fee2e2' },
                 }}
               >
-                Reset filters
+                Clear filters ({selectedAgreementTypes.length + selectedSectorials.length})
               </Button>
             )}
           </Box>
@@ -940,10 +1005,10 @@ export default function Documents({
               {queueCount > 0
                 ? `You have ${queueCount} file${queueCount === 1 ? '' : 's'} currently in Your Queue waiting for extraction or classification. Once classified in the database, they will automatically appear here.`
                 : driveState.isConnected
-                ? driveState.folderPath
-                  ? `No files found in folder "${driveState.folderPath}". Please upload DOCX or PDF files into this folder or click Sync files.`
-                  : 'Connected to Google Drive. Choose a folder from the Overview section to load contracts.'
-                : 'Connect your Google Drive account from the Overview section to load real contracts for review.'}
+                  ? driveState.folderPath
+                    ? `No files found in folder "${driveState.folderPath}". Please upload DOCX or PDF files into this folder or click Sync files.`
+                    : 'Connected to Google Drive. Choose a folder from the Overview section to load contracts.'
+                  : 'Connect your Google Drive account from the Overview section to load real contracts for review.'}
             </Typography>
             {queueCount > 0 ? (
               <Box sx={{ display: 'flex', gap: 1.5, mt: 1 }}>
@@ -1035,9 +1100,9 @@ export default function Documents({
                   <TableCell sx={{ bgcolor: '#f8fafc', py: 1.25, fontSize: '12px', fontWeight: 600, color: '#64748b', borderBottom: '1px solid #e2e8f0', width: 230, minWidth: 200 }}>
                     Reviewer
                   </TableCell>
-                  <TableCell sx={{ bgcolor: '#f8fafc', py: 1.25, fontSize: '12px', fontWeight: 600, color: '#64748b', borderBottom: '1px solid #e2e8f0', width: 170 }}>
+                  {/* <TableCell sx={{ bgcolor: '#f8fafc', py: 1.25, fontSize: '12px', fontWeight: 600, color: '#64748b', borderBottom: '1px solid #e2e8f0', width: 170 }}>
                     Vector DB
-                  </TableCell>
+                  </TableCell> */}
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -1080,7 +1145,7 @@ export default function Documents({
                             >
                               {doc.name}
                             </Typography>
-                            {doc.status === 'Saved' && (
+                            {/* {doc.status === 'Saved' && (
                               <Chip
                                 label="Saved"
                                 size="small"
@@ -1111,7 +1176,7 @@ export default function Documents({
                                   border: '1px solid #bbf7d0',
                                 }}
                               />
-                            )}
+                            )} */}
                           </Box>
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap', mt: 0.25 }}>
                             <Typography sx={{ fontSize: '11px', color: '#475569', fontWeight: 500 }}>
@@ -1146,9 +1211,9 @@ export default function Documents({
                       </TableCell>
 
                       {/* Vector DB */}
-                      <TableCell sx={{ py: 1.4 }}>
+                      {/* <TableCell sx={{ py: 1.4 }}>
                         {renderVectorDbBadge(doc.vectorDbStatus)}
-                      </TableCell>
+                      </TableCell> */}
                     </TableRow>
                   );
                 })}
@@ -1198,9 +1263,7 @@ export default function Documents({
               >
                 {selectedDoc.name}
               </Typography>
-              <Typography sx={{ fontSize: '11.5px', color: '#64748b', letterSpacing: '0.01em' }}>
-                pages: {selectedDoc.pages ?? 0} · clauses: {selectedDoc.clauses ?? 0} · paragraphs: {selectedDoc.paragraphs ?? 0} · {selectedDoc.size}
-              </Typography>
+
             </Box>
 
             <IconButton
@@ -1232,15 +1295,15 @@ export default function Documents({
           </Box>
 
           {/* Extraction Status & Needs Review Cards & Current Reviewer (Replaced Review Progress) */}
-           {/* <Box
+          {/* <Box
             sx={{
               display: 'grid',
               gridTemplateColumns: 'repeat(2, 1fr)',
               gap: 1.25,
             }}
           > */}
-            {/* Extraction Status card */}
-            {/* <Box
+          {/* Extraction Status card */}
+          {/* <Box
               sx={{
                 p: 1.5,
                 borderRadius: 2,
@@ -1264,8 +1327,8 @@ export default function Documents({
               )}
             </Box>  */}
 
-            {/* Needs Review card (display count) */}
-            {/* <Box
+          {/* Needs Review card (display count) */}
+          {/* <Box
               sx={{
                 p: 1.5,
                 borderRadius: 2,
@@ -1288,8 +1351,8 @@ export default function Documents({
               </Typography>
             </Box> */}
 
-            {/* Current Reviewer card */}
-            {/* <Box
+          {/* Current Reviewer card */}
+          {/* <Box
               sx={{
                 p: 1.5,
                 borderRadius: 2,
@@ -1342,8 +1405,32 @@ export default function Documents({
                 <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 100 }}>
                   Needs review
                 </Typography>
-                <Typography sx={{ fontSize: '12px', fontWeight: 600, color: selectedDoc.needsReview > 0 ? '#c2410c' : '#0f172a', textAlign: 'right' }}>
-                  {selectedDoc.needsReview !== null ? `${selectedDoc.needsReview} items` : 'All Clear'}
+                <Typography sx={{ fontSize: '12px', fontWeight: 600, color: selectedDoc.needsReview > 0 ? '#c2410c' : '#166534', textAlign: 'right' }}>
+                  {selectedDoc.needsReview === 0
+                    ? 'Reviewed'
+                    : selectedDoc.needsReview !== null
+                      ? `${selectedDoc.needsReview} items`
+                      : 'Reviewed'}
+                </Typography>
+              </Box>
+
+
+
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
+                <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 110 }}>
+                  Agreement type
+                </Typography>
+                <Typography sx={{ fontSize: '12px', fontWeight: 600, color: '#0f172a', textAlign: 'right' }}>
+                  {selectedDoc.agreement_type || selectedDoc.agreementType || '—'}
+                </Typography>
+              </Box>
+
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
+                <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 110 }}>
+                  Sectorial category
+                </Typography>
+                <Typography sx={{ fontSize: '12px', fontWeight: 600, color: '#0f172a', textAlign: 'right' }}>
+                  {selectedDoc.sectorial_category || selectedDoc.sectorial || '—'}
                 </Typography>
               </Box>
 
@@ -1362,24 +1449,6 @@ export default function Documents({
                 </Typography>
                 <Typography sx={{ fontSize: '12px', fontWeight: 500, color: '#0f172a', textAlign: 'right' }}>
                   {selectedDoc.clauses ?? 0}
-                </Typography>
-              </Box>
-
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
-                <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 110 }}>
-                  Agreement type
-                </Typography>
-                <Typography sx={{ fontSize: '12px', fontWeight: 600, color: '#0f172a', textAlign: 'right' }}>
-                  {selectedDoc.agreement_type || selectedDoc.agreementType || '—'}
-                </Typography>
-              </Box>
-
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
-                <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 110 }}>
-                  Sectorial category
-                </Typography>
-                <Typography sx={{ fontSize: '12px', fontWeight: 600, color: '#0f172a', textAlign: 'right' }}>
-                  {selectedDoc.sectorial_category || selectedDoc.sectorial || '—'}
                 </Typography>
               </Box>
 
@@ -1478,19 +1547,19 @@ export default function Documents({
                 </Typography>
               </Box>
 
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
+              {/* <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
                 <Typography sx={{ fontSize: '12px', color: '#64748b', minWidth: 100 }}>
                   Vector DB
                 </Typography>
                 <Typography sx={{ fontSize: '12px', fontWeight: 500, color: '#0f172a', textAlign: 'right' }}>
                   {selectedDoc.vectorDbDetail}
                 </Typography>
-              </Box>
+              </Box> */}
             </Box>
           </Box>
 
           {/* Recent Activity Section */}
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+          {/* <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
             <Typography sx={{ fontSize: '12.5px', fontWeight: 600, color: '#334155' }}>
               Recent activity
             </Typography>
@@ -1516,7 +1585,7 @@ export default function Documents({
                 </Typography>
               </Box>
             </Box>
-          </Box>
+          </Box> */}
 
           {/* Bottom Button: Open review workspace */}
           <Box sx={{ mt: 'auto', pt: 1 }}>

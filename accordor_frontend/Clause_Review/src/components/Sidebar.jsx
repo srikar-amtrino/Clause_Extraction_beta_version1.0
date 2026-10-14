@@ -25,6 +25,7 @@ import ArticleIcon from '@mui/icons-material/Article';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import BiotechOutlinedIcon from '@mui/icons-material/BiotechOutlined';
+import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import { useAuth } from '../context/AuthContext';
 
 export default function Sidebar({
@@ -266,11 +267,47 @@ export default function Sidebar({
                 </Box>
               )}
             </ListItemButton>
+
+            <ListItemButton
+              selected={activeNav === 'taxonomy'}
+              onClick={() => onNavSelect && onNavSelect('taxonomy')}
+              sx={{
+                borderRadius: '6px',
+                py: 0.8,
+                px: 1.25,
+                mb: 0.5,
+                '&.Mui-selected': {
+                  bgcolor: '#edf2f7',
+                  color: '#1e3a5f',
+                  fontWeight: 600,
+                  '&:hover': { bgcolor: '#e2e8f0' },
+                  '& .MuiListItemIcon-root': { color: '#1e3a5f' },
+                },
+                '&:hover': {
+                  bgcolor: '#f5f5f2',
+                },
+              }}
+            >
+              <ListItemIcon sx={{ minWidth: 28, color: '#7b838c' }}>
+                <AccountTreeOutlinedIcon sx={{ fontSize: 18 }} />
+              </ListItemIcon>
+              <ListItemText
+                primary="Taxonomy"
+                slotProps={{
+                  primary: {
+                    sx: {
+                      fontSize: '13px',
+                      fontWeight: activeNav === 'taxonomy' ? 600 : 500,
+                    },
+                  },
+                }}
+              />
+            </ListItemButton>
           </List>
         </Box>
 
         {/* Section: Audit */}
-        <Box>
+        {/* <Box>
           <Typography
             sx={{
               fontSize: '11px',
@@ -321,7 +358,7 @@ export default function Sidebar({
               />
             </ListItemButton>
           </List>
-        </Box>
+        </Box> */}
 
         {/* Section: Tools */}
         <Box>

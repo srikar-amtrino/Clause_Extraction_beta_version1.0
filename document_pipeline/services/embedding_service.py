@@ -76,7 +76,12 @@ def delete_points(point_ids) -> int:
     return len(point_ids)
 
 
-def embed_and_upsert(paragraph_records: list, document_id) -> dict:
+def embed_and_upsert(
+    paragraph_records: list,
+    document_id,
+    agreement_type=None,
+    sectorial_category=None,
+) -> dict:
     """Embed all selected records, then upsert them into Qdrant in batches.
 
     Parameters
@@ -130,6 +135,16 @@ def embed_and_upsert(paragraph_records: list, document_id) -> dict:
                     'chunk_id': chunk_id,
                     'document_id': str(document_id),
                     'document_name': document.name,
+                    'agreement_type': (
+                        agreement_type
+                        if agreement_type is not None
+                        else getattr(document, 'agreement_type', '')
+                    ),
+                    'sectorial_category': (
+                        sectorial_category
+                        if sectorial_category is not None
+                        else getattr(document, 'sectorial_category', '')
+                    ),
                     'run_id': str(chunk.chunk_run_id) if chunk else None,
                     'parent_id': chunk.parent_local_id if chunk else None,
                     'chunk_kind': chunk.kind if chunk else None,
@@ -142,6 +157,10 @@ def embed_and_upsert(paragraph_records: list, document_id) -> dict:
                     'canonical_type': record.canonical_type,
                     'sub_type': record.sub_type,
                     'confidence': record.confidence,
+                    # Exhibit flag set only by a reviewer; never by the pipeline.
+                    'is_exhibit': bool(record.is_exhibit) if record.is_exhibit is not None else False,
+                    'exhibit_type': record.exhibit_type or '',
+                    'exhibit_type_normalized': record.exhibit_type_normalized or '',
                     'embedding_model': 'BAAI/bge-m3',
                     'embedding_dim': len(vector),
                     'max_length': 1024,

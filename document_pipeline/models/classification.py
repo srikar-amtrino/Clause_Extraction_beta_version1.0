@@ -108,6 +108,16 @@ class Classification(models.Model):
                                                 related_name='reviewed_classifications')
     reviewed_sub_type = models.CharField(max_length=255, null=True, blank=True)
     review_note = models.TextField(blank=True, default='')
+
+    # ---- Exhibit flag, set only by a reviewer -----------------------------
+    # NULL means "not evaluated"; False means "explicitly not an exhibit";
+    # True means "this clause is part of an exhibit".
+    # exhibit_type is the reviewer's free-form label (e.g. "Exhibit A").
+    # exhibit_type_normalized is auto-computed from exhibit_type for grouping
+    # and Qdrant payload-index queries.
+    is_exhibit = models.BooleanField(null=True, blank=True, default=None)
+    exhibit_type = models.CharField(max_length=255, null=True, blank=True, default=None)
+    exhibit_type_normalized = models.CharField(max_length=255, null=True, blank=True, default=None)
     reviewed_by = models.ForeignKey('core.User', on_delete=models.SET_NULL, null=True, blank=True,
                                     related_name='reviewed_classifications')
     reviewed_at = models.DateTimeField(null=True, blank=True)

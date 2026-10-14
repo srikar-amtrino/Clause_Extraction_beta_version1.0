@@ -16,6 +16,7 @@ from .connectors.GoogleDrive.oauth import (
 )
 from .models import Document
 from .services.ingestion_service import google_drive_source, plan_dispatch, sync_drive_files
+from .services.document_metadata import resolve_agreement_type, resolve_sector_type
 from .tasks.orchestrate import trigger_full_document_pipeline
 
 
@@ -48,6 +49,12 @@ def _document_summary(document):
         'id': str(document.id),
         'drive_file_id': document.source_external_id,
         'name': document.name,
+        'agreement_type_id': document.agreement_type_id,
+        'agreement_type': document.agreement_type.name if document.agreement_type else '',
+        'sectorial_category_id': document.sectorial_category_id,
+        'sectorial_category': (
+            document.sectorial_category.name if document.sectorial_category else ''
+        ),
         'mime_type': document.mime_type,
         'extraction_status': document.extraction_status,
     }
@@ -193,12 +200,25 @@ def google_drive_picker_token(request):
 def google_drive_picker_config(request):
     if 'google_drive_credentials' not in request.session:
         return JsonResponse({'detail': 'Connect Google Drive first.'}, status=401)
+    from document_pipeline.services.document_metadata import (
+        resolve_agreement_type,
+        resolve_sector_type,
+    )
+    agreement_type_id = request.session.get('google_drive_agreement_type')
+    sector_type_id = request.session.get('google_drive_sectorial_category')
+    try:
+        agreement_type = resolve_agreement_type(agreement_type_id)
+        sector_type = resolve_sector_type(sector_type_id)
+    except ValueError as error:
+        return JsonResponse({'detail': str(error)}, status=400)
     return JsonResponse({
         'api_key': os.getenv('GOOGLE_PICKER_API_KEY', ''),
         'app_id': os.getenv('GOOGLE_PICKER_APP_ID', ''),
         'folder_ids': request.session.get('google_drive_folder_ids', []),
-        'agreement_type': request.session.get('google_drive_agreement_type', ''),
-        'sectorial_category': request.session.get('google_drive_sectorial_category', ''),
+        'agreement_type': agreement_type.name if agreement_type else '',
+        'agreement_type_id': agreement_type.pk if agreement_type else None,
+        'sectorial_category': sector_type.name if sector_type else '',
+        'sectorial_category_id': sector_type.pk if sector_type else None,
     })
 
 
@@ -217,10 +237,17 @@ def google_drive_files(request):
     sectorial_category = payload.get('sectorial_category')
     if not isinstance(folder_ids, list):
         return JsonResponse({'detail': 'folder_ids must be a list.'}, status=400)
-    if not isinstance(agreement_type, str) or not agreement_type.strip():
+    if not isinstance(agreement_type, (str, int)) or not str(agreement_type).strip():
         return JsonResponse({'detail': 'agreement_type is required.'}, status=400)
-    if not isinstance(sectorial_category, str) or not sectorial_category.strip():
+    if not isinstance(sectorial_category, (str, int)) or not str(sectorial_category).strip():
         return JsonResponse({'detail': 'sectorial_category is required.'}, status=400)
+    if isinstance(agreement_type, bool) or isinstance(sectorial_category, bool):
+        return JsonResponse({'detail': 'Agreement and sector IDs must be valid values.'}, status=400)
+    try:
+        agreement_type = resolve_agreement_type(agreement_type)
+        sectorial_category = resolve_sector_type(sectorial_category)
+    except ValueError as error:
+        return JsonResponse({'detail': str(error)}, status=400)
 
     try:
         if not folder_ids:
@@ -236,11 +263,11 @@ def google_drive_files(request):
         log_folder_selected(folder_ids, folders, len(current_files))
 
         outcome, plan, task_ids, credentials_json = _sync_and_queue(
-            credentials, folders, folder_ids, agreement_type.strip(),
-            sectorial_category.strip())
+            credentials, folders, folder_ids, agreement_type,
+            sectorial_category)
         request.session['google_drive_folder_ids'] = folder_ids
-        request.session['google_drive_agreement_type'] = agreement_type.strip()
-        request.session['google_drive_sectorial_category'] = sectorial_category.strip()
+        request.session['google_drive_agreement_type'] = agreement_type.pk
+        request.session['google_drive_sectorial_category'] = sectorial_category.pk
         request.session['google_drive_credentials'] = credentials_json
         return JsonResponse({
             'user': request.session.get('google_drive_user'),

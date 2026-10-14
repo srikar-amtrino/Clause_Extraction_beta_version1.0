@@ -15,6 +15,7 @@ import {
   TableContainer,
   Checkbox,
   LinearProgress,
+  CircularProgress,
   Tooltip,
   Menu,
   MenuItem,
@@ -79,6 +80,9 @@ export default function ClauseTable({
   onTypeFilterChange,
   needsFixCount = 0,
   reviewedCount = 0,
+  isRestoring = false,
+  restoringClauseIds = [],
+  onBulkSetExhibit,
 }) {
   // Inline text editing state
   const [editingTextRowId, setEditingTextRowId] = useState(null);
@@ -88,6 +92,8 @@ export default function ClauseTable({
   const [labelAnchor, setLabelAnchor] = useState(null);
   const [typeAnchor, setTypeAnchor] = useState(null);
   const [templateTypeMenuAnchor, setTemplateTypeMenuAnchor] = useState(null);
+  const [exhibitMenuAnchor, setExhibitMenuAnchor] = useState(null);
+  const [bulkExhibitType, setBulkExhibitType] = useState('');
 
   // Text expansion state for "Know more" / "Show less"
   const [expandedTextRows, setExpandedTextRows] = useState(() => new Set());
@@ -367,11 +373,23 @@ export default function ClauseTable({
               <Button
                 size="small"
                 variant="contained"
-                startIcon={<RestoreFromTrashIcon sx={{ fontSize: 16 }} />}
+                disabled={isRestoring}
+                startIcon={
+                  isRestoring ? (
+                    <CircularProgress size={14} thickness={5} sx={{ color: '#ffffff' }} />
+                  ) : (
+                    <RestoreFromTrashIcon sx={{ fontSize: 16 }} />
+                  )
+                }
                 onClick={() => {
+                  const selectedKeySet = new Set((selectedRows || []).map(String));
                   const selectedList = deletedClauses.filter((r) => {
-                    const rKey = String(r.classification_id || r.id || r.clause_id);
-                    return (selectedRows || []).map(String).includes(rKey);
+                    return (
+                      selectedKeySet.has(String(r.classification_id)) ||
+                      selectedKeySet.has(String(r.id)) ||
+                      selectedKeySet.has(String(r.clause_id)) ||
+                      selectedKeySet.has(String(r.paraId))
+                    );
                   });
                   onRestoreClause?.(selectedList.length > 0 ? selectedList : selectedRows);
                 }}
@@ -386,37 +404,143 @@ export default function ClauseTable({
                   color: '#ffffff',
                   boxShadow: 'none',
                   '&:hover': { bgcolor: '#15803d', boxShadow: 'none' },
+                  '&.Mui-disabled': { bgcolor: '#86efac', color: '#ffffff' },
                 }}
               >
-                Restore ({selectedRows.length})
+                {isRestoring ? 'Restoring...' : `Restore (${selectedRows.length})`}
               </Button>
             ) : (
-              <Button
-                size="small"
-                variant="contained"
-                startIcon={<DeleteOutlinedIcon sx={{ fontSize: 16 }} />}
-                onClick={() => {
-                  const selectedList = extractedClauses.filter((r) => {
-                    const rKey = String(r.classification_id || r.id || r.clause_id);
-                    return (selectedRows || []).map(String).includes(rKey);
-                  });
-                  onDeleteClause?.(selectedList.length > 0 ? selectedList : selectedRows);
-                }}
-                sx={{
-                  height: 28,
-                  fontSize: '11.5px',
-                  fontWeight: 600,
-                  textTransform: 'none',
-                  px: 1.5,
-                  borderRadius: 1.5,
-                  bgcolor: '#dc2626',
-                  color: '#ffffff',
-                  boxShadow: 'none',
-                  '&:hover': { bgcolor: '#b91c1c', boxShadow: 'none' },
-                }}
-              >
-                Delete ({selectedRows.length})
-              </Button>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={(e) => {
+                    setExhibitMenuAnchor(e.currentTarget);
+                    setBulkExhibitType('');
+                  }}
+                  sx={{
+                    height: 28,
+                    fontSize: '11.5px',
+                    fontWeight: 600,
+                    textTransform: 'none',
+                    px: 1.5,
+                    borderRadius: 1.5,
+                    bgcolor: '#fffbeb',
+                    color: '#b45309',
+                    borderColor: '#fcd34d',
+                    boxShadow: 'none',
+                    '&:hover': { bgcolor: '#fef3c7', borderColor: '#f59e0b' },
+                  }}
+                >
+                  Set Exhibit ({selectedRows.length})
+                </Button>
+                <Menu
+                  anchorEl={exhibitMenuAnchor}
+                  open={Boolean(exhibitMenuAnchor)}
+                  onClose={() => setExhibitMenuAnchor(null)}
+                  slotProps={{ paper: { sx: { p: 1.5, width: 260, borderRadius: 2 } } }}
+                >
+                  <Typography sx={{ fontSize: '12px', fontWeight: 600, color: '#1e293b', mb: 1 }}>
+                    Mark {selectedRows.length} clause(s) as Exhibit
+                  </Typography>
+                  <TextField
+                    size="small"
+                    autoFocus
+                    placeholder="e.g. Exhibit B"
+                    value={bulkExhibitType}
+                    onChange={(e) => setBulkExhibitType(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && bulkExhibitType.trim()) {
+                        onBulkSetExhibit?.(selectedRows, true, bulkExhibitType.trim());
+                        setExhibitMenuAnchor(null);
+                      }
+                    }}
+                    sx={{
+                      width: '100%',
+                      mb: 1.5,
+                      '& .MuiOutlinedInput-root': {
+                        fontSize: '12px',
+                        height: 32,
+                        '& fieldset': { borderColor: '#cbd5e1' },
+                        '&:hover fieldset': { borderColor: '#94a3b8' },
+                        '&.Mui-focused fieldset': { borderColor: '#1e3a5f' },
+                      },
+                    }}
+                  />
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+                    <Button
+                      size="small"
+                      color="inherit"
+                      onClick={() => {
+                        onBulkSetExhibit?.(selectedRows, false, null);
+                        setExhibitMenuAnchor(null);
+                      }}
+                      sx={{
+                        fontSize: '11px',
+                        textTransform: 'none',
+                        color: '#64748b',
+                        px: 1,
+                        '&:hover': { bgcolor: '#f1f5f9', color: '#0f172a' },
+                      }}
+                    >
+                      Clear Exhibit
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="contained"
+                      disabled={!bulkExhibitType.trim()}
+                      onClick={() => {
+                        onBulkSetExhibit?.(selectedRows, true, bulkExhibitType.trim());
+                        setExhibitMenuAnchor(null);
+                      }}
+                      sx={{
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        textTransform: 'none',
+                        bgcolor: '#1e3a5f',
+                        color: '#ffffff',
+                        px: 1.5,
+                        '&:hover': { bgcolor: '#152943' },
+                        '&.Mui-disabled': { bgcolor: '#cbd5e1', color: '#ffffff' },
+                      }}
+                    >
+                      Apply
+                    </Button>
+                  </Box>
+                </Menu>
+
+                <Button
+                  size="small"
+                  variant="contained"
+                  startIcon={<DeleteOutlinedIcon sx={{ fontSize: 16 }} />}
+                  onClick={() => {
+                    const selectedKeySet = new Set((selectedRows || []).map(String));
+                    const selectedList = extractedClauses.filter((r) => {
+                      return (
+                        selectedKeySet.has(String(r.classification_id)) ||
+                        selectedKeySet.has(String(r.id)) ||
+                        selectedKeySet.has(String(r.clause_id)) ||
+                        selectedKeySet.has(String(r.paraId))
+                      );
+                    });
+                    onDeleteClause?.(selectedList.length > 0 ? selectedList : selectedRows);
+                  }}
+                  sx={{
+                    height: 28,
+                    fontSize: '11.5px',
+                    fontWeight: 600,
+                    textTransform: 'none',
+                    px: 1.5,
+                    borderRadius: 1.5,
+                    bgcolor: '#dc2626',
+                    color: '#ffffff',
+                    boxShadow: 'none',
+                    '&:hover': { bgcolor: '#b91c1c', boxShadow: 'none' },
+                  }}
+                >
+                  Delete ({selectedRows.length})
+                </Button>
+              </Box>
             )
           )}
 
@@ -517,6 +641,11 @@ export default function ClauseTable({
                   Sub-type / Canonical type
                 </TableCell>
                 <TableCell
+                  sx={{ bgcolor: '#fafaf8', py: 1, fontSize: '11.5px', fontWeight: 600, color: '#7b838c', borderBottom: '1px solid #e3e3de', width: 145, minWidth: 140, verticalAlign: 'middle' }}
+                >
+                  Exhibit
+                </TableCell>
+                <TableCell
                   align="center"
                   sx={{ bgcolor: '#fafaf8', py: 1, fontSize: '11.5px', fontWeight: 600, color: '#7b838c', borderBottom: '1px solid #e3e3de', width: activeFilter === 'deleted' ? 100 : 90, minWidth: activeFilter === 'deleted' ? 100 : 90, verticalAlign: 'middle' }}
                 >
@@ -527,7 +656,7 @@ export default function ClauseTable({
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={7} sx={{ py: 6, textAlign: 'center', verticalAlign: 'middle' }}>
+                  <TableCell colSpan={8} sx={{ py: 6, textAlign: 'center', verticalAlign: 'middle' }}>
                     <Box
                       sx={{
                         display: 'flex',
@@ -548,7 +677,7 @@ export default function ClauseTable({
                 </TableRow>
               ) : filteredClauses.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} sx={{ py: 6, textAlign: 'center', verticalAlign: 'middle' }}>
+                  <TableCell colSpan={8} sx={{ py: 6, textAlign: 'center', verticalAlign: 'middle' }}>
                     <Box
                       sx={{
                         display: 'flex',
@@ -1102,36 +1231,142 @@ export default function ClauseTable({
                         </Box>
                       </TableCell>
 
+                      {/* Exhibit Flag [E] & Type */}
+                      <TableCell sx={{ py: 1, verticalAlign: 'middle' }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 125, maxWidth: 165 }}>
+                          <Tooltip title={row.is_exhibit ? 'Click to remove exhibit mark' : 'Mark as exhibit [E]'}>
+                            <span>
+                              <Button
+                                size="small"
+                                disabled={!canEdit || activeFilter === 'deleted'}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const nextIsExhibit = !row.is_exhibit;
+                                  onUpdateRow(row.classification_id || row.id || row.clause_id, {
+                                    is_exhibit: nextIsExhibit,
+                                    exhibit_type: nextIsExhibit ? (row.exhibit_type || '') : null,
+                                    is_exhibit_modified: true,
+                                  });
+                                }}
+                                sx={{
+                                  minWidth: 26,
+                                  width: 26,
+                                  height: 26,
+                                  p: 0,
+                                  fontSize: '12px',
+                                  fontWeight: 700,
+                                  borderRadius: 1,
+                                  fontFamily: "'IBM Plex Sans', monospace, sans-serif",
+                                  bgcolor: row.is_exhibit ? '#fef3c7' : '#ffffff',
+                                  color: row.is_exhibit ? '#b45309' : '#94a3b8',
+                                  border: '1.5px solid',
+                                  borderColor: row.is_exhibit ? '#f59e0b' : '#cbd5e1',
+                                  boxShadow: row.is_exhibit ? '0 1px 2px rgba(245, 158, 11, 0.2)' : 'none',
+                                  '&:hover': {
+                                    bgcolor: row.is_exhibit ? '#fde68a' : '#f8fafc',
+                                    borderColor: row.is_exhibit ? '#d97706' : '#94a3b8',
+                                  },
+                                }}
+                              >
+                                E
+                              </Button>
+                            </span>
+                          </Tooltip>
+
+                          {row.is_exhibit ? (
+                            <TextField
+                              size="small"
+                              autoFocus={!row.exhibit_type}
+                              disabled={!canEdit || activeFilter === 'deleted'}
+                              placeholder="e.g. Exhibit A"
+                              value={row.exhibit_type || ''}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => {
+                                onUpdateRow(row.classification_id || row.id || row.clause_id, {
+                                  is_exhibit: true,
+                                  exhibit_type: e.target.value,
+                                  is_exhibit_modified: true,
+                                });
+                              }}
+                              sx={{
+                                flex: 1,
+                                minWidth: 85,
+                                '& .MuiOutlinedInput-root': {
+                                  height: 26,
+                                  fontSize: '11.5px',
+                                  bgcolor: '#ffffff',
+                                  borderRadius: 1,
+                                  '& fieldset': { borderColor: '#fcd34d' },
+                                  '&:hover fieldset': { borderColor: '#f59e0b' },
+                                  '&.Mui-focused fieldset': { borderColor: '#d97706' },
+                                },
+                                '& .MuiInputBase-input': {
+                                  py: 0.35,
+                                  px: 0.75,
+                                  fontSize: '11.5px',
+                                  color: '#1e293b',
+                                },
+                              }}
+                            />
+                          ) : (
+                            <Typography sx={{ fontSize: '11px', color: '#94a3b8', fontStyle: 'italic', userSelect: 'none' }}>
+                              —
+                            </Typography>
+                          )}
+                        </Box>
+                      </TableCell>
+
                       {/* Action Cell (Preview / Delete or Restore) */}
                       <TableCell align="center" sx={{ py: 1.25, verticalAlign: 'middle' }}>
-                        {activeFilter === 'deleted' ? (
-                          <Button
-                            size="small"
-                            variant="outlined"
-                            startIcon={<RestoreFromTrashIcon sx={{ fontSize: 14 }} />}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onRestoreClause?.(row);
-                            }}
-                            sx={{
-                              height: 26,
-                              fontSize: '11px',
-                              fontWeight: 600,
-                              textTransform: 'none',
-                              px: 1.25,
-                              borderRadius: 1,
-                              bgcolor: '#f0fdf4',
-                              color: '#16a34a',
-                              borderColor: '#bbf7d0',
-                              '&:hover': {
-                                bgcolor: '#dcfce7',
-                                borderColor: '#86efac',
-                              },
-                            }}
-                          >
-                            Restore
-                          </Button>
-                        ) : (
+                        {activeFilter === 'deleted' ? (() => {
+                          const isRowRestoring = (restoringClauseIds || []).some(
+                            (id) =>
+                              (row.classification_id && String(row.classification_id) === String(id)) ||
+                              (row.id && String(row.id) === String(id)) ||
+                              (row.clause_id && String(row.clause_id) === String(id))
+                          );
+                          return (
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              disabled={isRowRestoring || isRestoring}
+                              startIcon={
+                                isRowRestoring ? (
+                                  <CircularProgress size={13} thickness={5} sx={{ color: '#16a34a' }} />
+                                ) : (
+                                  <RestoreFromTrashIcon sx={{ fontSize: 14 }} />
+                                )
+                              }
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onRestoreClause?.(row);
+                              }}
+                              sx={{
+                                height: 26,
+                                fontSize: '11px',
+                                fontWeight: 600,
+                                textTransform: 'none',
+                                px: 1.25,
+                                borderRadius: 1,
+                                bgcolor: '#f0fdf4',
+                                color: '#16a34a',
+                                borderColor: '#bbf7d0',
+                                '&:hover': {
+                                  bgcolor: '#dcfce7',
+                                  borderColor: '#86efac',
+                                },
+                                '&.Mui-disabled': {
+                                  bgcolor: isRowRestoring ? '#f0fdf4' : '#f8fafc',
+                                  color: isRowRestoring ? '#16a34a' : '#94a3b8',
+                                  borderColor: isRowRestoring ? '#bbf7d0' : '#e2e8f0',
+                                  opacity: isRowRestoring ? 0.85 : 0.6,
+                                },
+                              }}
+                            >
+                              {isRowRestoring ? 'Restoring...' : 'Restore'}
+                            </Button>
+                          );
+                        })() : (
                           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>
                             <Tooltip title="Preview in full document">
                               <IconButton

@@ -95,6 +95,11 @@ function toQuery(filters = {}) {
 }
 
 export const documentService = {
+  /** Reference options for Drive ingestion; documents retain the selected ids. */
+  metadata() {
+    return get('/api/document-metadata/');
+  },
+
   websocketUrl(documentId) {
     const backendOrigin = API_BASE || window.location.origin;
     const url = new URL(`/ws/documents/${documentId}/`, backendOrigin);
@@ -188,6 +193,10 @@ export const documentService = {
     return post(`/api/documents/${documentId}/classification/${classificationId}/restore/`, data);
   },
 
+  setExhibit(documentId, data) {
+    return post(`/api/documents/${documentId}/classification/exhibit/set/`, data);
+  },
+
   getDocumentNote(documentId) {
     return get(`/api/documents/${documentId}/note/`);
   },
@@ -223,7 +232,7 @@ export const documentService = {
     return get(`/api/documents/${documentId}/workspace/`);
   },
 
-  taxonomy() {
-    return get('/api/taxonomy/');
+  taxonomy(documentId) {
+    return get(`/api/${documentId}/taxonomy/`);
   },
 };
