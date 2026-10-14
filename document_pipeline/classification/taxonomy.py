@@ -15,7 +15,6 @@ Two lookups sit on top of the rows:
 """
 import json
 import re
-import threading
 import unicodedata
 from pathlib import Path
 
@@ -116,10 +115,16 @@ def seed_taxonomy(apps, version):
     aliases, exclusions = [], []
     for entry in data['types']:
         ctype = by_key[entry['key']]
+        alias_fields = {
+            field.name for field in CanonicalTypeAlias._meta.concrete_fields
+        }
         for position, (alias, key, literal, note) in enumerate(alias_rows(entry)):
-            aliases.append(CanonicalTypeAlias(
+            alias_values = dict(
                 canonical_type=ctype, version=version, alias=alias, match_key=key,
-                is_literal=literal, note=note, position=position))
+                is_literal=literal, note=note, position=position)
+            if 'agreement_type' in alias_fields:
+                alias_values['agreement_type_id'] = ctype.agreement_type_id
+            aliases.append(CanonicalTypeAlias(**alias_values))
         for position, ex in enumerate(entry['excludes']):
             exclusions.append(CanonicalTypeExclusion(
                 from_type=ctype, to_type=by_key[ex['key']], note=ex['note'],
@@ -230,38 +235,30 @@ def vocabulary_from_file(version):
     return Vocabulary(version, types)
 
 
-_cache = {}
-_cache_lock = threading.Lock()
-
-
-def load_vocabulary(version):
-    """The Vocabulary for a version, read from the database once per process.
-
-    Cached by version string. Seeded versions are immutable, so a cached entry
-    can only go stale if rows are edited by hand, which the design forbids.
-    """
-    with _cache_lock:
-        vocab = _cache.get(version)
-        if vocab is None:
-            vocab = _cache[version] = _vocabulary_from_db(version)
-        return vocab
+def load_vocabulary(version, agreement_type_id=None):
+    """Load the selected version, optionally scoped to one agreement type."""
+    return _vocabulary_from_db(version, agreement_type_id)
 
 
 def clear_vocabulary_cache():
-    with _cache_lock:
-        _cache.clear()
+    """Retained for callers that previously cleared the process-local cache."""
+    return None
 
 
-def _vocabulary_from_db(version):
+def _vocabulary_from_db(version, agreement_type_id=None):
     from document_pipeline.models import CanonicalType
 
-    rows = list(CanonicalType.objects
-                .filter(version=version, is_active=True)
-                .prefetch_related('alias_rows', 'exclusions__to_type')
-                .order_by('sort_order'))
+    queryset = CanonicalType.objects.filter(version=version, is_active=True)
+    if agreement_type_id is not None:
+        queryset = queryset.filter(agreement_type_id=agreement_type_id)
+    rows = list(
+        queryset.prefetch_related('alias_rows', 'exclusions__to_type')
+        .order_by('sort_order')
+    )
     if not rows:
         raise LookupError('No canonical types for taxonomy version %r. '
-                          'Run `python manage.py migrate document_pipeline`.' % version)
+                          'Run `python manage.py migrate document_pipeline`.'
+                          % version)
     types = []
     for row in rows:
         aliases = sorted(row.alias_rows.all(), key=lambda a: a.position)
