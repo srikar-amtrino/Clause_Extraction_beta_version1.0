@@ -21,6 +21,8 @@ import {
   InputLabel,
   Select,
   MenuItem,
+  MenuList,
+  Popover,
   Tooltip,
   Paper,
   Tabs,
@@ -38,6 +40,7 @@ import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import GavelIcon from '@mui/icons-material/Gavel';
 import ArticleOutlinedIcon from '@mui/icons-material/ArticleOutlined';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import { documentService } from '../services/documentService';
 import { AGREEMENT_TYPES } from './FolderMetadataModal';
 
@@ -46,6 +49,239 @@ const TAXONOMY_STORAGE_KEY = 'accordor_taxonomy_definitions_v2';
 
 // Standard baseline taxonomy items (empty template)
 const INITIAL_TAXONOMY = [];
+
+/**
+ * User-friendly Searchable Dropdown that anchors and opens strictly downwards,
+ * keeping the page header and modal box visible, with integrated search.
+ */
+function SearchableSelect({
+  label,
+  value,
+  onChange,
+  options = [],
+  placeholder = 'Select...',
+  searchPlaceholder = 'Search agreement types...',
+  disabled = false,
+  minWidth = 240,
+  fullWidth = true,
+  error = false,
+}) {
+  const [anchorEl, setAnchorEl] = useState(null);
+  const [search, setSearch] = useState('');
+  const open = Boolean(anchorEl);
+
+  const selectedItem = options.find((opt) => String(opt.id) === String(value));
+
+  const handleOpen = (e) => {
+    if (disabled) return;
+    setAnchorEl(e.currentTarget);
+    setSearch('');
+  };
+
+  const handleClose = () => {
+    setAnchorEl(null);
+    setSearch('');
+  };
+
+  const handleSelect = (id) => {
+    onChange(id);
+    handleClose();
+  };
+
+  const filteredOptions = options.filter((opt) => {
+    if (!search.trim()) return true;
+    return (opt.name || '').toLowerCase().includes(search.toLowerCase().trim());
+  });
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, minWidth, width: fullWidth ? '100%' : 'auto' }}>
+      {label && (
+        <Typography variant="caption" sx={{ fontWeight: 600, color: error ? '#d32f2f' : '#64748b', fontSize: '12px' }}>
+          {label}
+        </Typography>
+      )}
+
+      {/* Trigger Box */}
+      <Box
+        onClick={handleOpen}
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          border: '1px solid',
+          borderColor: error ? '#d32f2f' : open ? '#1e3a5f' : '#cbd5e1',
+          borderRadius: '8px',
+          px: 1.5,
+          py: 0.75,
+          bgcolor: disabled ? '#f8fafc' : '#ffffff',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          transition: 'all 0.15s ease',
+          boxShadow: open ? '0 0 0 2px rgba(30, 58, 95, 0.12)' : 'none',
+          '&:hover': {
+            borderColor: disabled ? '#cbd5e1' : error ? '#d32f2f' : '#94a3b8',
+          },
+        }}
+      >
+        <Typography
+          sx={{
+            fontSize: '13px',
+            color: selectedItem ? '#1e293b' : '#64748b',
+            fontWeight: selectedItem && selectedItem.id !== 'ALL' ? 600 : 500,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            flex: 1,
+            mr: 1,
+          }}
+        >
+          {selectedItem ? selectedItem.name : placeholder}
+        </Typography>
+        <KeyboardArrowDownIcon
+          sx={{
+            fontSize: 18,
+            color: '#64748b',
+            transform: open ? 'rotate(180deg)' : 'none',
+            transition: 'transform 0.2s ease',
+            flexShrink: 0,
+          }}
+        />
+      </Box>
+
+      {/* Dropdown Menu Popover positioned DOWN */}
+      <Popover
+        open={open}
+        anchorEl={anchorEl}
+        onClose={handleClose}
+        anchorOrigin={{
+          vertical: 'bottom',
+          horizontal: 'left',
+        }}
+        transformOrigin={{
+          vertical: 'top',
+          horizontal: 'left',
+        }}
+        slotProps={{
+          paper: {
+            sx: {
+              mt: 0.5,
+              width: anchorEl ? Math.max(anchorEl.clientWidth, 320) : 320,
+              maxHeight: 290,
+              borderRadius: '8px',
+              border: '1px solid #cbd5e1',
+              boxShadow: '0 12px 28px rgba(0,0,0,0.14)',
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+            },
+          },
+        }}
+      >
+        {/* Sticky Search Input */}
+        <Box
+          sx={{
+            p: 1,
+            bgcolor: '#ffffff',
+            borderBottom: '1px solid #f1f5f9',
+            flexShrink: 0,
+          }}
+        >
+          <TextField
+            autoFocus
+            size="small"
+            fullWidth
+            placeholder={searchPlaceholder}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                if (filteredOptions.length > 0) {
+                  handleSelect(filteredOptions[0].id);
+                }
+              }
+            }}
+            slotProps={{
+              input: {
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon sx={{ fontSize: 17, color: '#94a3b8' }} />
+                  </InputAdornment>
+                ),
+                endAdornment: search ? (
+                  <InputAdornment position="end">
+                    <IconButton size="small" onClick={() => setSearch('')} sx={{ p: 0.2 }}>
+                      <CloseIcon sx={{ fontSize: 13, color: '#94a3b8' }} />
+                    </IconButton>
+                  </InputAdornment>
+                ) : null,
+              },
+            }}
+            sx={{
+              '& .MuiOutlinedInput-root': {
+                fontSize: '12.5px',
+                borderRadius: '6px',
+                bgcolor: '#f8fafc',
+                '& fieldset': {
+                  borderColor: '#e2e8f0',
+                },
+                '&:hover fieldset': {
+                  borderColor: '#cbd5e1',
+                },
+                '&.Mui-focused fieldset': {
+                  borderColor: '#1e3a5f',
+                },
+              },
+            }}
+          />
+        </Box>
+
+        {/* Scrollable list of items wrapped in MenuList */}
+        <MenuList
+          sx={{
+            overflowY: 'auto',
+            flex: 1,
+            py: 0.5,
+            outline: 'none',
+          }}
+        >
+          {filteredOptions.length === 0 ? (
+            <Box sx={{ p: 2, textAlign: 'center' }}>
+              <Typography sx={{ fontSize: '12px', color: '#94a3b8' }}>
+                No matches found
+              </Typography>
+            </Box>
+          ) : (
+            filteredOptions.map((opt) => {
+              const isSelected = String(opt.id) === String(value);
+              return (
+                <MenuItem
+                  key={opt.id}
+                  selected={isSelected}
+                  onClick={() => handleSelect(opt.id)}
+                  sx={{
+                    fontSize: '12.5px',
+                    py: 1,
+                    px: 1.5,
+                    whiteSpace: 'normal',
+                    lineHeight: 1.35,
+                    bgcolor: isSelected ? '#eff6ff !important' : 'transparent',
+                    fontWeight: isSelected ? 600 : 400,
+                    color: isSelected ? '#1e3a5f' : '#1e293b',
+                    '&:hover': {
+                      bgcolor: '#f1f5f9 !important',
+                    },
+                  }}
+                >
+                  {opt.name}
+                </MenuItem>
+              );
+            })
+          )}
+        </MenuList>
+      </Popover>
+    </Box>
+  );
+}
 
 export default function Taxonomy({ showToast = () => {} }) {
   // Taxonomy items state (empty template, loaded from cache if user added items)
@@ -496,42 +732,18 @@ export default function Taxonomy({ showToast = () => {} }) {
       >
         {/* Left Side: Three Filters + Add Buttons */}
         <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 2 }}>
-          {/* Filter 1: Agreement Type Dropdown */}
-          <Box sx={{ minWidth: 240 }}>
-            <FormControl size="small" fullWidth>
-              <InputLabel id="taxonomy-agreement-type-label" sx={{ fontSize: '13px', color: '#64748b' }}>
-                Agreement Type
-              </InputLabel>
-              <Select
-                labelId="taxonomy-agreement-type-label"
-                id="taxonomy-agreement-type-select"
-                value={agreementFilter}
-                label="Agreement Type"
-                onChange={(e) => setAgreementFilter(e.target.value)}
-                sx={{
-                  fontSize: '13px',
-                  borderRadius: '8px',
-                  bgcolor: '#f8fafc',
-                  '& .MuiOutlinedInput-notchedOutline': {
-                    borderColor: '#cbd5e1',
-                  },
-                  '&:hover .MuiOutlinedInput-notchedOutline': {
-                    borderColor: '#94a3b8',
-                  },
-                }}
-              >
-                <MenuItem value="ALL" sx={{ fontSize: '13px', fontWeight: 600 }}>
-                  All Agreement Types ({stats.total})
-                </MenuItem>
-                <Divider sx={{ my: 0.5 }} />
-                {AGREEMENT_TYPES.map((type) => (
-                  <MenuItem key={type} value={type} sx={{ fontSize: '13px' }}>
-                    {type}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-          </Box>
+          {/* Filter 1: Agreement Type Dropdown with Search */}
+          <SearchableSelect
+            value={agreementFilter}
+            onChange={(val) => setAgreementFilter(val)}
+            options={[
+              { id: 'ALL', name: `All Agreement Types (${stats.total})` },
+              ...AGREEMENT_TYPES.map((type) => ({ id: type, name: type })),
+            ]}
+            minWidth={250}
+            fullWidth={false}
+            searchPlaceholder="Search agreement types..."
+          />
 
           {/* Filter 2 & 3: Clauses and Non-Clauses Tabs/Pills */}
           <Box
@@ -1069,30 +1281,20 @@ export default function Taxonomy({ showToast = () => {} }) {
           </Box>
 
           {/* Row 1: applies_to and number */}
-          <Box sx={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 2 }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 2, alignItems: 'flex-start' }}>
             {/* Field: applies_to */}
-            <FormControl fullWidth size="small" error={Boolean(formErrors.applies_to)}>
-              <InputLabel id="modal-applies-to-label" sx={{ fontSize: '13px' }}>
-                applies_to *
-              </InputLabel>
-              <Select
-                labelId="modal-applies-to-label"
-                id="modal-applies-to"
-                value={formData.applies_to}
-                label="applies_to *"
-                onChange={(e) => handleFormChange('applies_to', e.target.value)}
-                sx={{ fontSize: '13px', borderRadius: '8px' }}
-              >
-                <MenuItem value="All Agreements" sx={{ fontSize: '13px', fontWeight: 600 }}>
-                  All Agreements
-                </MenuItem>
-                {AGREEMENT_TYPES.map((type) => (
-                  <MenuItem key={type} value={type} sx={{ fontSize: '13px' }}>
-                    {type}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
+            <SearchableSelect
+              label="applies_to *"
+              value={formData.applies_to}
+              onChange={(val) => handleFormChange('applies_to', val)}
+              options={[
+                { id: 'All Agreements', name: 'All Agreements' },
+                ...AGREEMENT_TYPES.map((type) => ({ id: type, name: type })),
+              ]}
+              searchPlaceholder="Search applies_to agreement..."
+              fullWidth={true}
+              error={Boolean(formErrors.applies_to)}
+            />
 
             {/* Field: number */}
             <TextField
