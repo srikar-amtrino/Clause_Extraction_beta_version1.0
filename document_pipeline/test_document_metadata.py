@@ -1,8 +1,10 @@
 import json
+from datetime import timedelta
 
+from django.utils import timezone
 from django.test import RequestFactory, TestCase
 
-from core.models import IngestionSource
+from core.models import IngestionSource, User, UserSession
 from document_pipeline.classification import prompt as prompts
 from document_pipeline.classification.taxonomy import (
     clear_vocabulary_cache,
@@ -16,9 +18,88 @@ from document_pipeline.services.document_metadata import (
     resolve_agreement_type,
     resolve_sector_type,
 )
+from document_pipeline.taxonomy_api_views import (
+    canonical_type_collection,
+    canonical_type_detail,
+)
 
 
 class DocumentMetadataTests(TestCase):
+    def test_canonical_taxonomy_api_reads_creates_and_edits_agreement_scoped_types(self):
+        msa = AgreementType.objects.get(
+            name='Information Technology (IT) Services Agreement / Master Services Agreement (MSA)',
+        )
+        cloud = AgreementType.objects.get(name='Cloud Services Agreement')
+        user = User.objects.create(
+            email='canonical-taxonomy-api@example.com',
+            username='canonical-taxonomy-api',
+        )
+        UserSession.objects.create(
+            user=user,
+            token='canonical-taxonomy-api-token',
+            expires_at=timezone.now() + timedelta(days=1),
+        )
+        payload = {
+            'agreement_type_id': cloud.pk,
+            'applies_to': 'clause',
+            'number': 1,
+            'key': 'definitions-and-interpretation',
+            'name': 'Definitions & Interpretation',
+            'definition': 'Cloud-specific definitions and interpretation.',
+            'aliases': ['Cloud Definitions'],
+            'excludes': [],
+        }
+        request = RequestFactory().post(
+            '/api/taxonomy/types/',
+            data=json.dumps(payload),
+            content_type='application/json',
+            HTTP_AUTHORIZATION='Bearer canonical-taxonomy-api-token',
+        )
+        created_response = canonical_type_collection(request)
+        self.assertEqual(created_response.status_code, 201, created_response.content)
+        created = json.loads(created_response.content)
+        self.assertEqual(created['agreement_type'], {'id': cloud.pk, 'name': cloud.name})
+
+        existing_msa_type = CanonicalType.objects.get(
+            version='v1',
+            agreement_type=msa,
+            key='definitions-and-interpretation',
+        )
+        self.assertNotEqual(created['id'], str(existing_msa_type.pk))
+
+        patch_request = RequestFactory().patch(
+            '/api/taxonomy/types/%s/' % created['id'],
+            data=json.dumps({'definition': 'Updated cloud-specific definition.'}),
+            content_type='application/json',
+            HTTP_AUTHORIZATION='Bearer canonical-taxonomy-api-token',
+        )
+        patched_response = canonical_type_detail(patch_request, created['id'])
+        self.assertEqual(patched_response.status_code, 200, patched_response.content)
+        patched = json.loads(patched_response.content)
+        self.assertEqual(patched['definition'], 'Updated cloud-specific definition.')
+        self.assertEqual(patched['aliases'], ['Cloud Definitions'])
+
+        duplicate_request = RequestFactory().post(
+            '/api/taxonomy/types/',
+            data=json.dumps(payload),
+            content_type='application/json',
+            HTTP_AUTHORIZATION='Bearer canonical-taxonomy-api-token',
+        )
+        duplicate_response = canonical_type_collection(duplicate_request)
+        self.assertEqual(duplicate_response.status_code, 409)
+
+        get_response = canonical_type_collection(
+            RequestFactory().get('/api/taxonomy/types/'),
+        )
+        self.assertEqual(get_response.status_code, 200)
+        data = json.loads(get_response.content)
+        self.assertIn(
+            {'id': cloud.pk, 'name': cloud.name},
+            data['agreement_types'],
+        )
+        self.assertTrue(data['sector_types'])
+        self.assertIn(created['id'], {row['id'] for row in data['canonical_types']})
+
     def test_metadata_endpoint_returns_seeded_types_and_ids(self):
         response = document_metadata(RequestFactory().get('/api/document-metadata/'))
         payload = json.loads(response.content)

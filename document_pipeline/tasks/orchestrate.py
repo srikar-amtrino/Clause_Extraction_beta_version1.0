@@ -84,7 +84,10 @@ def trigger_classification_workflow(document_id: str, *, force=False, classifier
         return None
 
     classifier = classifier or classifier_from_settings()
-    vocab = load_vocabulary(settings.CLASSIFY_TAXONOMY_VERSION)
+    vocab = load_vocabulary(
+        settings.CLASSIFY_TAXONOMY_VERSION,
+        agreement_type_id=chunk_run.extraction_run.document.agreement_type_id,
+    )
     system_text = system_prompt_for_document(document_id, vocab)
     current = ClassificationRun.objects.filter(chunk_run=chunk_run, is_current=True).first()
     if not force and is_up_to_date(

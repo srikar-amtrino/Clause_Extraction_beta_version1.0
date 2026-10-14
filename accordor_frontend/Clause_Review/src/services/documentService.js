@@ -80,6 +80,10 @@ function post(path, body, options = {}) {
   return request(path, { ...options, method: 'POST', body });
 }
 
+function patch(path, body) {
+  return request(path, { method: 'PATCH', body });
+}
+
 /** Turn a filter object into a query string, repeating array values. */
 function toQuery(filters = {}) {
   const params = new URLSearchParams();
@@ -98,6 +102,18 @@ export const documentService = {
   /** Reference options for Drive ingestion; documents retain the selected ids. */
   metadata() {
     return get('/api/document-metadata/');
+  },
+
+  taxonomyTypes() {
+    return get('/api/taxonomy/types/');
+  },
+
+  createCanonicalType(data) {
+    return post('/api/taxonomy/types/', data);
+  },
+
+  updateCanonicalType(typeId, data) {
+    return patch(`/api/taxonomy/types/${typeId}/`, data);
   },
 
   websocketUrl(documentId) {
@@ -191,10 +207,6 @@ export const documentService = {
 
   restoreClassificationItem(documentId, classificationId, data = {}) {
     return post(`/api/documents/${documentId}/classification/${classificationId}/restore/`, data);
-  },
-
-  setExhibit(documentId, data) {
-    return post(`/api/documents/${documentId}/classification/exhibit/set/`, data);
   },
 
   getDocumentNote(documentId) {

@@ -2,6 +2,7 @@
 import uuid
 
 from django.db import models
+from django.db.models import Q
 
 from .agreement_type import AgreementType
 
@@ -48,10 +49,36 @@ class CanonicalType(models.Model):
     class Meta:
         db_table = 'canonical_types'
         constraints = [
-            models.UniqueConstraint(fields=['version', 'key'], name='unique_canonical_type_key'),
-            models.UniqueConstraint(fields=['version', 'name'], name='unique_canonical_type_name'),
-            models.UniqueConstraint(fields=['version', 'applies_to', 'number'],
-                                    name='unique_canonical_type_number'),
+            models.UniqueConstraint(
+                fields=['version', 'key'],
+                condition=Q(agreement_type__isnull=True),
+                name='unique_ctype_key_global',
+            ),
+            models.UniqueConstraint(
+                fields=['version', 'agreement_type', 'key'],
+                condition=Q(agreement_type__isnull=False),
+                name='unique_ctype_key_agreement',
+            ),
+            models.UniqueConstraint(
+                fields=['version', 'name'],
+                condition=Q(agreement_type__isnull=True),
+                name='unique_ctype_name_global',
+            ),
+            models.UniqueConstraint(
+                fields=['version', 'agreement_type', 'name'],
+                condition=Q(agreement_type__isnull=False),
+                name='unique_ctype_name_agreement',
+            ),
+            models.UniqueConstraint(
+                fields=['version', 'applies_to', 'number'],
+                condition=Q(agreement_type__isnull=True),
+                name='unique_ctype_number_global',
+            ),
+            models.UniqueConstraint(
+                fields=['version', 'agreement_type', 'applies_to', 'number'],
+                condition=Q(agreement_type__isnull=False),
+                name='unique_ctype_number_agreement',
+            ),
         ]
         indexes = [
             models.Index(fields=['version', 'sort_order'], name='ctype_version_order_idx'),

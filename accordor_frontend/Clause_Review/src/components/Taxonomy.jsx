@@ -42,13 +42,52 @@ import GavelIcon from '@mui/icons-material/Gavel';
 import ArticleOutlinedIcon from '@mui/icons-material/ArticleOutlined';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import { documentService } from '../services/documentService';
-import { AGREEMENT_TYPES } from './FolderMetadataModal';
-
-// Storage key for custom / persistent taxonomy
-const TAXONOMY_STORAGE_KEY = 'accordor_taxonomy_definitions_v2';
 
 // Standard baseline taxonomy items (empty template)
 const INITIAL_TAXONOMY = [];
+
+function fromCanonicalType(row) {
+  return {
+    ...row,
+    id: row.id,
+    version: row.version,
+    category: row.applies_to,
+    applies_to: row.agreement_type?.name || '',
+    agreement_type_id: row.agreement_type_id == null ? '' : String(row.agreement_type_id),
+    number: String(row.number),
+    key: row.key,
+    name: row.name,
+    definition: row.definition,
+    aliases_data: row.aliases || [],
+    aliases: (row.aliases || []).join(', '),
+    excludes_data: row.excludes || [],
+    excludes: (row.excludes || []).map((item) => item.key || item.name).join(', '),
+    is_active: row.is_active,
+  };
+}
+
+function toCanonicalTypePayload(item) {
+  const aliases = Array.isArray(item.aliases)
+    ? item.aliases
+    : String(item.aliases || '').split(',');
+  const excludes = Array.isArray(item.excludes)
+    ? item.excludes
+    : String(item.excludes || '').split(',');
+  return {
+    agreement_type_id: Number(item.agreement_type_id),
+    ...(item.version ? { version: item.version } : {}),
+    applies_to: item.category,
+    number: Number(item.number),
+    key: item.key.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
+    name: item.name.trim(),
+    definition: item.definition.trim(),
+    aliases: aliases.map((alias) => typeof alias === 'string' ? alias.trim() : alias).filter(Boolean),
+    excludes: excludes.map((exclusion) => {
+      if (typeof exclusion !== 'string') return exclusion;
+      return exclusion.trim();
+    }).filter(Boolean),
+  };
+}
 
 /**
  * User-friendly Searchable Dropdown that anchors and opens strictly downwards,
@@ -284,18 +323,11 @@ function SearchableSelect({
 }
 
 export default function Taxonomy({ showToast = () => {} }) {
-  // Taxonomy items state (empty template, loaded from cache if user added items)
-  const [items, setItems] = useState(() => {
-    try {
-      localStorage.removeItem('accordor_taxonomy_definitions_v1');
-      const cached = localStorage.getItem(TAXONOMY_STORAGE_KEY);
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed)) return parsed;
-      }
-    } catch (_) {}
-    return INITIAL_TAXONOMY;
-  });
+  const [items, setItems] = useState(INITIAL_TAXONOMY);
+  const [agreementTypes, setAgreementTypes] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
 
   // Filter states
   const [agreementFilter, setAgreementFilter] = useState('ALL');
@@ -311,7 +343,7 @@ export default function Taxonomy({ showToast = () => {} }) {
   // "applies_to", "number", "key", "name", "definition", "aliases", "excludes"
   const [formData, setFormData] = useState({
     category: 'clause', // 'clause' | 'non_clause'
-    applies_to: 'All Agreements',
+    agreement_type_id: '',
     number: '',
     key: '',
     name: '',
@@ -322,21 +354,41 @@ export default function Taxonomy({ showToast = () => {} }) {
 
   const [formErrors, setFormErrors] = useState({});
   const fileInputRef = useRef(null);
+  const showToastRef = useRef(showToast);
 
-  // Sync items to localStorage whenever they change
   useEffect(() => {
-    try {
-      localStorage.setItem(TAXONOMY_STORAGE_KEY, JSON.stringify(items));
-    } catch (_) {}
-  }, [items]);
+    showToastRef.current = showToast;
+  }, [showToast]);
 
-
+  useEffect(() => {
+    let active = true;
+    documentService.taxonomyTypes()
+      .then((data) => {
+        if (!active) return;
+        if (!Array.isArray(data.canonical_types)
+          || !Array.isArray(data.agreement_types)
+          || !Array.isArray(data.sector_types)) {
+          throw new Error('The taxonomy API returned an incomplete response.');
+        }
+        setItems(data.canonical_types.map(fromCanonicalType));
+        setAgreementTypes(data.agreement_types);
+      })
+      .catch((error) => {
+        if (active) showToastRef.current(error.message || 'Could not load taxonomy.', 'error');
+      })
+      .finally(() => {
+        if (active) setIsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // Compute stats
   const stats = useMemo(() => {
     const clauseCount = items.filter((i) => i.category === 'clause').length;
     const nonClauseCount = items.filter((i) => i.category === 'non_clause').length;
-    const uniqueAppliesTo = new Set(items.map((i) => i.applies_to).filter(Boolean)).size;
+    const uniqueAppliesTo = new Set(items.map((i) => i.agreement_type_id).filter(Boolean)).size;
     return {
       total: items.length,
       clauses: clauseCount,
@@ -350,11 +402,7 @@ export default function Taxonomy({ showToast = () => {} }) {
     return items.filter((item) => {
       // 1. Agreement Type Filter
       if (agreementFilter !== 'ALL') {
-        const itemApplies = (item.applies_to || '').toLowerCase();
-        const target = agreementFilter.toLowerCase();
-        if (itemApplies !== 'all' && itemApplies !== 'all agreements' && !itemApplies.includes(target) && !target.includes(itemApplies)) {
-          return false;
-        }
+        if (String(item.agreement_type_id) !== String(agreementFilter)) return false;
       }
 
       // 2. Category Filter (Clauses vs Non-Clauses)
@@ -370,7 +418,7 @@ export default function Taxonomy({ showToast = () => {} }) {
         const q = searchQuery.toLowerCase().trim();
         const matchName = (item.name || '').toLowerCase().includes(q);
         const matchKey = (item.key || '').toLowerCase().includes(q);
-        const matchNumber = (item.number || '').toLowerCase().includes(q);
+        const matchNumber = String(item.number || '').toLowerCase().includes(q);
         const matchDef = (item.definition || '').toLowerCase().includes(q);
         const matchAliases = (item.aliases || '').toLowerCase().includes(q);
         const matchApplies = (item.applies_to || '').toLowerCase().includes(q);
@@ -394,14 +442,14 @@ export default function Taxonomy({ showToast = () => {} }) {
 
     // Auto-compute next number suggestion
     const categoryItems = items.filter((i) => i.category === cat);
-    const nextNum = cat === 'clause' ? `${categoryItems.length + 1}.0` : `0.${categoryItems.length + 1}`;
+    const nextNum = categoryItems.length + 1;
 
     setModalMode('create');
     setEditingId(null);
     setFormErrors({});
     setFormData({
       category: cat,
-      applies_to: agreementFilter !== 'ALL' ? agreementFilter : 'All Agreements',
+      agreement_type_id: agreementFilter !== 'ALL' ? agreementFilter : '',
       number: nextNum,
       key: '',
       name: '',
@@ -419,7 +467,7 @@ export default function Taxonomy({ showToast = () => {} }) {
     setFormErrors({});
     setFormData({
       category: item.category || 'clause',
-      applies_to: item.applies_to || 'All Agreements',
+      agreement_type_id: item.agreement_type_id || '',
       number: item.number || '',
       key: item.key || '',
       name: item.name || '',
@@ -442,8 +490,8 @@ export default function Taxonomy({ showToast = () => {} }) {
     setFormData((prev) => {
       const next = { ...prev, [field]: value };
       // Auto-generate key from name if key is empty or touched
-      if (field === 'name' && modalMode === 'create' && (!prev.key || prev.key === prev.name.toLowerCase().replace(/[^a-z0-9]+/g, '_'))) {
-        next.key = value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '_');
+      if (field === 'name' && modalMode === 'create' && (!prev.key || prev.key === prev.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'))) {
+        next.key = value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
       }
       return next;
     });
@@ -453,7 +501,7 @@ export default function Taxonomy({ showToast = () => {} }) {
   };
 
   // Save Modal Form
-  const handleSaveItem = () => {
+  const handleSaveItem = async () => {
     const errors = {};
     if (!formData.name?.trim()) {
       errors.name = 'Name is required';
@@ -461,8 +509,14 @@ export default function Taxonomy({ showToast = () => {} }) {
     if (!formData.key?.trim()) {
       errors.key = 'Key identifier is required';
     }
-    if (!formData.applies_to?.trim()) {
-      errors.applies_to = 'Applies To is required';
+    if (!formData.agreement_type_id) {
+      errors.agreement_type_id = 'Agreement type is required';
+    }
+    if (!formData.definition?.trim()) {
+      errors.definition = 'Definition is required';
+    }
+    if (!Number.isInteger(Number(formData.number)) || Number(formData.number) < 1) {
+      errors.number = 'Enter a positive whole number';
     }
 
     if (Object.keys(errors).length > 0) {
@@ -470,33 +524,35 @@ export default function Taxonomy({ showToast = () => {} }) {
       return;
     }
 
-    const cleanedKey = formData.key.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_');
     const newItemData = {
       ...formData,
-      key: cleanedKey,
       name: formData.name.trim(),
-      number: formData.number.trim() || '1.0',
-      applies_to: formData.applies_to.trim(),
+      number: formData.number,
       definition: formData.definition.trim(),
       aliases: formData.aliases.trim(),
       excludes: formData.excludes.trim(),
     };
 
-    if (modalMode === 'create') {
-      const newEntry = {
-        id: `custom-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
-        ...newItemData,
-      };
-      setItems((prev) => [newEntry, ...prev]);
-      showToast(`Added taxonomy definition "${newEntry.name}"`, 'success');
-    } else {
-      setItems((prev) =>
-        prev.map((item) => (item.id === editingId ? { ...item, ...newItemData } : item))
+    setIsSaving(true);
+    try {
+      const payload = toCanonicalTypePayload(newItemData);
+      const saved = modalMode === 'create'
+        ? await documentService.createCanonicalType(payload)
+        : await documentService.updateCanonicalType(editingId, payload);
+      const mapped = fromCanonicalType(saved);
+      setItems((prev) => modalMode === 'create'
+        ? [mapped, ...prev]
+        : prev.map((item) => (item.id === editingId ? mapped : item)));
+      showToast(
+        `${modalMode === 'create' ? 'Added' : 'Updated'} taxonomy definition "${mapped.name}"`,
+        'success',
       );
-      showToast(`Updated taxonomy definition "${newItemData.name}"`, 'success');
+      handleCloseModal();
+    } catch (error) {
+      showToast(error.message || 'Could not save taxonomy definition.', 'error');
+    } finally {
+      setIsSaving(false);
     }
-
-    handleCloseModal();
   };
 
   // Delete an item
@@ -528,7 +584,7 @@ export default function Taxonomy({ showToast = () => {} }) {
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       try {
         const content = event.target.result;
         let imported = [];
@@ -569,29 +625,67 @@ export default function Taxonomy({ showToast = () => {} }) {
           return;
         }
 
-        const normalizedImported = imported.map((item, idx) => ({
-          id: `upload-${Date.now()}-${idx}`,
-          category: item.category === 'non_clause' || item.type === 'non_clause' ? 'non_clause' : 'clause',
-          applies_to: item.applies_to || item.agreement_type || 'All Agreements',
-          number: item.number || `${idx + 1}.0`,
-          key: (item.key || item.name || `entry_${idx}`).toLowerCase().replace(/[^a-z0-9_]/g, '_'),
-          name: item.name || item.key || `Imported Item ${idx + 1}`,
-          definition: item.definition || '',
-          aliases: Array.isArray(item.aliases) ? item.aliases.join(', ') : item.aliases || '',
-          excludes: Array.isArray(item.excludes) ? item.excludes.join(', ') : item.excludes || '',
-        }));
+        setIsUploading(true);
+        const created = [];
+        const failures = [];
+        for (const [idx, item] of imported.entries()) {
+          const appliesTo = item.applies_to;
+          const sourceAgreement = item.agreement_type_id
+            ?? (typeof item.agreement_type === 'object' ? item.agreement_type?.id : item.agreement_type)
+            ?? (appliesTo !== 'clause' && appliesTo !== 'non_clause' ? appliesTo : '');
+          const agreement = agreementTypes.find((candidate) =>
+            String(candidate.id) === String(sourceAgreement)
+            || candidate.name.toLowerCase() === String(sourceAgreement).toLowerCase());
+          const agreementId = agreement?.id
+            ?? (agreementFilter !== 'ALL' ? Number(agreementFilter) : null);
+          if (!agreementId) {
+            failures.push(`${item.name || item.key || `Entry ${idx + 1}`}: choose or specify an agreement type.`);
+            continue;
+          }
 
-        setItems((prev) => {
-          const existingKeys = new Set(prev.map((i) => (i.key || '').toLowerCase().trim()));
-          const newEntries = normalizedImported.filter((ni) => !existingKeys.has(ni.key));
-          const updated = [...newEntries, ...prev];
-          return updated;
-        });
-
-        showToast(`Successfully uploaded ${normalizedImported.length} taxonomy entries!`, 'success');
+          const aliases = Array.isArray(item.aliases)
+            ? item.aliases
+            : String(item.aliases || '').split(',');
+          const excludes = Array.isArray(item.excludes)
+            ? item.excludes
+            : String(item.excludes || '').split(',');
+          const entry = {
+            category: item.applies_to === 'clause' || item.applies_to === 'non_clause'
+              ? item.applies_to
+              : item.category === 'non_clause' || item.type === 'non_clause'
+              ? 'non_clause'
+              : 'clause',
+            agreement_type_id: agreementId,
+            number: item.number || idx + 1,
+            key: item.key || item.name || `entry-${idx + 1}`,
+            name: item.name || item.key || `Imported Item ${idx + 1}`,
+            definition: item.definition || '',
+            aliases,
+            excludes,
+            version: item.version,
+          };
+          try {
+            created.push(fromCanonicalType(
+              await documentService.createCanonicalType(toCanonicalTypePayload(entry)),
+            ));
+          } catch (error) {
+            failures.push(`${entry.name}: ${error.message}`);
+          }
+        }
+        if (created.length) setItems((prev) => [...created, ...prev]);
+        if (failures.length) {
+          showToast(
+            `Imported ${created.length} of ${imported.length}; ${failures[0]}`,
+            'error',
+          );
+        } else {
+          showToast(`Successfully uploaded ${created.length} taxonomy entries!`, 'success');
+        }
       } catch (err) {
         console.error('File parse error:', err);
         showToast(`Failed to parse file: ${err.message}`, 'error');
+      } finally {
+        setIsUploading(false);
       }
     };
     reader.readAsText(file);
@@ -695,6 +789,7 @@ export default function Taxonomy({ showToast = () => {} }) {
           <Button
             variant="contained"
             size="small"
+            disabled={isUploading}
             startIcon={<UploadFileOutlinedIcon sx={{ fontSize: 18 }} />}
             onClick={handleUploadClick}
             sx={{
@@ -738,7 +833,7 @@ export default function Taxonomy({ showToast = () => {} }) {
             onChange={(val) => setAgreementFilter(val)}
             options={[
               { id: 'ALL', name: `All Agreement Types (${stats.total})` },
-              ...AGREEMENT_TYPES.map((type) => ({ id: type, name: type })),
+              ...agreementTypes.map((type) => ({ id: String(type.id), name: type.name })),
             ]}
             minWidth={250}
             fullWidth={false}
@@ -945,7 +1040,6 @@ export default function Taxonomy({ showToast = () => {} }) {
                 <TableRow sx={{ '& th': { bgcolor: '#f8fafc', fontWeight: 700, fontSize: '12px', color: '#475569', py: 1.2 } }}>
                   <TableCell width="70">No.</TableCell>
                   <TableCell width="240">Name & Key</TableCell>
-                  <TableCell width="120">Category</TableCell>
                   <TableCell width="200">Applies To</TableCell>
                   <TableCell>Definition</TableCell>
                   <TableCell width="220">Aliases & Excludes</TableCell>
@@ -955,14 +1049,20 @@ export default function Taxonomy({ showToast = () => {} }) {
               <TableBody>
                 {filteredItems.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} sx={{ py: 8, textAlign: 'center' }}>
+                    <TableCell colSpan={6} sx={{ py: 8, textAlign: 'center' }}>
                       <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.5 }}>
                         <AccountTreeOutlinedIcon sx={{ fontSize: 44, color: '#94a3b8' }} />
                         <Typography sx={{ fontSize: '15px', fontWeight: 600, color: '#334155' }}>
-                          {items.length === 0 ? 'Taxonomy is empty' : 'No taxonomy definitions match your filter'}
+                          {isLoading
+                            ? 'Loading taxonomy…'
+                            : items.length === 0
+                            ? 'Taxonomy is empty'
+                            : 'No taxonomy definitions match your filter'}
                         </Typography>
                         <Typography sx={{ fontSize: '13px', color: '#64748b', maxWidth: 420 }}>
-                          {items.length === 0
+                          {isLoading
+                            ? 'Loading taxonomy definitions from the backend.'
+                            : items.length === 0
                             ? 'Click "Add Clause" or "Add Non-Clause" to register definitions, or use "Upload File" to import taxonomy definitions.'
                             : 'Try choosing another agreement type, resetting your search term, or click the + Add button to register a new clause or non-clause definition.'}
                         </Typography>
@@ -1044,35 +1144,19 @@ export default function Taxonomy({ showToast = () => {} }) {
                           </Box>
                         </TableCell>
 
-                        {/* Category */}
+                        {/* Applies To */}
                         <TableCell>
                           <Chip
-                            label={isClause ? 'Clause' : 'Non-Clause'}
+                            label={isClause ? 'clause' : 'non-clause'}
                             size="small"
                             sx={{
                               fontSize: '11px',
                               fontWeight: 600,
                               height: 22,
+                              maxWidth: 190,
                               bgcolor: isClause ? '#e0f2fe' : '#fef3c7',
                               color: isClause ? '#0369a1' : '#b45309',
                               border: `1px solid ${isClause ? '#bae6fd' : '#fde68a'}`,
-                            }}
-                          />
-                        </TableCell>
-
-                        {/* Applies To */}
-                        <TableCell>
-                          <Chip
-                            label={item.applies_to || 'All Agreements'}
-                            size="small"
-                            sx={{
-                              fontSize: '11px',
-                              fontWeight: 500,
-                              height: 22,
-                              maxWidth: 190,
-                              bgcolor: '#f1f5f9',
-                              color: '#334155',
-                              border: '1px solid #e2e8f0',
                             }}
                           />
                         </TableCell>
@@ -1282,27 +1366,26 @@ export default function Taxonomy({ showToast = () => {} }) {
 
           {/* Row 1: applies_to and number */}
           <Box sx={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 2, alignItems: 'flex-start' }}>
-            {/* Field: applies_to */}
+            {/* Field: agreement type */}
             <SearchableSelect
-              label="applies_to *"
-              value={formData.applies_to}
-              onChange={(val) => handleFormChange('applies_to', val)}
-              options={[
-                { id: 'All Agreements', name: 'All Agreements' },
-                ...AGREEMENT_TYPES.map((type) => ({ id: type, name: type })),
-              ]}
-              searchPlaceholder="Search applies_to agreement..."
+              label="Agreement Type *"
+              value={formData.agreement_type_id}
+              onChange={(val) => handleFormChange('agreement_type_id', val)}
+              options={agreementTypes.map((type) => ({ id: String(type.id), name: type.name }))}
+              searchPlaceholder="Search agreement types..."
               fullWidth={true}
-              error={Boolean(formErrors.applies_to)}
+              error={Boolean(formErrors.agreement_type_id)}
             />
 
             {/* Field: number */}
             <TextField
               label="number"
               size="small"
-              placeholder="e.g. 1.0 or 0.1"
+              placeholder="e.g. 29"
               value={formData.number}
               onChange={(e) => handleFormChange('number', e.target.value)}
+              error={Boolean(formErrors.number)}
+              helperText={formErrors.number}
               InputLabelProps={{ shrink: true }}
               sx={{
                 '& .MuiOutlinedInput-root': { borderRadius: '8px', fontSize: '13px' },
@@ -1354,6 +1437,8 @@ export default function Taxonomy({ showToast = () => {} }) {
             placeholder="Detailed definition and scope criteria for this taxonomy entry..."
             value={formData.definition}
             onChange={(e) => handleFormChange('definition', e.target.value)}
+            error={Boolean(formErrors.definition)}
+            helperText={formErrors.definition}
             multiline
             rows={3}
             InputLabelProps={{ shrink: true }}
@@ -1418,6 +1503,7 @@ export default function Taxonomy({ showToast = () => {} }) {
           <Button
             variant="contained"
             onClick={handleSaveItem}
+            disabled={isSaving}
             sx={{
               textTransform: 'none',
               fontSize: '13px',
@@ -1433,7 +1519,7 @@ export default function Taxonomy({ showToast = () => {} }) {
               },
             }}
           >
-            Save
+            {isSaving ? 'Saving…' : 'Save'}
           </Button>
         </DialogActions>
       </Dialog>
