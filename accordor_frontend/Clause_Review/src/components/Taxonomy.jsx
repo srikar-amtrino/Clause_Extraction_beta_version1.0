@@ -43,6 +43,55 @@ import GavelIcon from '@mui/icons-material/Gavel';
 import ArticleOutlinedIcon from '@mui/icons-material/ArticleOutlined';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import { documentService } from '../services/documentService';
+import * as XLSX from 'xlsx';
+
+// Helper to parse pipe- or comma-delimited strings containing plain text or JSON objects
+function parseDelimitedList(raw) {
+  if (Array.isArray(raw)) return raw;
+  if (raw === undefined || raw === null) return [];
+  if (typeof raw !== 'string') {
+    if (typeof raw === 'object') return [raw];
+    return [String(raw)];
+  }
+
+  const str = raw.trim();
+  if (!str) return [];
+
+  // Check if string is a JSON array
+  if (str.startsWith('[') && str.endsWith(']')) {
+    try {
+      const parsed = JSON.parse(str);
+      if (Array.isArray(parsed)) return parsed;
+    } catch (_) {}
+  }
+
+  // Check if string is a single JSON object
+  if (str.startsWith('{') && str.endsWith('}')) {
+    try {
+      const parsed = JSON.parse(str);
+      if (parsed && typeof parsed === 'object') return [parsed];
+    } catch (_) {}
+  }
+
+  // Split by pipe '|' if present, otherwise by comma ','
+  const parts = str.includes('|') ? str.split('|') : str.split(',');
+
+  return parts
+    .map((part) => {
+      const trimmed = part.trim();
+      if (!trimmed) return null;
+      if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+        try {
+          return JSON.parse(trimmed);
+        } catch (_) {
+          return trimmed;
+        }
+      }
+      return trimmed;
+    })
+    .filter(Boolean);
+}
+
 
 // Standard baseline taxonomy items (empty template)
 const INITIAL_TAXONOMY = [];
@@ -74,10 +123,10 @@ function toCanonicalTypePayload(item) {
 
   const aliases = Array.isArray(rawAliases)
     ? rawAliases
-    : String(rawAliases || item.allias || item.alias || '').split(',');
+    : parseDelimitedList(rawAliases || item.allias || item.alias || '');
   const excludes = Array.isArray(rawExcludes)
     ? rawExcludes
-    : String(rawExcludes || item.exclude || item.exclusions || '').split(',');
+    : parseDelimitedList(rawExcludes || item.exclude || item.exclusions || '');
 
   return {
     agreement_type_id: Number(item.agreement_type_id),
@@ -419,7 +468,7 @@ export default function Taxonomy({ showToast = () => {} }) {
   const fileInputRef = useRef(null);
   const showToastRef = useRef(showToast);
 
-  // States for uploaded JSON definitions review & save
+  // States for uploaded CSV / Excel definitions review & save
   const [pendingUploads, setPendingUploads] = useState([]);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [uploadFileName, setUploadFileName] = useState('');
@@ -721,7 +770,7 @@ export default function Taxonomy({ showToast = () => {} }) {
     }
   };
 
-  // File Upload Handler (strictly .json with field recognition and review/save workflow)
+  // File Upload Handler (accepts .csv, .xlsx, .xls with field recognition and review/save workflow)
   const handleUploadClick = () => {
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
@@ -733,52 +782,54 @@ export default function Taxonomy({ showToast = () => {} }) {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!file.name.toLowerCase().endsWith('.json')) {
-      showToast('Please select a valid .json file.', 'error');
+    const ext = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
+    if (!['.csv', '.xlsx', '.xls'].includes(ext)) {
+      showToast('Please select a valid CSV (.csv) or Excel (.xlsx, .xls) file.', 'error');
       if (fileInputRef.current) fileInputRef.current.value = '';
       return;
     }
 
+    setIsUploading(true);
     const reader = new FileReader();
     reader.onload = async (event) => {
       try {
-        const content = event.target.result;
-        const parsed = JSON.parse(content);
-        let imported = [];
-
-        // Support { types: [...] }, root array [...], or other taxonomy structures
-        if (Array.isArray(parsed)) {
-          imported = parsed;
-        } else if (parsed && typeof parsed === 'object') {
-          if (Array.isArray(parsed.types)) {
-            imported = parsed.types;
-          } else if (Array.isArray(parsed.canonical_types)) {
-            imported = parsed.canonical_types;
-          } else if (Array.isArray(parsed.definitions)) {
-            imported = parsed.definitions;
-          } else if (Array.isArray(parsed.clauses) || Array.isArray(parsed.non_clauses)) {
-            const clauses = (parsed.clauses || []).map((c) => ({ ...c, applies_to: 'clause' }));
-            const nonClauses = (parsed.non_clauses || []).map((nc) => ({ ...nc, applies_to: 'non_clause' }));
-            imported = [...clauses, ...nonClauses];
-          } else if (Array.isArray(parsed.items)) {
-            imported = parsed.items;
-          } else if (parsed.name && parsed.key) {
-            imported = [parsed];
-          }
+        const data = new Uint8Array(event.target.result);
+        // codepage 65001 ensures correct UTF-8 decoding for CSV / text data
+        const workbook = XLSX.read(data, { type: 'array', codepage: 65001 });
+        const firstSheetName = workbook.SheetNames[0];
+        if (!firstSheetName) {
+          throw new Error('No sheets found in the uploaded file.');
         }
 
-        if (!Array.isArray(imported) || imported.length === 0) {
-          showToast('Invalid taxonomy file. No taxonomy found.', 'error');
+        const worksheet = workbook.Sheets[firstSheetName];
+        const rawRows = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+
+        if (!Array.isArray(rawRows) || rawRows.length === 0) {
+          showToast('Invalid file format. No data rows found.', 'error');
           if (fileInputRef.current) fileInputRef.current.value = '';
           return;
         }
 
-        // Validate that definitions contain the required fields: applies_to, number, key, name, definition, aliases, excludes
-        const validDefinitions = imported.filter((item) => {
-          return item && typeof item === 'object' && (item.name || item.key);
+        const getField = (row, candidates) => {
+          const rowKeys = Object.keys(row);
+          for (const c of candidates) {
+            const matchedKey = rowKeys.find((k) => k.trim().toLowerCase() === c.toLowerCase());
+            if (matchedKey !== undefined && row[matchedKey] !== undefined && row[matchedKey] !== null) {
+              return row[matchedKey];
+            }
+          }
+          return '';
+        };
+
+        // Filter valid rows that have a name or key
+        const validRows = rawRows.filter((row) => {
+          if (!row || typeof row !== 'object') return false;
+          const name = getField(row, ['name', 'title', 'canonical_type']);
+          const key = getField(row, ['key', 'code']);
+          return Boolean(String(name || key).trim());
         });
 
-        if (validDefinitions.length === 0) {
+        if (validRows.length === 0) {
           showToast(
             'Invalid file format: Each entry must have applies_to, number, key, name, definition, aliases, and excludes.',
             'error'
@@ -789,33 +840,38 @@ export default function Taxonomy({ showToast = () => {} }) {
 
         const targetAgrId = agreementFilter || (agreementTypes[0]?.id ? String(agreementTypes[0].id) : '');
 
-        // Normalize fields matching the expected JSON structure:
+        // Normalize fields matching the expected CSV / Excel structure:
         // applies_to, number, key, name, definition, aliases, excludes
-        const normalized = validDefinitions.map((item, idx) => {
-          const rawAppliesTo = item.applies_to || item.category || 'clause';
+        const normalized = validRows.map((item, idx) => {
+          const rawAppliesTo = getField(item, ['applies_to', 'category', 'type']) || 'clause';
           const normalizedAppliesTo = String(rawAppliesTo).toLowerCase().includes('non') ? 'non_clause' : 'clause';
-          const rawName = item.name || item.title || item.canonical_type || item.key || `Definition ${idx + 1}`;
-          const rawKey = item.key || String(rawName).toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '');
-          const rawDef = item.definition || item.defination || item.description || item.desc || '';
-          const rawAliases = Array.isArray(item.aliases) ? item.aliases : (item.allias || item.alias ? [item.allias || item.alias] : []);
-          const rawExcludes = Array.isArray(item.excludes) ? item.excludes : (item.exclude ? [item.exclude] : []);
+          const rawName = getField(item, ['name', 'title', 'canonical_type']) || getField(item, ['key']) || `Definition ${idx + 1}`;
+          const rawKey = getField(item, ['key', 'code']) || String(rawName).toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '');
+          const rawDef = getField(item, ['definition', 'defination', 'description', 'desc']);
+          const rawNumber = getField(item, ['number', '#', 'no', 'order']);
+          const rawAliases = parseDelimitedList(getField(item, ['aliases', 'alias', 'allias']));
+          const rawExcludes = parseDelimitedList(getField(item, ['excludes', 'exclude', 'exclusions']));
 
-          // Format aliases for display
+          // Format aliases for display in review table
           const displayAliases = rawAliases
             .map((a) => {
               if (typeof a === 'string') return a;
-              if (typeof a === 'object' && a !== null) return a.alias || a.match || a.name || JSON.stringify(a);
+              if (typeof a === 'object' && a !== null) {
+                if (a.alias) return a.alias;
+                if (a.match && a.note) return `${a.match} (${a.note})`;
+                return a.match || a.name || JSON.stringify(a);
+              }
               return String(a);
             })
             .filter(Boolean)
             .join(', ');
 
-          // Format excludes for display
+          // Format excludes for display in review table
           const displayExcludes = rawExcludes
             .map((ex) => {
               if (typeof ex === 'string') return ex;
               if (typeof ex === 'object' && ex !== null) {
-                return ex.note ? `${ex.key || ex.name} (${ex.note})` : ex.key || ex.name || JSON.stringify(ex);
+                return ex.note ? `${ex.key || ex.name || 'item'} (${ex.note})` : ex.key || ex.name || JSON.stringify(ex);
               }
               return String(ex);
             })
@@ -824,7 +880,7 @@ export default function Taxonomy({ showToast = () => {} }) {
 
           return {
             id: `upload-${Date.now()}-${idx}`,
-            number: item.number != null ? Number(item.number) : idx + 1,
+            number: rawNumber !== '' && !isNaN(Number(rawNumber)) ? Number(rawNumber) : idx + 1,
             applies_to: normalizedAppliesTo,
             category: normalizedAppliesTo,
             name: String(rawName).trim(),
@@ -834,7 +890,7 @@ export default function Taxonomy({ showToast = () => {} }) {
             excludes_raw: rawExcludes,
             aliases: displayAliases,
             excludes: displayExcludes,
-            version: item.version || parsed.version || 'v1',
+            version: item.version || 'v1',
           };
         });
 
@@ -848,7 +904,11 @@ export default function Taxonomy({ showToast = () => {} }) {
         showToast(`Failed to parse JSON file: ${err.message}`, 'error');
       }
     };
-    reader.readAsText(file);
+    reader.onerror = () => {
+      showToast('Error reading file.', 'error');
+      setIsUploading(false);
+    };
+    reader.readAsArrayBuffer(file);
   };
 
   // Save imported definitions to the Database regarding selected Agreement Type
@@ -951,12 +1011,12 @@ export default function Taxonomy({ showToast = () => {} }) {
         overflow: 'hidden',
       }}
     >
-      {/* Hidden File Input for Upload */}
+      {/* Hidden File Input for CSV / Excel Upload */}
       <input
         type="file"
         ref={fileInputRef}
         onChange={handleFileUpload}
-        accept=".json,application/json"
+        accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
         style={{ display: 'none' }}
       />
 
@@ -1009,29 +1069,33 @@ export default function Taxonomy({ showToast = () => {} }) {
         <Stack direction="row" spacing={1.5} alignItems="center">
 
           {/* User Request: Upload file button in right side */}
-          <Button
-            variant="contained"
-            size="small"
-            disabled={isUploading}
-            startIcon={<UploadFileOutlinedIcon sx={{ fontSize: 18 }} />}
-            onClick={handleUploadClick}
-            sx={{
-              textTransform: 'none',
-              fontSize: '13px',
-              fontWeight: 600,
-              bgcolor: '#1e3a5f',
-              color: '#ffffff',
-              borderRadius: '8px',
-              px: 2,
-              py: 0.8,
-              boxShadow: '0 1px 3px rgba(30, 58, 95, 0.2)',
-              '&:hover': {
-                bgcolor: '#152943',
-              },
-            }}
-          >
-            Upload File
-          </Button>
+          <Tooltip title="Upload CSV (.csv) or Excel (.xlsx, .xls) file" arrow>
+            <span>
+              <Button
+                variant="contained"
+                size="small"
+                disabled={isUploading}
+                startIcon={<UploadFileOutlinedIcon sx={{ fontSize: 18 }} />}
+                onClick={handleUploadClick}
+                sx={{
+                  textTransform: 'none',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  bgcolor: '#1e3a5f',
+                  color: '#ffffff',
+                  borderRadius: '8px',
+                  px: 2,
+                  py: 0.8,
+                  boxShadow: '0 1px 3px rgba(30, 58, 95, 0.2)',
+                  '&:hover': {
+                    bgcolor: '#152943',
+                  },
+                }}
+              >
+                {isUploading ? 'Loading…' : 'Upload File'}
+              </Button>
+            </span>
+          </Tooltip>
         </Stack>
       </Box>
 
