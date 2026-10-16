@@ -2,9 +2,13 @@
 import logging
 import os
 
+
 import requests
 
+
 logger = logging.getLogger(__name__)
+
+
 
 
 def _required_env(name):
@@ -12,6 +16,18 @@ def _required_env(name):
     if not value:
         raise RuntimeError(f'{name} must be configured to publish vectors.')
     return value
+
+
+
+
+def _qdrant_headers():
+    headers = {'Content-Type': 'application/json'}
+    api_key = os.environ.get('QDRANT_API_KEY', '').strip()
+    if api_key:
+        headers['api-key'] = api_key
+    return headers
+
+
 
 
 def _embedding_vectors(response_data, expected_count):
@@ -28,10 +44,11 @@ def _embedding_vectors(response_data, expected_count):
     return vectors
 
 
+
+
 def count_document_vectors(document_id) -> int:
     """Return the exact number of Qdrant points currently stored for a document."""
     qdrant_url = _required_env('QDRANT_URL').rstrip('/')
-    qdrant_api_key = _required_env('QDRANT_API_KEY')
     collection = os.environ.get('QDRANT_COLLECTION', 'legal_clauses_v1').strip()
     timeout = float(os.environ.get('EMBEDDING_API_TIMEOUT_SECONDS', '60'))
     response = requests.post(
@@ -44,7 +61,7 @@ def count_document_vectors(document_id) -> int:
                 ],
             },
         },
-        headers={'api-key': qdrant_api_key, 'Content-Type': 'application/json'},
+        headers=_qdrant_headers(),
         timeout=timeout,
     )
     response.raise_for_status()
@@ -54,6 +71,8 @@ def count_document_vectors(document_id) -> int:
     return count
 
 
+
+
 def delete_points(point_ids) -> int:
     """Delete points from Qdrant by id. An id Qdrant does not hold is ignored,
     so deleting twice is harmless. Returns how many ids were sent."""
@@ -61,19 +80,20 @@ def delete_points(point_ids) -> int:
     if not point_ids:
         return 0
     qdrant_url = _required_env('QDRANT_URL').rstrip('/')
-    qdrant_api_key = _required_env('QDRANT_API_KEY')
     collection = os.environ.get('QDRANT_COLLECTION', 'legal_clauses_v1').strip()
     timeout = float(os.environ.get('EMBEDDING_API_TIMEOUT_SECONDS', '60'))
     for batch_start in range(0, len(point_ids), 64):
         response = requests.post(
             f'{qdrant_url}/collections/{collection}/points/delete?wait=true',
             json={'points': point_ids[batch_start:batch_start + 64]},
-            headers={'api-key': qdrant_api_key, 'Content-Type': 'application/json'},
+            headers=_qdrant_headers(),
             timeout=timeout,
         )
         response.raise_for_status()
     logger.info('Deleted %d paragraph vectors from Qdrant.', len(point_ids))
     return len(point_ids)
+
+
 
 
 def embed_and_upsert(
@@ -84,10 +104,12 @@ def embed_and_upsert(
 ) -> dict:
     """Embed all selected records, then upsert them into Qdrant in batches.
 
+
     Parameters
     ----------
     paragraph_records : list[DocumentParagraphRecord]
     document_id       : UUID / str
+
 
     Returns
     -------
@@ -96,15 +118,16 @@ def embed_and_upsert(
     if not paragraph_records:
         return {'embedded': 0, 'failed': 0}
 
-    embedding_url = 'http://18.144.172.78:8000/embed'
+
+    embedding_url = 'http://52.53.197.54:8000/embed'
     qdrant_url = _required_env('QDRANT_URL').rstrip('/')
-    qdrant_api_key = _required_env('QDRANT_API_KEY')
     collection = os.environ.get('QDRANT_COLLECTION', 'legal_clauses_v1').strip()
     # Four texts completed in about 11 seconds; larger batches exceeded the
     # EC2 service's 60-second client timeout in production.
     batch_size = min(4, max(1, int(os.environ.get('EMBEDDING_BATCH_SIZE', '4'))))
     timeout = float(os.environ.get('EMBEDDING_API_TIMEOUT_SECONDS', '60'))
     count_before = count_document_vectors(document_id)
+
 
     points = []
     for batch_start in range(0, len(paragraph_records), batch_size):
@@ -113,11 +136,12 @@ def embed_and_upsert(
         embedding_response = requests.post(
             embedding_url,
             json={'texts': texts},
-            headers={'Accept': '*/*'},
+            headers={'Accept': '/'},
             timeout=timeout,
         )
         embedding_response.raise_for_status()
         vectors = _embedding_vectors(embedding_response.json(), len(batch))
+
 
         for record, vector in zip(batch, vectors):
             chunk = record.chunk if record.chunk_id else None
@@ -167,14 +191,16 @@ def embed_and_upsert(
                 },
             })
 
+
     for batch_start in range(0, len(points), 64):
         qdrant_response = requests.put(
             f'{qdrant_url}/collections/{collection}/points?wait=true',
             json={'points': points[batch_start:batch_start + 64]},
-            headers={'api-key': qdrant_api_key, 'Content-Type': 'application/json'},
+            headers=_qdrant_headers(),
             timeout=timeout,
         )
         qdrant_response.raise_for_status()
+
 
     count_after = count_document_vectors(document_id)
     added = max(0, count_after - count_before)
