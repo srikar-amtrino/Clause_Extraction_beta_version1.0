@@ -901,9 +901,7 @@ export default function Taxonomy({ showToast = () => {} }) {
         showToast(`Loaded ${normalized.length} definitions from ${file.name}. Review and click Save to save to database.`, 'info');
       } catch (err) {
         console.error('File parse error:', err);
-        showToast(`Failed to parse file: ${err.message}`, 'error');
-      } finally {
-        setIsUploading(false);
+        showToast(`Failed to parse JSON file: ${err.message}`, 'error');
       }
     };
     reader.onerror = () => {
