@@ -97,6 +97,8 @@ def materialise_paragraph_records(document_id) -> dict:
                 # Refresh LLM-owned fields but preserve reviewer edits. The row
                 # follows the current run: a re-chunk or re-classification must
                 # not leave it pointing at the verdict it replaced.
+                before = (record.reviewed_text, record.label,
+                          record.canonical_type, record.sub_type)
                 record.chunk = chunk
                 record.classification = clf
                 record.breadcrumb = defaults_on_create['breadcrumb']
@@ -113,11 +115,16 @@ def materialise_paragraph_records(document_id) -> dict:
                         clf.canonical_type.key if clf.canonical_type else ''
                     )
                     record.sub_type = clf.sub_type or ''
+                # A changed row is pending for the vector DB, so a differential
+                # publish re-embeds it instead of keeping the stale point.
+                if (record.reviewed_text, record.label,
+                        record.canonical_type, record.sub_type) != before:
+                    record.is_modified = True
                 record.save(update_fields=[
                     'chunk', 'classification', 'breadcrumb', 'sequence_order',
                     'original_text', 'reviewed_text',
                     'llm_issues', 'confidence', 'label',
-                    'canonical_type', 'sub_type', 'updated_at',
+                    'canonical_type', 'sub_type', 'is_modified', 'updated_at',
                 ])
                 updated += 1
                 _trace('paragraph updated document=%s paragraph=%s record=%s '
