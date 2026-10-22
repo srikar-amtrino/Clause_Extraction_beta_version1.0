@@ -85,6 +85,16 @@ def canonical_type_list(request):
     }, json_dumps_params={'ensure_ascii': False})
 
 
+@require_GET
+def agreement_type_list(request):
+    """Agreement types that have a taxonomy in canonical_types, for the
+    folder-metadata dropdown."""
+    rows = AgreementType.objects.filter(canonical_types__isnull=False).distinct()
+    return JsonResponse({
+        'agreement_types': [{'id': row.pk, 'name': row.name} for row in rows],
+    }, json_dumps_params={'ensure_ascii': False})
+
+
 def _validate_aliases(value):
     if not isinstance(value, list):
         return None, 'aliases must be a list of strings.'
