@@ -297,28 +297,12 @@ export default function Overview({
               Needs review
             </Typography>
           </Box>
-          {safeStats.needsReview === 0 ? (
-            <Box sx={{ mt: 0.5, mb: 0.25, display: 'flex', alignItems: 'center' }}>
-              <Chip
-                label="Reviewed"
-                size="small"
-                sx={{
-                  height: 26,
-                  fontSize: '12.5px',
-                  fontWeight: 700,
-                  bgcolor: '#dcfce7',
-                  color: '#166534',
-                  border: '1px solid #bbf7d0',
-                }}
-              />
-            </Box>
-          ) : (
             <Typography sx={{ fontSize: '26px', fontWeight: 700, color: '#1b1f24', lineHeight: 1.2, mt: 0.25 }}>
               {safeStats.needsReview}
             </Typography>
-          )}
+          
           <Typography sx={{ fontSize: '11.5px', color: '#7b838c' }}>
-            {safeStats.needsReview === 0 ? 'all files reviewed' : 'waiting for reviewer'}
+           waiting for reviewer
           </Typography>
         </Box>
 
@@ -625,7 +609,7 @@ export default function Overview({
                             {item.name}
                           </Typography>
                         </Box>
-                        <Typography
+                        {/* <Typography
                           sx={{
                             fontSize: '11px',
                             color: '#7b838c',
@@ -638,7 +622,7 @@ export default function Overview({
                           {item.size || 'DOCX'}
                           {item.pages ? ` · ${item.pages} pages` : ''}
                           {item.clauses ? ` · ${item.clauses} clauses` : ''}
-                        </Typography>
+                        </Typography> */}
                       </Box>
                     </Box>
 

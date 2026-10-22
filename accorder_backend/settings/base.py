@@ -242,12 +242,13 @@ CLASSIFY_BULK_BATCH_SIZE = env_int("CLASSIFY_BULK_BATCH_SIZE", 500)
 PIPELINE_CLASSIFY_ON_SYNC = env_bool("PIPELINE_CLASSIFY_ON_SYNC", True)
 
 # ---------------------------------------------------------------- Celery & Redis
-# Upstash exposes the REST URL and token in .env, while Celery uses Redis's
-# TLS wire protocol. The REST hostname and token are valid for that protocol.
-CELERY_BROKER_URL = upstash_redis_url()
+# A standard Redis URL takes precedence, which also allows local development to
+# connect through an SSH tunnel. Fall back to Upstash's Redis-compatible URL.
+CELERY_BROKER_URL = os.environ.get("REDIS_URL", "") or upstash_redis_url()
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL
-CELERY_BROKER_USE_SSL = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
-CELERY_REDIS_BACKEND_USE_SSL = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
+_redis_uses_tls = urlparse(CELERY_BROKER_URL).scheme == "rediss"
+CELERY_BROKER_USE_SSL = {"ssl_cert_reqs": ssl.CERT_REQUIRED} if _redis_uses_tls else None
+CELERY_REDIS_BACKEND_USE_SSL = {"ssl_cert_reqs": ssl.CERT_REQUIRED} if _redis_uses_tls else None
 
 def _redis_channel_layer_available():
     try:
@@ -291,4 +292,3 @@ if "test" in sys.argv:
     # Not the broker's transport: a result backend needs its own scheme.
     CELERY_RESULT_BACKEND = "cache+memory://"
     CELERY_BROKER_USE_SSL = CELERY_REDIS_BACKEND_USE_SSL = None
-

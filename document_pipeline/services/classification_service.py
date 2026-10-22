@@ -42,12 +42,14 @@ from document_pipeline.classification.bedrock_client import classifier_from_sett
 from document_pipeline.classification.schema import output_schema
 from document_pipeline.classification.taxonomy import CLAUSE, NON_CLAUSE, load_vocabulary
 from document_pipeline.models import (
+    AgreementTypePrompt,
     CanonicalType,
     Chunk,
     ChunkRun,
     Classification,
     ClassificationCall,
     ClassificationRun,
+    Document,
     PipelineStageLog,
 )
 
@@ -133,14 +135,32 @@ def classify_chunk_run(chunk_run, *, force=False, classifier=None, concurrency=N
     """
     _check_classifiable(chunk_run)
     classifier = classifier or classifier_from_settings()
-    vocab = load_vocabulary(settings.CLASSIFY_TAXONOMY_VERSION)
+    agreement_type_id = chunk_run.extraction_run.document.agreement_type_id
+    vocab = load_vocabulary(
+        settings.CLASSIFY_TAXONOMY_VERSION,
+        agreement_type_id=agreement_type_id,
+    )
     _routing_settings(vocab)
 
     current = ClassificationRun.objects.filter(chunk_run=chunk_run, is_current=True).first()
-    if not force and is_up_to_date(current, vocab.version, classifier.model_id):
+    system_text = system_prompt_for_document(
+        chunk_run.extraction_run.document_id,
+        vocab,
+    )
+    if not force and is_up_to_date(
+        current,
+        vocab.version,
+        classifier.model_id,
+        prompts.prompt_sha256(system_text),
+    ):
         return ClassificationOutcome(chunk_run=chunk_run, run=current, skipped=True)
 
-    run = start_run(chunk_run, classifier=classifier, vocab=vocab)
+    run = start_run(
+        chunk_run,
+        classifier=classifier,
+        vocab=vocab,
+        system_text=system_text,
+    )
     try:
         batches = plan_run_batches(run)
         context = _context(run, vocab)
@@ -153,12 +173,29 @@ def classify_chunk_run(chunk_run, *, force=False, classifier=None, concurrency=N
     return ClassificationOutcome(chunk_run=chunk_run, run=run, created=True)
 
 
-def is_up_to_date(run, taxonomy_version, model_id):
+def is_up_to_date(run, taxonomy_version, model_id, system_prompt_sha256=None):
     """True when `run` was produced by exactly the current configuration."""
     return bool(run is not None
                 and run.taxonomy_version == taxonomy_version
                 and run.prompt_version == prompts.PROMPT_VERSION
-                and run.model_id == model_id)
+                and run.model_id == model_id
+                and (system_prompt_sha256 is None
+                     or run.system_prompt_sha256 == system_prompt_sha256))
+
+
+def system_prompt_for_document(document_id, vocab):
+    """Return the stored agreement prompt, or the generated taxonomy prompt."""
+    agreement_type_id = Document.objects.values_list(
+        'agreement_type_id',
+        flat=True,
+    ).get(pk=document_id)
+    if agreement_type_id is not None:
+        stored_prompt = AgreementTypePrompt.objects.filter(
+            agreement_type_id=agreement_type_id,
+        ).values_list('prompt', flat=True).first()
+        if stored_prompt:
+            return stored_prompt
+    return prompts.render_system_prompt(vocab)
 
 
 def _check_classifiable(chunk_run):
@@ -186,9 +223,13 @@ def _routing_settings(vocab):
 
 # ------------------------------------------------------------------ run lifecycle
 
-def start_run(chunk_run, *, classifier, vocab):
+def start_run(chunk_run, *, classifier, vocab, system_text=None):
     """Open a new run: running, not current, with the exact prompt recorded."""
-    system_text = prompts.render_system_prompt(vocab)
+    if system_text is None:
+        system_text = system_prompt_for_document(
+            chunk_run.extraction_run.document_id,
+            vocab,
+        )
     micro_count = Chunk.objects.filter(chunk_run=chunk_run, kind=Chunk.MICRO).count()
     now = timezone.now()
     with transaction.atomic():
@@ -249,7 +290,9 @@ def classify_batch(run_id, chunk_ids, batch_index=0, *, classifier=None):
     Idempotent: chunks that already have a row in the run are skipped, so a
     retried task writes nothing twice.
     """
-    run = ClassificationRun.objects.select_related('chunk_run__extraction_run').get(pk=run_id)
+    run = ClassificationRun.objects.select_related(
+        'chunk_run__extraction_run__document',
+    ).get(pk=run_id)
     if run.status != ClassificationRun.RUNNING:
         raise ValueError('ClassificationRun %s is %s, not running.' % (run.id, run.status))
     classifier = classifier or classifier_from_settings()
@@ -261,7 +304,11 @@ def classify_batch(run_id, chunk_ids, batch_index=0, *, classifier=None):
     todo = [str(c) for c in chunk_ids if str(c) not in done]
     if not todo:
         return 0
-    vocab = load_vocabulary(run.taxonomy_version)
+    agreement_type_id = run.chunk_run.extraction_run.document.agreement_type_id
+    vocab = load_vocabulary(
+        run.taxonomy_version,
+        agreement_type_id=agreement_type_id,
+    )
     batch = Batch(batch_index, tuple(_groups_for(run.chunk_run, only=todo)))
 
     from document_pipeline.pipeline_logger import (
@@ -670,8 +717,11 @@ def write_resolution(run, resolution, *, vocab):
     """One resolved batch -> Classification and ClassificationCall rows, in one
     transaction. Paragraphs that already have a row in the run are skipped."""
     batch = resolution.batch
-    type_pks = dict(CanonicalType.objects.filter(version=vocab.version)
-                    .values_list('key', 'id'))
+    type_query = CanonicalType.objects.filter(version=vocab.version)
+    if run.chunk_run_id is not None:
+        agreement_type_id = run.chunk_run.extraction_run.document.agreement_type_id
+        type_query = type_query.filter(agreement_type_id=agreement_type_id)
+    type_pks = dict(type_query.values_list('key', 'id'))
     chunk_ids = [p.chunk_id for p in batch.paragraphs]
     existing = {str(pk) for pk in Classification.objects.filter(
         run=run, chunk_id__in=chunk_ids).values_list('chunk_id', flat=True)}

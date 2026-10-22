@@ -80,6 +80,10 @@ function post(path, body, options = {}) {
   return request(path, { ...options, method: 'POST', body });
 }
 
+function patch(path, body) {
+  return request(path, { method: 'PATCH', body });
+}
+
 /** Turn a filter object into a query string, repeating array values. */
 function toQuery(filters = {}) {
   const params = new URLSearchParams();
@@ -95,6 +99,23 @@ function toQuery(filters = {}) {
 }
 
 export const documentService = {
+  /** Reference options for Drive ingestion; documents retain the selected ids. */
+  metadata() {
+    return get('/api/document-metadata/');
+  },
+
+  taxonomyTypes() {
+    return get('/api/taxonomy/types/');
+  },
+
+  createCanonicalType(data) {
+    return post('/api/taxonomy/types/', data);
+  },
+
+  updateCanonicalType(typeId, data) {
+    return patch(`/api/taxonomy/types/${typeId}/`, data);
+  },
+
   websocketUrl(documentId) {
     const backendOrigin = API_BASE || window.location.origin;
     const url = new URL(`/ws/documents/${documentId}/`, backendOrigin);
@@ -223,7 +244,7 @@ export const documentService = {
     return get(`/api/documents/${documentId}/workspace/`);
   },
 
-  taxonomy() {
-    return get('/api/taxonomy/');
+  taxonomy(documentId) {
+    return get(`/api/${documentId}/taxonomy/`);
   },
 };

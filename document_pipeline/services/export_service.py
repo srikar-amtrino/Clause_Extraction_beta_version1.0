@@ -52,6 +52,12 @@ def _document_header(document, run):
         'document_id': str(document.id),
         'name': document.name,
         'title': (run.document_title if run else None) or document.document_title,
+        'agreement_type_id': document.agreement_type_id,
+        'agreement_type': document.agreement_type.name if document.agreement_type else '',
+        'sectorial_category_id': document.sectorial_category_id,
+        'sectorial_category': (
+            document.sectorial_category.name if document.sectorial_category else ''
+        ),
         'drive_file_id': document.source_external_id,
         'drive_folder_id': document.source_parent_id,
         'extraction_status': document.extraction_status,
@@ -238,6 +244,10 @@ def classification_json(document):
                 'sub_type': c.sub_type,
             },
             'review': review_json(c),
+            # Reviewer-assigned exhibit flag.  NULL = not assessed yet.
+            'is_exhibit': c.is_exhibit,
+            'exhibit_type': c.exhibit_type,
+            'exhibit_type_normalized': c.exhibit_type_normalized,
         })
 
     r = classification_run

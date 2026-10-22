@@ -65,6 +65,13 @@ class DocumentParagraphRecord(models.Model):
     # Issues/flags raised by the LLM: list of reason strings.
     llm_issues = models.JSONField(default=list, blank=True)
 
+    # ---- Exhibit flag (mirrored from Classification) ----------------------
+    # Mirrors Classification.is_exhibit / exhibit_type / exhibit_type_normalized.
+    # Populated by _apply_mirror during Save; never set by the pipeline itself.
+    is_exhibit = models.BooleanField(null=True, blank=True, default=None)
+    exhibit_type = models.CharField(max_length=255, null=True, blank=True, default=None)
+    exhibit_type_normalized = models.CharField(max_length=255, null=True, blank=True, default=None)
+
     # ---- Review state ------------------------------------------------------
     is_reviewed = models.BooleanField(default=False)
     # Set whenever reviewed_text, label, canonical_type, or sub_type changes

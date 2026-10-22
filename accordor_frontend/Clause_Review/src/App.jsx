@@ -9,6 +9,7 @@ import Documents from './components/Documents';
 import ReviewWorkspace from './components/ReviewWorkspace';
 import ActivityLog from './components/ActivityLog';
 import VectorPlayground from './components/VectorPlayground';
+import Taxonomy from './components/Taxonomy';
 import FolderMetadataModal from './components/FolderMetadataModal';
 import ErrorBoundary from './components/ErrorBoundary';
 import Login from './components/auth/Login';
@@ -183,6 +184,8 @@ function AppWorkspace() {
     ? 'documents'
     : location.pathname.includes('/documents')
     ? 'documents'
+    : location.pathname.includes('/taxonomy')
+    ? 'taxonomy'
     : location.pathname.includes('/activity-log')
     ? 'activity-log'
     : location.pathname.includes('/vector-playground')
@@ -421,6 +424,7 @@ function AppWorkspace() {
   const handleNavSelect = (nav) => {
     if (nav === 'overview') navigate('/overview');
     else if (nav === 'documents') navigate('/documents');
+    else if (nav === 'taxonomy') navigate('/taxonomy');
     else if (nav === 'activity-log') navigate('/activity-log');
     else if (nav === 'vector-playground') navigate('/vector-playground');
   };
@@ -672,9 +676,15 @@ function AppWorkspace() {
   };
 
   // Handle Save in the second modal (Folder + Agreement Type + Sectorial)
-  const handleSaveFolderConfig = async ({ folder, agreementType, sectorial }) => {
+  const handleSaveFolderConfig = async ({
+    folder,
+    agreementType,
+    sectorial,
+    agreementTypeName,
+    sectorialName,
+  }) => {
     setIsSavingConfig(true);
-    showToast(`Configuring "${folder.name}" (${agreementType} / ${sectorial})...`);
+    showToast(`Configuring "${folder.name}" (${agreementTypeName} / ${sectorialName})...`);
 
     try {
       setDriveState((prev) => {
@@ -683,8 +693,8 @@ function AppWorkspace() {
           isConnected: true,
           folderPath: folder.name,
           folderIds: [folder.id],
-          agreementType: agreementType,
-          sectorial: sectorial,
+          agreementType: agreementTypeName,
+          sectorial: sectorialName,
           isSyncing: true,
           lastChecked: 'just now',
         };
@@ -722,8 +732,8 @@ function AppWorkspace() {
                 document_id: file.id,
                 name: file.name,
                 folder: f.name || folder.name,
-                agreementType,
-                sectorial,
+                agreementType: agreementTypeName,
+                sectorial: sectorialName,
                 extraction_status: 'pending',
                 extractionStatus: 'pending',
                 size: file.size ? `${Math.round(file.size / 1024)} KB` : '24 KB',
@@ -959,7 +969,7 @@ function AppWorkspace() {
         ) : (
           <>
             <TopNav
-              title={activeNav === 'overview' ? 'Overview' : activeNav === 'documents' ? 'Documents' : activeNav === 'activity-log' ? 'Activity Log' : activeNav.replace('-', ' ')}
+              title={activeNav === 'overview' ? 'Overview' : activeNav === 'documents' ? 'Documents' : activeNav === 'taxonomy' ? 'Taxonomy' : activeNav === 'activity-log' ? 'Activity Log' : activeNav.replace('-', ' ')}
               searchQuery={searchQuery}
               onSearchChange={setSearchQuery}
               onCheckDrive={handleCheckDrive}
@@ -997,6 +1007,8 @@ function AppWorkspace() {
                 queueCount={queueDocuments.length}
                 onNavigateToOverview={() => handleNavSelect('overview')}
               />
+            ) : activeNav === 'taxonomy' ? (
+              <Taxonomy showToast={showToast} />
             ) : activeNav === 'activity-log' ? (
               <ActivityLog />
             ) : activeNav === 'vector-playground' ? (
@@ -1092,6 +1104,14 @@ export default function App() {
       />
       <Route
         path="/documents"
+        element={
+          <ProtectedRoute>
+            <AppWorkspace />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/taxonomy"
         element={
           <ProtectedRoute>
             <AppWorkspace />

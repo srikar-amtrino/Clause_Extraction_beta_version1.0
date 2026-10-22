@@ -61,13 +61,14 @@ def trigger_classification_workflow(document_id: str, *, force=False, classifier
 
     from document_pipeline.activity import log_classifying_started
     from document_pipeline.classification.bedrock_client import classifier_from_settings
-    from document_pipeline.classification.prompt import PROMPT_VERSION
+    from document_pipeline.classification.prompt import PROMPT_VERSION, prompt_sha256
     from document_pipeline.classification.taxonomy import load_vocabulary
     from document_pipeline.models import ChunkRun, ClassificationRun, ExtractionRun
     from document_pipeline.services.classification_service import (
         is_up_to_date,
         plan_run_batches,
         start_run,
+        system_prompt_for_document,
     )
 
     chunk_run = (ChunkRun.objects
@@ -83,16 +84,30 @@ def trigger_classification_workflow(document_id: str, *, force=False, classifier
         return None
 
     classifier = classifier or classifier_from_settings()
-    vocab = load_vocabulary(settings.CLASSIFY_TAXONOMY_VERSION)
+    vocab = load_vocabulary(
+        settings.CLASSIFY_TAXONOMY_VERSION,
+        agreement_type_id=chunk_run.extraction_run.document.agreement_type_id,
+    )
+    system_text = system_prompt_for_document(document_id, vocab)
     current = ClassificationRun.objects.filter(chunk_run=chunk_run, is_current=True).first()
-    if not force and is_up_to_date(current, vocab.version, classifier.model_id):
+    if not force and is_up_to_date(
+        current,
+        vocab.version,
+        classifier.model_id,
+        prompt_sha256(system_text),
+    ):
         print('[celery] classification skipped document=%s '
               'reason=already_classified taxonomy=%s prompt=%s model=%s'
               % (document_id, vocab.version, PROMPT_VERSION, classifier.model_id),
               flush=True)
         return None
 
-    run = start_run(chunk_run, classifier=classifier, vocab=vocab)
+    run = start_run(
+        chunk_run,
+        classifier=classifier,
+        vocab=vocab,
+        system_text=system_text,
+    )
     log_classifying_started(run)
     batches = plan_run_batches(run)
     if not batches:

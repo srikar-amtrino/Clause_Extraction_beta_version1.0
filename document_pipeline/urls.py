@@ -4,6 +4,7 @@ from .playground_views import playground_analyze, playground_stats, playground_s
 
 from .document_views import (
 	classification_delete,
+	classification_exhibit_set,
 	classification_restore,
 	classification_save,
 	document_classification,
@@ -11,6 +12,7 @@ from .document_views import (
 	document_detail,
 	document_extraction,
 	document_list,
+	document_metadata,
 	taxonomy,
 )
 from .review_views import (
@@ -33,6 +35,7 @@ from .review_views import (
 	workspace_publish_status,
 	workspace_save,
 )
+from .taxonomy_api_views import canonical_type_collection, canonical_type_detail
 from .views import (
 	google_drive_callback,
 	google_drive_connect,
@@ -54,6 +57,7 @@ urlpatterns = [
 
 	# Results: what the pipeline produced. Reads only.
 	path('documents/', document_list, name='document-list'),
+	path('document-metadata/', document_metadata, name='document-metadata'),
 	path('documents/<uuid:document_id>/', document_detail, name='document-detail'),
 	path('documents/<uuid:document_id>/extraction/', document_extraction,
 	     name='document-extraction'),
@@ -70,7 +74,13 @@ urlpatterns = [
 	     classification_delete, name='document-classification-delete'),
 	path('documents/<uuid:document_id>/classification/<uuid:classification_id>/restore/',
 	     classification_restore, name='document-classification-restore'),
+	# Bulk exhibit flag setter -- Option A + batch action toolbar.
+	path('documents/<uuid:document_id>/classification/exhibit/set/',
+	     classification_exhibit_set, name='document-classification-exhibit-set'),
+	path('<uuid:document_id>/taxonomy/', taxonomy, name='document-taxonomy'),
 	path('taxonomy/', taxonomy, name='taxonomy'),
+	path('taxonomy/types/', canonical_type_collection, name='canonical-types'),
+	path('taxonomy/types/<uuid:type_id>/', canonical_type_detail, name='canonical-type-detail'),
 
 	# Review workspace -- overview helpers.
 	path('documents/stats/', document_stats, name='document-stats'),

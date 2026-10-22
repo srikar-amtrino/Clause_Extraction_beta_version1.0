@@ -51,8 +51,20 @@ class Document(models.Model):
 
     name = models.CharField(max_length=500)
     document_title = models.CharField(max_length=500, null=True, blank=True)
-    agreement_type = models.CharField(max_length=255, blank=True, default='')
-    sectorial_category = models.CharField(max_length=255, blank=True, default='')
+    agreement_type = models.ForeignKey(
+        'document_pipeline.AgreementType',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='documents',
+    )
+    sectorial_category = models.ForeignKey(
+        'document_pipeline.SectorType',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='documents',
+    )
     mime_type = models.CharField(max_length=255, blank=True, default='')
     drive_web_link = models.URLField(max_length=1000, blank=True, default='')
     file_size_bytes = models.BigIntegerField(null=True, blank=True)

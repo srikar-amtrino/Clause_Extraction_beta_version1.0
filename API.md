@@ -93,6 +93,10 @@ row already carries the outcome of every stage, so no per-row follow-up.
       "document_id": "d0adaa81-4501-4ca2-99a9-10e8d4985a9b",
       "name": "master-services-agreement.docx",
       "title": "MASTER SERVICES AGREEMENT",
+      "agreement_type_id": 45,
+      "agreement_type": "General Master Services Agreement (MSA)",
+      "sectorial_category_id": 1,
+      "sectorial_category": "IT and Technology",
       "drive_file_id": "18BdNLjuGbZKg7ATLoPJ0IjkLzxEgSczi",
       "drive_folder_id": "1pDMacP3Hn3fJHht28uxjxF2wYwykRuF6",
       "drive_web_link": "https://docs.google.com/document/d/.../edit",
@@ -133,6 +137,88 @@ moves with it and the frontend does not need a release.
 `extraction_status` is the document's own mirror of the current run's status, so
 it is safe to render for a row whose `stages.extraction` is `null` (nothing has
 run yet → `pending`).
+
+Agreement and sector values are normalized foreign keys. The `*_id` values
+are the stored lookup IDs; `agreement_type` and `sectorial_category` remain
+their associated display names in document responses.
+
+## `GET /api/document-metadata/`
+
+Returns the seeded agreement and sector choices for ID-based document metadata
+input:
+
+```json
+{
+  "agreement_types": [{"id": 1, "name": "Software as a Service Agreement (SaaS)"}],
+  "sector_types": [{"id": 1, "name": "IT and Technology"}]
+}
+```
+
+Send these IDs as `agreement_type` and `sectorial_category` when configuring a
+Google Drive folder. Existing display names remain accepted for compatibility.
+
+## Canonical taxonomy management
+
+`GET /api/taxonomy/types/` returns all canonical types, their agreement type
+IDs and names, alias and exclusion details, and the agreement/sector choices:
+
+```json
+{
+  "canonical_types": [
+    {
+      "id": "7b616032-f048-4ec6-8eac-7a9f2810bfbd",
+      "version": "v1",
+      "applies_to": "clause",
+      "number": 29,
+      "key": "force-majeure",
+      "name": "Force Majeure",
+      "definition": "Relief from performance due to events beyond reasonable control.",
+      "aliases": ["Force Majeure", "Acts of God"],
+      "alias_details": [],
+      "excludes": [],
+      "agreement_type": {"id": 4, "name": "Master Services Agreement"},
+      "agreement_type_id": 4,
+      "is_active": true,
+      "sort_order": 29,
+      "created_at": "2026-10-14T06:18:22+00:00"
+    }
+  ],
+  "agreement_types": [{"id": 4, "name": "Master Services Agreement"}],
+  "sector_types": [{"id": 1, "name": "IT and Technology"}]
+}
+```
+
+`POST /api/taxonomy/types/` creates an entry and requires a valid Bearer token
+and `agreement_type_id`. `version` defaults to `v1`; aliases are strings and
+exclusions are keys or `{ "key", "note" }` objects. `PATCH
+/api/taxonomy/types/<canonical-type-id>/` updates an existing entry; omitted
+fields remain unchanged. Both writes return the saved canonical type. Keys,
+names, numbers, and literal aliases must be unique within the agreement type
+and version; duplicate values return `409`.
+
+```json
+{
+  "agreement_type_id": 4,
+  "applies_to": "clause",
+  "number": 29,
+  "key": "force-majeure",
+  "name": "Force Majeure",
+  "definition": "Relief from performance due to events beyond reasonable control.",
+  "aliases": ["Force Majeure", "Acts of God"],
+  "excludes": []
+}
+```
+
+## Agreement-specific classification prompts
+
+`agreement_type_prompts` stores one prompt per agreement type using
+`id`, `prompt`, and `agreement_type_id`. Folder configuration persists the
+agreement type on each ingested document. Classification looks up that
+document's agreement type and uses its stored prompt when one exists; otherwise
+it uses the generated taxonomy prompt. Sector type remains document metadata
+and does not affect prompt selection. The initial stored prompt is for
+Information Technology (IT) Services Agreement / Master Services Agreement
+(MSA), agreement type ID 4.
 
 `stages.classification.review` counts decisions made through the old review
 routes, which are no longer wired, so today it is **always zero**. Don't build a
@@ -560,19 +646,26 @@ not deleted.
   Update Vector DB puts it back.
 - One `restored_item` event goes to the timeline.
 
-## `GET /api/taxonomy/`
+## `GET /api/{document_id}/taxonomy/`
 
-The types a verdict can carry. Fetch once and cache — it changes only with a new
-taxonomy version.
+The types available for the agreement type assigned to this document. The API
+looks up the document's agreement type, then returns only canonical types
+assigned to that agreement. A valid document whose agreement has no canonical
+types receives empty `clause_types` and `non_clause_types` arrays.
 
 | parameter | notes |
 |---|---|
+| `document_id` | UUID of the document whose agreement type scopes the taxonomy |
 | `version` | defaults to `v1`, the version the current runs use |
 | `include_inactive` | `true` also returns retired types |
 
 ```json
 {
   "version": "v1",
+  "agreement_type": {
+    "id": 4,
+    "name": "Information Technology (IT) Services Agreement / Master Services Agreement (MSA)"
+  },
   "clause_types": [
     { "key": "definitions-and-interpretation", "name": "Definitions and Interpretation",
       "number": 1, "applies_to": "clause",
@@ -586,7 +679,12 @@ taxonomy version.
 35 clause types, 11 non-clause types. An item's `type` matches a type's `key`,
 and so does a workspace row's `canonical_type`; show `name`. `definition` is the
 wording the classifier was given — good tooltip text, and the right thing to
-show a reviewer deciding whether a verdict is fair.
+show a reviewer deciding whether a verdict is fair. The taxonomy response does
+not include aliases; those are stored in the `aliases` JSON column on
+`canonical_types`.
+
+The unscoped `GET /api/taxonomy/` remains available for legacy clients and
+returns all types for the requested version.
 
 ---
 

@@ -22,7 +22,14 @@ class CanonicalTypeAlias(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     canonical_type = models.ForeignKey('document_pipeline.CanonicalType',
-                                       on_delete=models.CASCADE, related_name='aliases')
+                                       on_delete=models.CASCADE, related_name='alias_rows')
+    agreement_type = models.ForeignKey(
+        'document_pipeline.AgreementType',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='canonical_type_aliases',
+    )
     version = models.CharField(max_length=16)
     alias = models.CharField(max_length=255)
     match_key = models.CharField(max_length=255)
@@ -34,10 +41,16 @@ class CanonicalTypeAlias(models.Model):
     class Meta:
         db_table = 'canonical_type_aliases'
         constraints = [
-            # A collision fails the seeding migration instead of silently
-            # mapping one heading to whichever type happened to load last.
-            models.UniqueConstraint(fields=['version', 'match_key'], condition=Q(is_literal=True),
-                                    name='unique_literal_alias_match_key'),
+            models.UniqueConstraint(
+                fields=['version', 'match_key'],
+                condition=Q(is_literal=True, agreement_type__isnull=True),
+                name='unique_alias_global',
+            ),
+            models.UniqueConstraint(
+                fields=['version', 'agreement_type', 'match_key'],
+                condition=Q(is_literal=True, agreement_type__isnull=False),
+                name='unique_alias_agreement',
+            ),
             models.UniqueConstraint(fields=['canonical_type', 'alias'],
                                     name='unique_alias_per_type'),
         ]
