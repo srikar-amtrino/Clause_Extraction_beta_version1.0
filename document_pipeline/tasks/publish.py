@@ -67,17 +67,21 @@ def publish_document_task(
         )
         deleted_ids = deleted_paragraph_ids(doc)
         deleted = [r for r in all_records if r.paragraph_id in deleted_ids]
-        to_embed = [r for r in all_records if r.paragraph_id not in deleted_ids]
+        live = [r for r in all_records if r.paragraph_id not in deleted_ids]
+        # Re-embed only what Save flagged as changed, or what never reached
+        # the Vector DB; already-synced unchanged items keep their points.
+        to_embed = [r for r in live if r.is_modified or r.last_synced_at is None]
         # Only what an earlier publish put in the Vector DB has a point to delete.
         to_remove = [r for r in deleted if r.last_synced_at is not None or r.vector_id]
-        total = len(to_embed)
-        unchanged = 0
+        total = len(live)
+        unchanged = total - len(to_embed)
+        is_differential = unchanged > 0
 
         started_at = timezone.now()
         sync_run = VectorSyncRun.objects.create(
             document_id=document_id,
             triggered_by_id=user_id,
-            is_differential=False,
+            is_differential=is_differential,
             records_total=total,
             records_embedded=len(to_embed),
             records_unchanged=unchanged,
@@ -144,7 +148,7 @@ def publish_document_task(
         doc.save(update_fields=['review_status', 'extraction_status'])
 
         # 7. Log to activity timeline.
-        kind = 'full'
+        kind = 'differential' if is_differential else 'full'
         log_activity(
             document_id=document_id,
             phase=DocumentActivityLog.USER_INTERACTION,

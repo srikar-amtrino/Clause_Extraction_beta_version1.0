@@ -35,7 +35,7 @@ from .review_views import (
 	workspace_publish_status,
 	workspace_save,
 )
-from .taxonomy_api_views import canonical_type_collection, canonical_type_detail
+from .taxonomy_api_views import agreement_type_list, canonical_type_collection, canonical_type_detail
 from .views import (
 	google_drive_callback,
 	google_drive_connect,
@@ -81,6 +81,7 @@ urlpatterns = [
 	path('taxonomy/', taxonomy, name='taxonomy'),
 	path('taxonomy/types/', canonical_type_collection, name='canonical-types'),
 	path('taxonomy/types/<uuid:type_id>/', canonical_type_detail, name='canonical-type-detail'),
+	path('taxonomy/agreement-types/', agreement_type_list, name='agreement-types'),
 
 	# Review workspace -- overview helpers.
 	path('documents/stats/', document_stats, name='document-stats'),
