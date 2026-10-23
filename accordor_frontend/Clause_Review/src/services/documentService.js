@@ -104,6 +104,15 @@ export const documentService = {
     return get('/api/document-metadata/');
   },
 
+  /**
+   * Taxonomy agreement types
+   * GET /api/taxonomy/agreement-types/
+   * -> { agreement_types: [{ id: number, name: string }, ...] }
+   */
+  agreementTypes() {
+    return get('/api/taxonomy/agreement-types/');
+  },
+
   taxonomyTypes() {
     return get('/api/taxonomy/types/');
   },
