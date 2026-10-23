@@ -20,103 +20,11 @@ import CloseIcon from '@mui/icons-material/Close';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import SearchIcon from '@mui/icons-material/Search';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { documentService } from '../services/documentService';
 
-export const AGREEMENT_TYPES = [
-'Software as a Service (SaaS) Agreement',
-'Software License Agreement',
-'Cloud Services Agreement',
-'Subscription Agreement',
-'Application Programming Interface (API) Agreement',
-'End User License Agreement (EULA)',
-'Software Development Agreement',
-'Maintenance & Support Agreement',
-'Hosting Agreement',
-'Technology Reseller Agreement',
-'Office Lease Agreement',
-'Retail Lease Agreement',
-'Industrial Lease Agreement',
-'Commercial Lease Agreement',
-'Sublease Agreement',
-'Property Management Agreement',
-'Facilities Management Agreement',
-'Facilities Maintenance Agreement',
-'Construction Agreement',
-'Retail Supply Agreement',
-'E-Commerce Services Agreement',
-'Retail Distribution Agreement',
-'Healthcare Provider Agreement',
-'Pharmaceutical Supply Agreement',
-'Business Associate Agreement (BAA)',
-'Manufacturing Agreement',
-'Loan Agreement',
-'Credit Facility Agreement',
-'Financial Technology (FinTech) Services Agreement',
-'Asset Management Agreement',
-'Financing Agreement',
-'Insurance Services Agreement',
-'Reinsurance Agreement',
-'Master Manufacturing Agreement',
-'Original Equipment Manufacturer (OEM) Agreement',
-'Product Supply Agreement',
-'Warehousing Agreement',
-'Third-Party Logistics (3PL) Agreement',
-'Freight Services Agreement',
-'Cold Chain Logistics Agreement',
-'Professional Services Agreement',
-'Consulting Services Agreement',
-'Implementation Agreement',
-'Managed Services Agreement',
-'Business Process Outsourcing (BPO) Agreement',
-'Agency Agreement',
-'Staff Augmentation Agreement',
-'Subcontractor Agreement',
-'Sales Agreement',
-'Sales Representative Agreement',
-'Distribution Agreement',
-'Channel Partner Agreement',
-'Reseller Agreement',
-'Value-Added Reseller (VAR) Agreement',
-'Referral Agreement',
-'Strategic Alliance Agreement',
-'Co-Selling Agreement',
-'Marketplace Agreement',
-'Data Processing / Data Protection Agreement (DPA)',
-'Data Sharing Agreement',
-'Data Protection Addendum',
-'Security Addendum',
-'Information Security Agreement',
-'Sub-processor Agreement',
-'Vendor Agreement',
-'Procurement Services Agreement',
-'Purchase Agreement',
-'Supply Agreement',
-'Contract Manufacturing Agreement',
-'Partnership / Limited Liability Company (LLC) Agreement',
-'Shareholder Agreement',
-'Investment Agreement',
-'Mergers & Acquisitions (M&A) Agreement',
-'Amendment Agreement',
-'Renewal / Extension Agreement',
-'Termination Agreement',
-'Novation Agreement',
-'Assignment Agreement',
-'Waiver Agreement',
-'Independent Contractor / Consultant Agreement',
-'Non-Compete Agreement',
-'Non-Solicitation Agreement',
-'Staffing Services Agreement',
-'Master Service Agreement (MSA)',
-'Non-Disclosure Agreement (NDA)',
-'Mutual Non-Disclosure Agreement (MNDA)',
-'Unilateral Non-Disclosure Agreement (UNDA)',
-'Multilateral Non-Disclosure Agreement',
-'Customer Non-Disclosure Agreement',
-'Vendor Non-Disclosure Agreement',
-'Partner Non-Disclosure Agreement',
-'Employee Non-Disclosure Agreement',
-'Supplier Non-Disclosure Agreement',
-];
+// Agreement types are fetched dynamically from GET /api/taxonomy/agreement-types/
+export const AGREEMENT_TYPES = [];
 
 export const SECTORIAL_OPTIONS = [
 'IT and Technology',
@@ -147,6 +55,7 @@ function SearchableSelect({
   placeholder = 'Select...',
   searchPlaceholder = 'Search...',
   disabled = false,
+  isLoading = false,
 }) {
   const [anchorEl, setAnchorEl] = useState(null);
   const [search, setSearch] = useState('');
@@ -155,7 +64,7 @@ function SearchableSelect({
   const selectedItem = options.find((opt) => String(opt.id) === String(value));
 
   const handleOpen = (e) => {
-    if (disabled) return;
+    if (disabled || isLoading) return;
     setAnchorEl(e.currentTarget);
     setSearch('');
   };
@@ -195,12 +104,12 @@ function SearchableSelect({
           borderRadius: '8px',
           px: 1.5,
           py: 0.9,
-          bgcolor: disabled ? '#f5f5f2' : '#ffffff',
-          cursor: disabled ? 'not-allowed' : 'pointer',
+          bgcolor: disabled || isLoading ? '#f5f5f2' : '#ffffff',
+          cursor: disabled || isLoading ? 'not-allowed' : 'pointer',
           transition: 'all 0.15s ease',
           boxShadow: open ? '0 0 0 2px rgba(30, 58, 95, 0.12)' : 'none',
           '&:hover': {
-            borderColor: disabled ? '#cfcfc8' : '#1e3a5f',
+            borderColor: disabled || isLoading ? '#cfcfc8' : '#1e3a5f',
           },
         }}
       >
@@ -216,17 +125,21 @@ function SearchableSelect({
             mr: 1,
           }}
         >
-          {selectedItem ? selectedItem.name : placeholder}
+          {isLoading ? 'Loading...' : (selectedItem ? selectedItem.name : placeholder)}
         </Typography>
-        <KeyboardArrowDownIcon
-          sx={{
-            fontSize: 18,
-            color: '#7b838c',
-            transform: open ? 'rotate(180deg)' : 'none',
-            transition: 'transform 0.2s ease',
-            flexShrink: 0,
-          }}
-        />
+        {isLoading ? (
+          <CircularProgress size={16} sx={{ color: '#7b838c', flexShrink: 0 }} />
+        ) : (
+          <KeyboardArrowDownIcon
+            sx={{
+              fontSize: 18,
+              color: '#7b838c',
+              transform: open ? 'rotate(180deg)' : 'none',
+              transition: 'transform 0.2s ease',
+              flexShrink: 0,
+            }}
+          />
+        )}
       </Box>
 
       {/* Dropdown Menu anchored to show strictly DOWNWARDS */}
@@ -377,37 +290,65 @@ export default function FolderMetadataModal({
   const [agreementType, setAgreementType] = useState('');
   const [sectorial, setSectorial] = useState('');
   const [metadataError, setMetadataError] = useState('');
+  const [isLoadingAgreementTypes, setIsLoadingAgreementTypes] = useState(false);
 
   useEffect(() => {
     if (!isOpen) return undefined;
     let active = true;
+    setIsLoadingAgreementTypes(true);
+    setMetadataError('');
+
+    // Fetch agreement types dynamically from GET /api/taxonomy/agreement-types/
+    documentService.agreementTypes()
+      .then((data) => {
+        if (!active) return;
+        const rawList = Array.isArray(data)
+          ? data
+          : Array.isArray(data?.agreement_types)
+          ? data.agreement_types
+          : [];
+
+        const agList = rawList.map((item) => {
+          if (typeof item === 'object' && item !== null) {
+            return {
+              id: item.id !== undefined ? item.id : item.name,
+              name: item.name || String(item.id),
+            };
+          }
+          return { id: item, name: String(item) };
+        });
+
+        setAgreementTypes(agList);
+        setAgreementType((current) => current || (agList[0]?.id !== undefined ? agList[0].id : ''));
+      })
+      .catch((error) => {
+        if (!active) return;
+        console.error('Failed to fetch agreement types:', error);
+        setMetadataError(error.message || 'Failed to load agreement types from /api/taxonomy/agreement-types/');
+        setAgreementTypes([]);
+      })
+      .finally(() => {
+        if (active) setIsLoadingAgreementTypes(false);
+      });
+
+    // Fetch sector types from metadata
     documentService.metadata()
       .then((metadata) => {
         if (!active) return;
-        const agList = Array.isArray(metadata?.agreement_types) && metadata.agreement_types.length > 0
-          ? metadata.agreement_types
-          : AGREEMENT_TYPES.map((name, idx) => ({ id: idx + 1, name }));
         const secList = Array.isArray(metadata?.sector_types) && metadata.sector_types.length > 0
           ? metadata.sector_types
           : SECTORIAL_OPTIONS.map((name, idx) => ({ id: idx + 1, name }));
-
-        setAgreementTypes(agList);
         setSectorTypes(secList);
-        setAgreementType((current) => current || agList[0]?.id || '');
         setSectorial((current) => current || secList[0]?.id || '');
-        setMetadataError('');
       })
       .catch((error) => {
-        if (active) {
-          setMetadataError(error.message);
-          const agList = AGREEMENT_TYPES.map((name, idx) => ({ id: idx + 1, name }));
-          const secList = SECTORIAL_OPTIONS.map((name, idx) => ({ id: idx + 1, name }));
-          setAgreementTypes(agList);
-          setSectorTypes(secList);
-          setAgreementType((current) => current || agList[0]?.id || '');
-          setSectorial((current) => current || secList[0]?.id || '');
-        }
+        if (!active) return;
+        console.warn('Metadata fetch warning:', error);
+        const secList = SECTORIAL_OPTIONS.map((name, idx) => ({ id: idx + 1, name }));
+        setSectorTypes(secList);
+        setSectorial((current) => current || secList[0]?.id || '');
       });
+
     return () => { active = false; };
   }, [isOpen]);
 
@@ -514,15 +455,43 @@ export default function FolderMetadataModal({
           </Box>
 
           {/* Agreement Type Dropdown */}
-          <SearchableSelect
-            label="Agreement Type"
-            value={agreementType}
-            onChange={(val) => setAgreementType(val)}
-            options={agreementTypes}
-            placeholder="Select agreement type..."
-            searchPlaceholder="Search agreement types..."
-            disabled={isSaving}
-          />
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+            <SearchableSelect
+              label="Agreement Type"
+              value={agreementType}
+              onChange={(val) => setAgreementType(val)}
+              options={agreementTypes}
+              placeholder={isLoadingAgreementTypes ? 'Loading agreement types...' : 'Select agreement type...'}
+              searchPlaceholder="Search agreement types..."
+              disabled={isSaving || isLoadingAgreementTypes}
+              isLoading={isLoadingAgreementTypes}
+            />
+            <Box
+              sx={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 0.75,
+                bgcolor: '#f8fafc',
+                border: '1px solid #e2e8f0',
+                borderRadius: '6px',
+                p: '6px 10px',
+              }}
+            >
+              <InfoOutlinedIcon sx={{ fontSize: 15, color: '#0284c7', mt: '1px', flexShrink: 0 }} />
+              <Typography
+                sx={{
+                  fontSize: '11.5px',
+                  color: '#475569',
+                  lineHeight: 1.45,
+                }}
+              >
+                <Box component="span" sx={{ fontWeight: 600, color: '#1e293b' }}>
+                  Note:
+                </Box>{' '}
+                If the agreement type is not available, you should add taxonomy for that agreement type.
+              </Typography>
+            </Box>
+          </Box>
 
           {/* Sectorial Classification Dropdown */}
           <SearchableSelect
@@ -554,7 +523,7 @@ export default function FolderMetadataModal({
           <Button
             type="submit"
             variant="contained"
-            disabled={isSaving || !agreementTypes.length || !sectorTypes.length}
+            disabled={isSaving || isLoadingAgreementTypes || !agreementTypes.length || !sectorTypes.length}
             size="small"
             sx={{
               bgcolor: '#1e3a5f',

@@ -833,7 +833,7 @@ function AppWorkspace() {
 
       const deduped = deduplicateDocs(mergedDocs);
       setFetchedDocuments(deduped);
-      showToast(`Synced ${deduped.length} documents.`);
+      // showToast(`Synced ${deduped.length} documents.`);
     } catch (err) {
       console.warn('Sync notice:', err.message);
       showToast(`Sync error: ${err.message}`);
