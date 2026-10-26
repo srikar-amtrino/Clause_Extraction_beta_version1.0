@@ -17,7 +17,7 @@ import { getStoredToken } from './authService';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '');
 const LOCAL_BACKEND_BASE = typeof window !== 'undefined'
-  && ['localhost', '127.0.0.1'].includes(window.location.hostname)
+  && ['localhost', '0.0.0.0'].includes(window.location.hostname)
   ? `http://${window.location.hostname}:8000`
   : '';
 
@@ -102,15 +102,6 @@ export const documentService = {
   /** Reference options for Drive ingestion; documents retain the selected ids. */
   metadata() {
     return get('/api/document-metadata/');
-  },
-
-  /**
-   * Taxonomy agreement types
-   * GET /api/taxonomy/agreement-types/
-   * -> { agreement_types: [{ id: number, name: string }, ...] }
-   */
-  agreementTypes() {
-    return get('/api/taxonomy/agreement-types/');
   },
 
   taxonomyTypes() {
