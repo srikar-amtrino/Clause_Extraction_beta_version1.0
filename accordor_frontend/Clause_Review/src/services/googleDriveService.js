@@ -1,171 +1,210 @@
 /**
  * Google Drive integration service
- * Primary endpoints:
- * - GET  http://127.0.0.1:8000/api/google-drive/connect/ (Connect Google Drive)
- * - POST http://127.0.0.1:8000/api/google-drive/sync/    (Get folders and files from Google Drive)
  *
- * Auxiliary endpoints:
- * - GET  http://127.0.0.1:8000/api/google-drive/picker/config/
- * - GET  http://127.0.0.1:8000/api/google-drive/picker/token/
- * - POST http://127.0.0.1:8000/api/google-drive/files/
+ * Backend:
+ * https://meetup-commerce-victoria-entry.trycloudflare.com
+ *
+ * Endpoints:
+ * - GET  /api/google-drive/connect/
+ * - POST /api/google-drive/sync/
+ * - GET  /api/google-drive/picker/config/
+ * - GET  /api/google-drive/picker/token/
+ * - POST /api/google-drive/files/
  */
 
-const BACKEND_BASE = 'http://127.0.0.1:8000';
+const BACKEND_BASE =
+  'https://enhanced-cargo-major-pulse.trycloudflare.com';
+
+const GOOGLE_DRIVE_API = `${BACKEND_BASE}/api/google-drive`;
+
+async function parseResponse(response, fallbackMessage) {
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(
+      data.detail ||
+      data.error ||
+      `${fallbackMessage} (HTTP ${response.status})`
+    );
+  }
+
+  return data;
+}
+
+async function requestJson(path, options = {}, fallbackMessage = 'Request failed') {
+  const response = await fetch(`${GOOGLE_DRIVE_API}${path}`, {
+    credentials: 'include',
+    cache: 'no-store',
+    ...options,
+  });
+
+  return parseResponse(response, fallbackMessage);
+}
 
 export const googleDriveService = {
-  // GET http://127.0.0.1:8000/api/google-drive/connect/
-  // Initiates Google Drive OAuth authorization flow
+  /**
+   * Start Google Drive OAuth.
+   * This is a top-level navigation, not a fetch request.
+   */
   connect() {
-    window.location.href = `${BACKEND_BASE}/api/google-drive/connect/`;
+    window.location.assign(`${GOOGLE_DRIVE_API}/connect/`);
   },
 
-  // POST http://127.0.0.1:8000/api/google-drive/sync/
-  // Synchronizes and returns the folders and files from Google Drive
+  /**
+   * Synchronize Google Drive folders and files.
+   */
   async sync() {
-    try {
-      const response = await fetch(`${BACKEND_BASE}/api/google-drive/sync/`, {
+    return requestJson(
+      '/sync/',
+      {
         method: 'POST',
-        credentials: 'include',
-        cache: 'no-store',
         headers: {
           'Content-Type': 'application/json',
         },
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || `Sync failed with status ${response.status}`);
-      }
-
-      return await response.json();
-    } catch (error) {
-      // If direct request fails (e.g. CORS), attempt through Vite proxy
-      if (error.name === 'TypeError') {
-        const fallbackResponse = await fetch('/api/google-drive/sync/', {
-          method: 'POST',
-          credentials: 'include',
-          cache: 'no-store',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        });
-        if (fallbackResponse.ok) {
-          return await fallbackResponse.json();
-        }
-      }
-      throw error;
-    }
+        body: JSON.stringify({}),
+      },
+      'Google Drive sync failed'
+    );
   },
 
-  // Alias for sync()
+  /**
+   * Alias for sync().
+   */
   syncFiles() {
     return this.sync();
   },
 
-  // Check connection status via picker config
+  /**
+   * Check whether Google Drive is connected and retrieve Picker config.
+   */
   async checkConnectionStatus() {
     try {
-      let response = await fetch('/api/google-drive/picker/config/', {
-        credentials: 'include',
-        cache: 'no-store',
-      }).catch(() => null);
+      const config = await requestJson(
+        '/picker/config/',
+        {},
+        'Failed to check Google Drive connection'
+      );
 
-      if (!response || !response.ok) {
-        response = await fetch(`${BACKEND_BASE}/api/google-drive/picker/config/`, {
-          credentials: 'include',
-          cache: 'no-store',
-        }).catch(() => null);
-      }
-
-      if (response && response.ok) {
-        const config = await response.json();
-        return { isConnected: true, config };
-      }
-      return { isConnected: false, detail: 'Not connected' };
+      return {
+        isConnected: true,
+        config,
+      };
     } catch (error) {
-      return { isConnected: false, isOffline: true, error: error.message };
+      return {
+        isConnected: false,
+        isOffline: error instanceof TypeError,
+        detail: error.message,
+        error: error.message,
+      };
     }
   },
 
-  // Fetch access token for Google Picker
+  /**
+   * Obtain an access token for Google Picker.
+   */
   async getPickerToken() {
-    let response = await fetch('/api/google-drive/picker/token/', {
-      credentials: 'include',
-      cache: 'no-store',
-    }).catch(() => null);
-
-    if (!response || !response.ok) {
-      response = await fetch(`${BACKEND_BASE}/api/google-drive/picker/token/`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-    }
-
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err.detail || 'Failed to obtain Google Picker access token.');
-    }
-    return response.json();
+    return requestJson(
+      '/picker/token/',
+      {},
+      'Failed to obtain Google Picker access token'
+    );
   },
 
-  // Fetch files for specific folders
-  async fetchFiles(folderIds = [], { agreementType = '', sectorialCategory = '' } = {}) {
-    const options = {
-      method: 'POST',
-      credentials: 'include',
-      cache: 'no-store',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        folder_ids: folderIds,
-        agreement_type: agreementType,
-        sectorial_category: sectorialCategory,
-      }),
-    };
-    let response = await fetch('/api/google-drive/files/', options).catch(() => null);
-
-    if (!response || response.status === 404) {
-      response = await fetch(`${BACKEND_BASE}/api/google-drive/files/`, options);
-    }
-
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err.detail || 'Failed to fetch files from Google Drive.');
-    }
-
-    return response.json();
+  /**
+   * Fetch files for the selected folders.
+   */
+  async fetchFiles(
+    folderIds = [],
+    {
+      agreementType = '',
+      sectorialCategory = '',
+    } = {}
+  ) {
+    return requestJson(
+      '/files/',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          folder_ids: folderIds,
+          agreement_type: agreementType,
+          sectorial_category: sectorialCategory,
+        }),
+      },
+      'Failed to fetch files from Google Drive'
+    );
   },
 
-  // Load Google Picker API script
+  /**
+   * Load the Google API script.
+   */
   loadGoogleApiScript() {
     return new Promise((resolve, reject) => {
-      if (window.gapi && window.gapi.load) {
-        return resolve(window.gapi);
-      }
-      const existing = document.getElementById('google-api-script');
-      if (existing) {
-        existing.addEventListener('load', () => resolve(window.gapi));
-        existing.addEventListener('error', reject);
+      if (window.gapi?.load) {
+        resolve(window.gapi);
         return;
       }
+
+      const existing = document.getElementById('google-api-script');
+
+      if (existing) {
+        existing.addEventListener(
+          'load',
+          () => resolve(window.gapi),
+          { once: true }
+        );
+
+        existing.addEventListener(
+          'error',
+          () => reject(new Error('Failed to load Google API script')),
+          { once: true }
+        );
+
+        return;
+      }
+
       const script = document.createElement('script');
+
       script.id = 'google-api-script';
       script.src = 'https://apis.google.com/js/api.js';
       script.async = true;
-      script.onload = () => resolve(window.gapi);
-      script.onerror = () => reject(new Error('Failed to load Google API script'));
+
+      script.onload = () => {
+        if (window.gapi?.load) {
+          resolve(window.gapi);
+        } else {
+          reject(new Error('Google API loaded but gapi is unavailable'));
+        }
+      };
+
+      script.onerror = () => {
+        reject(new Error('Failed to load Google API script'));
+      };
+
       document.body.appendChild(script);
     });
   },
 
-  // Open Google Picker modal
-  async openPicker({ apiKey, appId, accessToken, onPicked }) {
+  /**
+   * Open Google Picker.
+   */
+  async openPicker({
+    apiKey,
+    appId,
+    accessToken,
+    onPicked,
+  }) {
     await this.loadGoogleApiScript();
 
     return new Promise((resolve, reject) => {
       window.gapi.load('picker', {
         callback: () => {
           try {
-            const view = new window.google.picker.DocsView(window.google.picker.ViewId.FOLDERS)
+            const view = new window.google.picker.DocsView(
+              window.google.picker.ViewId.FOLDERS
+            )
               .setIncludeFolders(true)
               .setSelectFolderEnabled(true);
 
@@ -173,21 +212,35 @@ export const googleDriveService = {
               .setDeveloperKey(apiKey)
               .setAppId(appId)
               .setOAuthToken(accessToken)
-              .enableFeature(window.google.picker.Feature.MULTISELECT_ENABLED)
+              .enableFeature(
+                window.google.picker.Feature.MULTISELECT_ENABLED
+              )
               .addView(view)
               .setCallback((data) => {
-                if (data.action === window.google.picker.Action.PICKED) {
-                  onPicked(data.docs || []);
-                  resolve(data.docs);
-                } else if (data.action === window.google.picker.Action.CANCEL) {
+                if (
+                  data.action ===
+                  window.google.picker.Action.PICKED
+                ) {
+                  const docs = data.docs || [];
+
+                  try {
+                    onPicked?.(docs);
+                    resolve(docs);
+                  } catch (error) {
+                    reject(error);
+                  }
+                } else if (
+                  data.action ===
+                  window.google.picker.Action.CANCEL
+                ) {
                   resolve(null);
                 }
               })
               .build();
 
             picker.setVisible(true);
-          } catch (err) {
-            reject(err);
+          } catch (error) {
+            reject(error);
           }
         },
       });
