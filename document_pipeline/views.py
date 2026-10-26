@@ -142,7 +142,7 @@ def google_drive_connect(request):
     request.session['google_drive_oauth_code_verifier'] = code_verifier
     request.session['google_drive_oauth_next'] = os.getenv(
         'GOOGLE_OAUTH_FRONTEND_URL',
-        'http://127.0.0.1:5173/overview',
+        "http://54.183.89.232:5173/overview",
     )
     return redirect(auth_url)
 
