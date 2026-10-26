@@ -37,6 +37,10 @@ ENV/
 .env.development
 .env.production
 
+# Google Drive OAuth credentials
+document_pipeline/connectors/GoogleDrive/client_secret.json
+document_pipeline/connectors/GoogleDrive/token.json
+
 # IDEs
 .vscode/
 .idea/
@@ -46,6 +50,10 @@ ENV/
 .DS_Store
 
 # Testing
+# The test suites stay local. They run from a working copy but are deliberately
+# not published: what we assert about the parser and the pipeline is internal.
+# Removing them from tracking does not delete anyone's local copy.
+tests/
 .coverage
 .pytest_cache/
 htmlcov/
@@ -60,3 +68,15 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Local credentials and parse output
+.secrets/
+parse_output/
+pipeline_output/
+
+# Notebooks (POC notebooks carry credentials)
+*.ipynb
+
+# Contract files dropped in the repo root by hand: client text, never committed.
+/*.docx
+/*.pdf

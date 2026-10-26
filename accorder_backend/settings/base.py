@@ -1,0 +1,294 @@
+"""Settings shared by every environment. Values that differ per environment
+or are secret come from the process environment, loaded from `.env`."""
+import logging
+import os
+import ssl
+import sys
+from urllib.parse import quote, urlparse
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+load_dotenv(BASE_DIR / ".env")
+
+
+def upstash_redis_url():
+    rest_url = os.environ.get("UPSTASH_REDIS_REST_URL", "")
+    token = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
+    if not rest_url or not token:
+        return ""
+
+    hostname = urlparse(rest_url).hostname
+    if not hostname:
+        return ""
+    return f"rediss://default:{quote(token, safe='')}@{hostname}:6379/0"
+
+
+def env_bool(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def env_int(name, default):
+    value = os.environ.get(name)
+    return int(value) if value not in (None, "") else default
+
+
+def env_float(name, default):
+    value = os.environ.get(name)
+    return float(value) if value not in (None, "") else default
+
+
+def env_list(name, default):
+    value = os.environ.get(name)
+    if value is None:
+        return list(default)
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "")
+DEBUG = env_bool("DJANGO_DEBUG", False)
+ALLOWED_HOSTS = [h.strip() for h in os.environ.get("DJANGO_ALLOWED_HOSTS", "").split(",") if h.strip()]
+
+INSTALLED_APPS = [
+    "daphne",
+    "channels",
+    # Sessions hold the signed-in user's Drive credentials for the ingestion
+    # connector; auth depends on contenttypes.
+    "django.contrib.sessions",
+    "django.contrib.contenttypes",
+    "django.contrib.auth",
+    "corsheaders",
+    "core",
+    "document_pipeline",
+]
+
+# NOTE: CsrfViewMiddleware is deliberately absent. The Drive picker page posts
+# to /api/google-drive/sync/ without a CSRF token; adding the middleware breaks
+# that flow. Add both together when the ingestion UI is hardened.
+MIDDLEWARE = [
+    "corsheaders.middleware.CorsMiddleware",  # Must be before any response-generating middleware
+    "django.middleware.security.SecurityMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+]
+
+# ---------------------------------------------------------------- CORS
+# Allow the Vite dev server and production SPA origins to call the API.
+# Credentials (cookies) are not used — Bearer tokens in Authorization header.
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+] + env_list("FRONTEND_ALLOWED_ORIGINS", [])
+CORS_ALLOW_HEADERS = [
+    "accept",
+    "authorization",
+    "content-type",
+    "x-requested-with",
+]
+CORS_ALLOW_CREDENTIALS = True
+
+ROOT_URLCONF = "accorder_backend.urls"
+ASGI_APPLICATION = "accorder_backend.asgi.application"
+
+# APP_DIRS finds document_pipeline/templates/google_drive/picker.html.
+TEMPLATES = [
+    {
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "APP_DIRS": True,
+        "OPTIONS": {"context_processors": []},
+    },
+]
+
+# Per-environment. Sessions need a real database; see development.py.
+DATABASES = {}
+
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+LANGUAGE_CODE = "en-us"
+TIME_ZONE = "UTC"
+USE_I18N = False
+USE_TZ = True
+
+# The auth log writes to logs/, which holds no tracked file and so is missing
+# from a fresh clone. Created here, or logging setup fails before Django starts.
+(BASE_DIR / "logs").mkdir(exist_ok=True)
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "standard": {"format": "%(asctime)s %(levelname)s %(name)s %(message)s"},
+    },
+    "handlers": {
+        "console": {"class": "logging.StreamHandler", "formatter": "standard"},
+        # Dedicated auth log — signup, login, logout, token failures.
+        # Written to logs/auth.log relative to BASE_DIR; directory is git-ignored.
+        "auth_file": {
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": str(BASE_DIR / "logs" / "auth.log"),
+            "maxBytes": 10 * 1024 * 1024,   # 10 MB per file
+            "backupCount": 5,
+            "formatter": "standard",
+            "encoding": "utf-8",
+        },
+    },
+    "root": {"handlers": ["console"], "level": os.environ.get("LOG_LEVEL", "INFO")},
+    # The HTTP and AWS clients under the Bedrock SDK log every request at INFO.
+    # Classification records each call itself, in classification_calls.
+    "loggers": {
+        "httpx2": {"level": "WARNING"},
+        "botocore": {"level": "WARNING"},
+        # auth logger used by core.auth_helpers.log_auth_event and auth_views.
+        "auth": {
+            "handlers": ["console", "auth_file"],
+            "level": "DEBUG",
+            "propagate": False,
+        },
+    },
+}
+
+# ---------------------------------------------------------------- Google Drive
+# OAuth client, picker and token configuration live with the ingestion
+# connector (document_pipeline/connectors/GoogleDrive), which reads them from
+# the environment directly. See .env.example.
+
+# ---------------------------------------------------------------- Parsing
+# Files larger than this are refused before any bytes are downloaded.
+PARSE_MAX_FILE_BYTES = env_int("PARSE_MAX_FILE_BYTES", 50 * 1024 * 1024)
+
+# ---------------------------------------------------------------- Persistence
+# Keep the parser's verbatim output alongside the extracted rows. Insurance
+# while the columns are still being trusted: it makes a column we got wrong
+# recoverable without re-downloading a file that may since have changed.
+PARSE_STORE_RAW_RESULT = env_bool("PARSE_STORE_RAW_RESULT", True)
+# Bump when the parser changes behaviour without changing its output shape.
+# SCHEMA_VERSION does not move for a bug fix, so this is what tells a stored
+# extraction apart from what the current parser would produce. The code default
+# moves with every such change; the environment only overrides it, and a blank
+# value falls back to it rather than silently pinning an old build.
+# 2026-09-18: list depth, shared Word list counters, heading nesting.
+# 2026-09-18b: typed multi-letter Roman numerals (II., IV.) start clauses.
+# 2026-09-22: definitions-list entries ('"Business Day" means ...') open their
+# own clause at the list's level, so the entries after one that contains a
+# numbered sub-list are no longer swallowed by it.
+PARSER_BUILD = os.environ.get("PARSER_BUILD") or "2026.09.22"
+# Guards against Postgres's 65535 bind-parameter ceiling on huge documents.
+PERSIST_BULK_BATCH_SIZE = env_int("PERSIST_BULK_BATCH_SIZE", 500)
+
+# ---------------------------------------------------------------- Chunking
+# Bump when the chunking rules change. Chunks derive deterministically from a
+# clause tree, so this is the only thing that tells a stored chunk run apart
+# from what the current chunker would produce for the same parse.
+# As with PARSER_BUILD, the code default moves with each rule change and a blank
+# environment value falls back to it.
+# 2026-09-18: exhibit region from headings, not from sentences that cite one.
+# 2026-09-29: table cells in chunk text; a parent clause with more than a heading
+# in its own words gets a micro chunk of its own.
+# At most 16 characters (chunk_runs.chunker_version); a system check enforces it.
+CHUNKER_VERSION = os.environ.get("CHUNKER_VERSION") or "2026.09.29"
+CHUNK_BULK_BATCH_SIZE = env_int("CHUNK_BULK_BATCH_SIZE", 500)
+
+# ---------------------------------------------------------------- Pipeline
+# Where export_documents writes each document's extraction.json and
+# classification.json. Holds contract text: git-ignored.
+PIPELINE_EXPORT_DIR = os.environ.get("PIPELINE_EXPORT_DIR") or str(BASE_DIR / "pipeline_output")
+
+# ---------------------------------------------------------------- Classification
+# Credentials are the standard AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, read
+# by the SDK straight from the environment; they are never copied into settings.
+AWS_REGION = os.environ.get("AWS_REGION", "")
+# "invoke" is Bedrock's InvokeModel API (AnthropicBedrock). "mantle" is the
+# Messages API endpoint (AnthropicBedrockMantle): newer models need it, but it
+# has no endpoint in every region -- us-west-1 has none.
+BEDROCK_CLIENT = os.environ.get("BEDROCK_CLIENT", "invoke")
+# A Bedrock model id or inference-profile ARN. No default on purpose: every
+# classification records the model that produced it, so the choice is explicit.
+CLASSIFY_MODEL_ID = os.environ.get("CLASSIFY_MODEL_ID", "")
+# Which seeded taxonomy to classify against. Versions are immutable data.
+CLASSIFY_TAXONOMY_VERSION = os.environ.get("CLASSIFY_TAXONOMY_VERSION", "v1")
+# "" sends no thinking configuration; "adaptive" turns thinking on. On the
+# 2026-09-18 probe adaptive thinking took ~18s for one clause against ~2s off.
+CLASSIFY_THINKING = os.environ.get("CLASSIFY_THINKING", "")
+# "" leaves effort at the model's default; otherwise low, medium or high.
+CLASSIFY_EFFORT = os.environ.get("CLASSIFY_EFFORT", "")
+# Review routing. With no judge model yet, a classification goes to the human
+# review queue when its confidence is below the threshold, its type is high
+# risk, it breaks from what its section heading implies, it fits no type, or
+# it failed. High-risk entries are taxonomy keys.
+CLASSIFY_CONFIDENCE_THRESHOLD = env_float("CLASSIFY_CONFIDENCE_THRESHOLD", 0.85)
+CLASSIFY_HIGH_RISK_TYPES = env_list(
+    "CLASSIFY_HIGH_RISK_TYPES",
+    ["indemnification", "limitation-of-liability", "intellectual-property"])
+# Batching. Siblings travel together; a batch closes at whichever limit it hits
+# first. The item cap bounds the answer's length and what a retry costs.
+CLASSIFY_MAX_BATCH_TOKENS = env_int("CLASSIFY_MAX_BATCH_TOKENS", 6000)
+CLASSIFY_MAX_ITEMS_PER_BATCH = env_int("CLASSIFY_MAX_ITEMS_PER_BATCH", 20)
+CLASSIFY_CONCURRENCY = env_int("CLASSIFY_CONCURRENCY", 4)
+# How many requests may include one paragraph before it is recorded as failed.
+CLASSIFY_ITEM_ATTEMPTS = env_int("CLASSIFY_ITEM_ATTEMPTS", 3)
+# The SDK's own retries for throttling, 5xx and dropped connections, with backoff.
+CLASSIFY_SDK_MAX_RETRIES = env_int("CLASSIFY_SDK_MAX_RETRIES", 4)
+CLASSIFY_MAX_TOKENS = env_int("CLASSIFY_MAX_TOKENS", 16000)
+CLASSIFY_BULK_BATCH_SIZE = env_int("CLASSIFY_BULK_BATCH_SIZE", 500)
+
+# Whether /api/google-drive/sync/ carries a document all the way to a verdict,
+# or stops after chunking. On, so one sync is the whole pipeline. Off is for a
+# bulk sync: classification is the only stage that calls a paid model, so a
+# folder of a hundred contracts otherwise fires a hundred classification runs.
+PIPELINE_CLASSIFY_ON_SYNC = env_bool("PIPELINE_CLASSIFY_ON_SYNC", True)
+
+# ---------------------------------------------------------------- Celery & Redis
+# A standard Redis URL takes precedence, which also allows local development to
+# connect through an SSH tunnel. Fall back to Upstash's Redis-compatible URL.
+CELERY_BROKER_URL = os.environ.get("REDIS_URL", "") or upstash_redis_url()
+CELERY_RESULT_BACKEND = CELERY_BROKER_URL
+_redis_uses_tls = urlparse(CELERY_BROKER_URL).scheme == "rediss"
+CELERY_BROKER_USE_SSL = {"ssl_cert_reqs": ssl.CERT_REQUIRED} if _redis_uses_tls else None
+CELERY_REDIS_BACKEND_USE_SSL = {"ssl_cert_reqs": ssl.CERT_REQUIRED} if _redis_uses_tls else None
+
+def _redis_channel_layer_available():
+    try:
+        import channels_redis.core  # noqa: F401
+    except Exception:  # not installed, or installed without its redis dependency
+        return False
+    return True
+
+
+# Use Redis across workers when configured; local development can run with the
+# in-memory layer when no Redis connection is available. An environment that
+# has the broker URL but not channels_redis falls back too, rather than every
+# realtime event failing to import the backend.
+_use_redis_channel_layer = bool(CELERY_BROKER_URL) and _redis_channel_layer_available()
+if CELERY_BROKER_URL and not _use_redis_channel_layer:
+    logging.getLogger(__name__).warning(
+        "channels_redis is not installed; using InMemoryChannelLayer, so realtime "
+        "events reach only this process. Install requirements.txt to fix this.")
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": (
+            "channels_redis.core.RedisChannelLayer"
+            if _use_redis_channel_layer
+            else "channels.layers.InMemoryChannelLayer"
+        ),
+        "CONFIG": {"hosts": [CELERY_BROKER_URL]} if _use_redis_channel_layer else {},
+    }
+}
+# A task that names no queue lands on one the worker consumes. Celery's own
+# default is "celery", which scripts/run_worker does not listen on.
+CELERY_TASK_DEFAULT_QUEUE = "default"
+
+# The test suite must never reach the real broker. A view under test calls
+# .delay(), which on the shared broker leaves a live ingestion task queued
+# against real Drive credentials for whatever worker starts next -- a test run
+# that quietly schedules production work. The in-memory transport accepts the
+# queue call and drops it, so the tests still assert that something was
+# queued without anything being able to run it.
+if "test" in sys.argv:
+    CELERY_BROKER_URL = "memory://"
+    # Not the broker's transport: a result backend needs its own scheme.
+    CELERY_RESULT_BACKEND = "cache+memory://"
+    CELERY_BROKER_USE_SSL = CELERY_REDIS_BACKEND_USE_SSL = None

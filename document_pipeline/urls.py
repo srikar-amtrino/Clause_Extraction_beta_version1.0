@@ -1,0 +1,114 @@
+from django.urls import path
+
+from .playground_views import playground_analyze, playground_stats, playground_suggest
+
+from .document_views import (
+	classification_delete,
+	classification_exhibit_set,
+	classification_restore,
+	classification_save,
+	document_classification,
+	document_classification_input,
+	document_detail,
+	document_extraction,
+	document_list,
+	document_metadata,
+	taxonomy,
+)
+from .review_views import (
+	activity_calendar,
+	document_activity,
+	document_contributors,
+	document_note,
+	document_queue,
+	document_stats,
+	draft_discard,
+	draft_save,
+	global_activity_feed,
+	lock_acquire,
+	lock_heartbeat,
+	lock_release,
+	lock_request_access,
+	lock_respond_access,
+	workspace_detail,
+	workspace_publish,
+	workspace_publish_status,
+	workspace_save,
+)
+from .taxonomy_api_views import agreement_type_list, canonical_type_collection, canonical_type_detail
+from .views import (
+	google_drive_callback,
+	google_drive_connect,
+	google_drive_files,
+	google_drive_picker_config,
+	google_drive_picker_token,
+	google_drive_sync,
+)
+
+
+urlpatterns = [
+	# Ingestion: connect Drive, pick folders, sync. Writes.
+	path('google-drive/connect/', google_drive_connect, name='google-drive-connect'),
+	path('google-drive/oauth/callback/', google_drive_callback, name='google-drive-callback'),
+	path('google-drive/picker/config/', google_drive_picker_config, name='google-drive-picker-config'),
+	path('google-drive/picker/token/', google_drive_picker_token, name='google-drive-picker-token'),
+	path('google-drive/files/', google_drive_files, name='google-drive-files'),
+	path('google-drive/sync/', google_drive_sync, name='google-drive-sync'),
+
+	# Results: what the pipeline produced. Reads only.
+	path('documents/', document_list, name='document-list'),
+	path('document-metadata/', document_metadata, name='document-metadata'),
+	path('documents/<uuid:document_id>/', document_detail, name='document-detail'),
+	path('documents/<uuid:document_id>/extraction/', document_extraction,
+	     name='document-extraction'),
+	path('documents/<uuid:document_id>/classification-input/', document_classification_input,
+	     name='document-classification-input'),
+	path('documents/<uuid:document_id>/classification/', document_classification,
+	     name='document-classification'),
+	# The review screen's Save button. Writes reviewer decisions; never the vector DB.
+	path('documents/<uuid:document_id>/classification/save/', classification_save,
+	     name='document-classification-save'),
+	# Delete an item from the review (optionally moving its text into the
+	# next one), and undo it. Postgres only; the vector DB follows on publish.
+	path('documents/<uuid:document_id>/classification/<uuid:classification_id>/delete/',
+	     classification_delete, name='document-classification-delete'),
+	path('documents/<uuid:document_id>/classification/<uuid:classification_id>/restore/',
+	     classification_restore, name='document-classification-restore'),
+	# Bulk exhibit flag setter -- Option A + batch action toolbar.
+	path('documents/<uuid:document_id>/classification/exhibit/set/',
+	     classification_exhibit_set, name='document-classification-exhibit-set'),
+	path('<uuid:document_id>/taxonomy/', taxonomy, name='document-taxonomy'),
+	path('taxonomy/', taxonomy, name='taxonomy'),
+	path('taxonomy/types/', canonical_type_collection, name='canonical-types'),
+	path('taxonomy/types/<uuid:type_id>/', canonical_type_detail, name='canonical-type-detail'),
+	path('taxonomy/agreement-types/', agreement_type_list, name='agreement-types'),
+
+	# Review workspace -- overview helpers.
+	path('documents/stats/', document_stats, name='document-stats'),
+	path('documents/queue/', document_queue, name='document-queue'),
+
+	# Review workspace -- per document.
+	path('documents/<uuid:document_id>/workspace/', workspace_detail, name='workspace-detail'),
+	path('documents/<uuid:document_id>/workspace/lock/', lock_acquire, name='workspace-lock-acquire'),
+	path('documents/<uuid:document_id>/workspace/lock/heartbeat/', lock_heartbeat, name='workspace-lock-heartbeat'),
+	path('documents/<uuid:document_id>/workspace/lock/release/', lock_release, name='workspace-lock-release'),
+	path('documents/<uuid:document_id>/workspace/lock/request/', lock_request_access, name='workspace-lock-request'),
+	path('documents/<uuid:document_id>/workspace/lock/respond/', lock_respond_access, name='workspace-lock-respond'),
+	path('documents/<uuid:document_id>/workspace/draft/', draft_save, name='workspace-draft-save'),
+	path('documents/<uuid:document_id>/workspace/draft/discard/', draft_discard, name='workspace-draft-discard'),
+	path('documents/<uuid:document_id>/workspace/save/', workspace_save, name='workspace-save'),
+	path('documents/<uuid:document_id>/workspace/publish/', workspace_publish, name='workspace-publish'),
+	path('documents/<uuid:document_id>/workspace/publish/<uuid:task_id>/', workspace_publish_status, name='workspace-publish-status'),
+
+	# Activity log & contributions.
+	path('documents/<uuid:document_id>/activity/', document_activity, name='document-activity'),
+	path('documents/<uuid:document_id>/contributors/', document_contributors, name='document-contributors'),
+	path('documents/<uuid:document_id>/note/', document_note, name='document-note'),
+	path('activity/', global_activity_feed, name='global-activity-feed'),
+	path('activity/calendar/', activity_calendar, name='activity-calendar'),
+
+	# Vector Playground -- read-only diagnostic endpoint.
+	path('playground/stats/', playground_stats, name='playground-stats'),
+	path('playground/suggest/', playground_suggest, name='playground-suggest'),
+	path('playground/', playground_analyze, name='playground-analyze'),
+]
