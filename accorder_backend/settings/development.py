@@ -13,7 +13,7 @@ DEBUG = env_bool("DJANGO_DEBUG", True)
 
 SECRET_KEY = _SECRET_KEY or "development-only-insecure-key"
 
-ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
+ALLOWED_HOSTS = ["enhanced-cargo-major-pulse.trycloudflare.com", "54.183.89.232", "localhost", "127.0.0.1"]
 
 # Neon Postgres. The URL carries a password, so it is read from the
 # environment and never committed. See DATABASE_URL in .env.example.
@@ -78,3 +78,11 @@ else:
             "NAME": BASE_DIR / "db.sqlite3",
         },
     }
+    
+
+# Google OAuth session cookies across the frontend/backend origins
+SESSION_COOKIE_SAMESITE = "None"
+SESSION_COOKIE_SECURE = True
+SESSION_COOKIE_HTTPONLY = True
+
+CORS_ALLOW_CREDENTIALS = True
